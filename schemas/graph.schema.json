@@ -2,6 +2,136 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas.catalyst.dev/backtest/graph.schema.json",
   "title": "Catalyst Graph",
-  "description": "Placeholder schema for Catalyst graph inputs.",
-  "type": "object"
+  "description": "A runnable Catalyst strategy graph: signal and action nodes connected by directed edges. This is the raw input accepted by the backtester before the graph compiler normalizes it.",
+  "type": "object",
+  "required": ["nodes"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "description": "Producer schema identifier, e.g. catalyst.graph.definition.v1.",
+      "default": "catalyst.graph.definition.v1"
+    },
+    "variables": {
+      "type": "object",
+      "description": "Optional graph-level variables emitted by Catalyst. Opaque to the backtester for now.",
+      "default": {}
+    },
+    "settings": {
+      "type": "object",
+      "description": "Optional graph-level settings emitted by Catalyst. Opaque to the backtester for now.",
+      "default": {}
+    },
+    "nodes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/node" }
+    },
+    "edges": {
+      "type": "array",
+      "default": [],
+      "items": { "$ref": "#/$defs/edge" }
+    }
+  },
+  "$defs": {
+    "decimal": {
+      "type": "string",
+      "description": "A decimal value carried as a string to avoid float precision loss, e.g. \"100\" or \"0.04\". The literal \"all\" is permitted for full-balance actions.",
+      "pattern": "^(all|[0-9]+(\\.[0-9]+)?)$"
+    },
+    "node": {
+      "type": "object",
+      "required": ["id", "kind", "subtype", "config"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "kind": { "type": "string", "enum": ["action", "signal"] },
+        "subtype": {
+          "type": "string",
+          "enum": [
+            "swap",
+            "perp_order",
+            "yield_deposit",
+            "yield_withdraw",
+            "price_threshold"
+          ]
+        },
+        "config": { "type": "object" },
+        "enabled": { "type": "boolean", "default": true }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "subtype": { "const": "swap" } } },
+          "then": { "properties": { "config": { "$ref": "#/$defs/swapConfig" } } }
+        },
+        {
+          "if": { "properties": { "subtype": { "const": "perp_order" } } },
+          "then": { "properties": { "config": { "$ref": "#/$defs/perpOrderConfig" } } }
+        },
+        {
+          "if": { "properties": { "subtype": { "const": "yield_deposit" } } },
+          "then": { "properties": { "config": { "$ref": "#/$defs/yieldConfig" } } }
+        },
+        {
+          "if": { "properties": { "subtype": { "const": "yield_withdraw" } } },
+          "then": { "properties": { "config": { "$ref": "#/$defs/yieldConfig" } } }
+        },
+        {
+          "if": { "properties": { "subtype": { "const": "price_threshold" } } },
+          "then": { "properties": { "config": { "$ref": "#/$defs/priceThresholdConfig" } } }
+        }
+      ]
+    },
+    "edge": {
+      "type": "object",
+      "required": ["from", "to"],
+      "additionalProperties": false,
+      "properties": {
+        "from": { "type": "string", "minLength": 1 },
+        "to": { "type": "string", "minLength": 1 }
+      }
+    },
+    "swapConfig": {
+      "type": "object",
+      "required": ["from_asset", "to_asset", "amount", "chain"],
+      "properties": {
+        "from_asset": { "type": "string" },
+        "to_asset": { "type": "string" },
+        "amount": { "$ref": "#/$defs/decimal" },
+        "chain": { "type": "string", "description": "Venue/chain, e.g. base or hyperliquid." }
+      }
+    },
+    "perpOrderConfig": {
+      "type": "object",
+      "required": ["symbol", "side", "size_usd", "chain"],
+      "properties": {
+        "symbol": { "type": "string" },
+        "side": { "type": "string", "enum": ["long", "short"] },
+        "size_usd": { "$ref": "#/$defs/decimal" },
+        "leverage": { "$ref": "#/$defs/decimal" },
+        "chain": { "type": "string" },
+        "order_type": { "type": "string", "enum": ["market", "limit"], "default": "market" },
+        "reduce_only": { "type": "boolean", "default": false }
+      }
+    },
+    "yieldConfig": {
+      "type": "object",
+      "required": ["chain", "protocol", "asset", "amount"],
+      "properties": {
+        "chain": { "type": "string" },
+        "protocol": { "type": "string", "description": "Yield protocol, e.g. aave." },
+        "pool": { "type": "string" },
+        "asset": { "type": "string" },
+        "amount": { "$ref": "#/$defs/decimal" }
+      }
+    },
+    "priceThresholdConfig": {
+      "type": "object",
+      "required": ["symbol", "operator", "threshold"],
+      "properties": {
+        "symbol": { "type": "string" },
+        "operator": { "type": "string", "enum": ["<", "<=", ">", ">=", "==", "!="] },
+        "threshold": { "$ref": "#/$defs/decimal" }
+      }
+    }
+  }
 }

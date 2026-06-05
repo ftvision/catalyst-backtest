@@ -2,6 +2,137 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas.catalyst.dev/backtest/simulation-policy.schema.json",
   "title": "Simulation Policy",
-  "description": "Placeholder schema for centralized simulation policy profiles.",
-  "type": "object"
+  "description": "Centralized, versioned rules for ambiguous or tunable simulation behavior. The fully resolved policy is echoed into every backtest result so assumptions are inspectable. See docs/simulation-policies.md.",
+  "type": "object",
+  "required": ["schema_version", "profile"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "default": "catalyst.backtest.policy.v1"
+    },
+    "profile": {
+      "type": "string",
+      "enum": ["strict_v1", "conservative_v1", "research_v1"],
+      "description": "Named profile that supplies defaults for every category below."
+    },
+    "balance": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "insufficient_balance": {
+          "type": "string",
+          "enum": ["reject", "partial_fill", "clamp_to_available", "allow_negative"]
+        }
+      }
+    },
+    "fills": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "partial_fills": { "type": "string", "enum": ["none", "allow_if_configured", "always_allow"] },
+        "price_selection": {
+          "type": "string",
+          "enum": ["close", "open", "mid", "next_open", "worse_side_ohlc"]
+        },
+        "slippage": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "model": { "type": "string", "enum": ["fixed_bps", "volume_based", "none"] },
+            "bps": { "$ref": "#/$defs/decimal" }
+          }
+        },
+        "fees": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "model": { "type": "string", "enum": ["fixed_bps", "venue_fee_table", "none"] },
+            "bps": { "$ref": "#/$defs/decimal" }
+          }
+        }
+      }
+    },
+    "gas": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "type": "string",
+          "enum": ["none", "fixed_usd", "fixed_native", "historical_fee_history"]
+        },
+        "fallback": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "model": { "type": "string", "enum": ["none", "fixed_usd", "fixed_native"] },
+            "amount": { "$ref": "#/$defs/decimal" }
+          }
+        }
+      }
+    },
+    "signals": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "trigger": {
+          "type": "string",
+          "enum": ["level", "crossing", "crossing_with_cooldown", "once_per_backtest"]
+        },
+        "repeat": {
+          "type": "string",
+          "enum": ["never", "on_each_signal_fire", "with_cooldown", "max_count"]
+        },
+        "cooldown": {
+          "type": ["string", "null"],
+          "description": "Cooldown duration (e.g. 1h) or null for no cooldown."
+        }
+      }
+    },
+    "ordering": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "same_tick": {
+          "type": "string",
+          "enum": [
+            "graph_order",
+            "topological_order",
+            "signals_first_then_actions",
+            "conservative_adverse_order"
+          ]
+        }
+      }
+    },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "missing_required": { "type": "string", "enum": ["fail", "skip_tick", "forward_fill"] },
+        "missing_optional": { "type": "string", "enum": ["warn", "fail", "forward_fill", "fallback_provider"] }
+      }
+    },
+    "perps": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "liquidation_check": { "type": "string", "enum": ["every_tick", "never"] },
+        "funding": { "type": "string", "enum": ["historical", "none"] },
+        "reduce_only_validation": { "type": "string", "enum": ["strict", "lenient"] }
+      }
+    },
+    "yield": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "accrual": { "type": "string", "enum": ["simple_apr", "compound_apy", "protocol_index"] }
+      }
+    }
+  },
+  "$defs": {
+    "decimal": {
+      "type": "string",
+      "pattern": "^[0-9]+(\\.[0-9]+)?$"
+    }
+  }
 }

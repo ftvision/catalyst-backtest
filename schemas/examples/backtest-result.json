@@ -1,0 +1,66 @@
+{
+  "schema_version": "catalyst.backtest.result.v1",
+  "summary": {
+    "starting_value_usd": "2000",
+    "final_value_usd": "1999.94",
+    "pnl_usd": "-0.06",
+    "return_pct": "-0.003",
+    "max_drawdown_pct": "0.003",
+    "trade_count": 1,
+    "rejected_count": 0
+  },
+  "equity_curve": [
+    { "ts": "2024-01-01T00:00:00Z", "equity_usd": "2000" },
+    { "ts": "2024-01-01T01:00:00Z", "equity_usd": "1999.94" }
+  ],
+  "drawdown_curve": [
+    { "ts": "2024-01-01T00:00:00Z", "drawdown_pct": "0" },
+    { "ts": "2024-01-01T01:00:00Z", "drawdown_pct": "-0.003" }
+  ],
+  "trades": [
+    {
+      "ts": "2024-01-01T01:00:00Z",
+      "node_id": "buy-eth-on-base",
+      "kind": "swap",
+      "venue": "base",
+      "symbol": "ETH",
+      "side": "buy",
+      "price": "1801.8",
+      "amount": "0.0554",
+      "value_usd": "100",
+      "fee_usd": "0.05",
+      "gas_usd": "0.02",
+      "status": "executed"
+    }
+  ],
+  "final_portfolio": {
+    "balances": { "base": { "USDC": "900", "ETH": "0.0554" }, "hyperliquid": { "USDC": "1000" } },
+    "perp_positions": [],
+    "yield_positions": []
+  },
+  "costs": {
+    "total_fees_usd": "0.05",
+    "total_gas_usd": "0.02",
+    "total_funding_usd": "0",
+    "total_yield_usd": "0"
+  },
+  "metadata": {
+    "policy": {
+      "schema_version": "catalyst.backtest.policy.v1",
+      "profile": "strict_v1",
+      "balance": { "insufficient_balance": "reject" },
+      "fills": { "partial_fills": "none", "price_selection": "close", "slippage": { "model": "fixed_bps", "bps": "10" }, "fees": { "model": "fixed_bps", "bps": "5" } },
+      "gas": { "model": "historical_fee_history", "fallback": { "model": "fixed_usd", "amount": "0.25" } },
+      "signals": { "trigger": "crossing", "repeat": "on_each_signal_fire", "cooldown": null },
+      "ordering": { "same_tick": "topological_order" },
+      "data": { "missing_required": "fail", "missing_optional": "warn" },
+      "perps": { "liquidation_check": "every_tick", "funding": "historical", "reduce_only_validation": "strict" },
+      "yield": { "accrual": "simple_apr" }
+    },
+    "interval": "1h",
+    "start": "2024-01-01T00:00:00Z",
+    "end": "2024-01-01T02:00:00Z",
+    "data_coverage": [],
+    "warnings": []
+  }
+}

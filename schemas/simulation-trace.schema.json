@@ -2,6 +2,109 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas.catalyst.dev/backtest/simulation-trace.schema.json",
   "title": "Simulation Trace",
-  "description": "Placeholder schema for raw simulation traces.",
-  "type": "object"
+  "description": "Raw, deterministic output of the Rust simulation engine: per-tick portfolio snapshots, an ordered event log, the final portfolio, the resolved policy, and any warnings/errors. The result reporter turns this into a user-facing backtest result.",
+  "type": "object",
+  "required": ["schema_version", "policy", "interval", "start", "end", "snapshots", "events", "final_portfolio"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "default": "catalyst.backtest.trace.v1" },
+    "policy": { "$ref": "https://schemas.catalyst.dev/backtest/simulation-policy.schema.json" },
+    "interval": { "type": "string", "enum": ["1m", "5m", "15m", "1h", "4h", "1d"] },
+    "start": { "type": "string", "format": "date-time" },
+    "end": { "type": "string", "format": "date-time" },
+    "snapshots": {
+      "type": "array",
+      "description": "Mark-to-market portfolio snapshot at each tick, in chronological order.",
+      "items": { "$ref": "#/$defs/snapshot" }
+    },
+    "events": {
+      "type": "array",
+      "description": "Ordered log of everything that happened: signals firing, actions executing or being rejected, funding, yield accrual, liquidation.",
+      "items": { "$ref": "#/$defs/event" }
+    },
+    "final_portfolio": { "$ref": "#/$defs/portfolio" },
+    "warnings": { "type": "array", "default": [], "items": { "type": "string" } },
+    "errors": { "type": "array", "default": [], "items": { "type": "string" } }
+  },
+  "$defs": {
+    "decimal": { "type": "string", "pattern": "^-?[0-9]+(\\.[0-9]+)?$" },
+    "snapshot": {
+      "type": "object",
+      "required": ["ts", "equity_usd"],
+      "additionalProperties": false,
+      "properties": {
+        "ts": { "type": "string", "format": "date-time" },
+        "equity_usd": { "$ref": "#/$defs/decimal" },
+        "portfolio": { "$ref": "#/$defs/portfolio" }
+      }
+    },
+    "portfolio": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Full portfolio state: cash/token balances by venue, perp positions, and yield positions.",
+      "properties": {
+        "balances": {
+          "type": "object",
+          "description": "Spot/cash balances keyed by venue then asset.",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": { "$ref": "#/$defs/decimal" }
+          }
+        },
+        "perp_positions": { "type": "array", "default": [], "items": { "$ref": "#/$defs/perpPosition" } },
+        "yield_positions": { "type": "array", "default": [], "items": { "$ref": "#/$defs/yieldPosition" } }
+      }
+    },
+    "perpPosition": {
+      "type": "object",
+      "required": ["venue", "symbol", "side", "size", "entry_price"],
+      "additionalProperties": false,
+      "properties": {
+        "venue": { "type": "string" },
+        "symbol": { "type": "string" },
+        "side": { "type": "string", "enum": ["long", "short"] },
+        "size": { "$ref": "#/$defs/decimal", "description": "Position size in base units." },
+        "entry_price": { "$ref": "#/$defs/decimal" },
+        "leverage": { "$ref": "#/$defs/decimal" },
+        "margin_usd": { "$ref": "#/$defs/decimal" },
+        "liquidation_price": { "$ref": "#/$defs/decimal" }
+      }
+    },
+    "yieldPosition": {
+      "type": "object",
+      "required": ["protocol", "asset", "chain", "principal"],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": { "type": "string" },
+        "pool": { "type": "string" },
+        "asset": { "type": "string" },
+        "chain": { "type": "string" },
+        "principal": { "$ref": "#/$defs/decimal" },
+        "accrued": { "$ref": "#/$defs/decimal" }
+      }
+    },
+    "event": {
+      "type": "object",
+      "required": ["ts", "type"],
+      "properties": {
+        "ts": { "type": "string", "format": "date-time" },
+        "type": {
+          "type": "string",
+          "enum": [
+            "signal_fired",
+            "action_executed",
+            "action_rejected",
+            "funding_applied",
+            "yield_accrued",
+            "liquidation",
+            "gas_charged",
+            "fee_charged"
+          ]
+        },
+        "node_id": { "type": "string" },
+        "reason": { "type": "string", "description": "Human-readable explanation, e.g. why an action was rejected." },
+        "detail": { "type": "object", "description": "Event-specific structured payload (prices, amounts, fees, etc.)." }
+      }
+    }
+  }
 }

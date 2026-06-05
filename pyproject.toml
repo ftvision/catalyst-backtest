@@ -9,6 +9,9 @@ dependencies = []
 dev = [
   "pytest>=8.0.0",
   "ruff>=0.8.0",
+  "jsonschema>=4.21",
+  "referencing>=0.34",
+  "catalyst-contracts",
 ]
 
 [tool.uv.workspace]
@@ -16,9 +19,12 @@ members = [
   "packages/*",
 ]
 
+[tool.uv.sources]
+catalyst-contracts = { workspace = true }
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "packages"]
