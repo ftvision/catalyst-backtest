@@ -3,6 +3,14 @@
 The first sketch leaned too hard into a generic graph workbench. Before designing
 screens, we should answer these workflow questions.
 
+> **Resolved (issue #12).** These questions are now answered and the first
+> workflow + screen information architecture are documented in
+> [web-app-workflow.md](web-app-workflow.md). In short: a **separate backtest
+> workbench** (not embedded, no graph editing in v1) whose dominant surface is
+> **result review with visible assumptions**, for a **strategy author** asking
+> *"would this graph have made money, and why?"*. The sections below are kept as
+> the original framing that led to those decisions.
+
 ## Product Context
 
 - Is this an internal tool or a user-facing app?
