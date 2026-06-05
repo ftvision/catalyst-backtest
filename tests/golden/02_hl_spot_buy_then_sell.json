@@ -1,0 +1,38 @@
+{
+  "name": "hl_spot_buy_then_sell",
+  "description": "Buy ETH spot on Hyperliquid, then chain a sell of 0.04 ETH.",
+  "input": {
+    "graph": {
+      "nodes": [
+        {"id": "buy-eth-spot", "kind": "action", "subtype": "swap",
+         "config": {"from_asset": "USDC", "to_asset": "ETH", "amount": "100", "chain": "hyperliquid"}},
+        {"id": "sell-eth-spot", "kind": "action", "subtype": "swap",
+         "config": {"from_asset": "ETH", "to_asset": "USDC", "amount": "0.04", "chain": "hyperliquid"}}
+      ],
+      "edges": [{"from": "buy-eth-spot", "to": "sell-eth-spot"}]
+    },
+    "config": {
+      "start": "2024-01-01T00:00:00Z",
+      "end": "2024-01-01T01:00:00Z",
+      "interval": "1h",
+      "initial_portfolio": {"hyperliquid": {"USDC": "1000"}}
+    },
+    "policy": {"profile": "strict_v1"},
+    "market_data": {
+      "schema_version": "catalyst.backtest.market_data_bundle.v1",
+      "interval": "1h",
+      "start": "2024-01-01T00:00:00Z",
+      "end": "2024-01-01T01:00:00Z",
+      "candles": [{"venue": "hyperliquid", "symbol": "ETH", "quote": "USD",
+        "points": [{"ts": "2024-01-01T00:00:00Z", "open": "2000", "high": "2000", "low": "2000", "close": "2000"}]}]
+    }
+  },
+  "expect": {
+    "executed": 2,
+    "rejected": 0,
+    "open_perps": 0,
+    "open_yields": 0,
+    "balances_present": [["hyperliquid", "ETH"]],
+    "snapshots_min": 1
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "name": "signal_gated_swap",
+  "description": "Buy ETH on Base only after price crosses below 1800; fires once.",
+  "input": {
+    "graph": {
+      "nodes": [
+        {"id": "eth-below-1800", "kind": "signal", "subtype": "price_threshold",
+         "config": {"symbol": "ETH", "operator": "<", "threshold": "1800"}},
+        {"id": "buy-eth-on-base", "kind": "action", "subtype": "swap",
+         "config": {"from_asset": "USDC", "to_asset": "ETH", "amount": "100", "chain": "base"}}
+      ],
+      "edges": [{"from": "eth-below-1800", "to": "buy-eth-on-base"}]
+    },
+    "config": {
+      "start": "2024-01-01T00:00:00Z",
+      "end": "2024-01-01T03:00:00Z",
+      "interval": "1h",
+      "initial_portfolio": {"base": {"USDC": "1000"}}
+    },
+    "policy": {"profile": "strict_v1"},
+    "market_data": {
+      "schema_version": "catalyst.backtest.market_data_bundle.v1",
+      "interval": "1h",
+      "start": "2024-01-01T00:00:00Z",
+      "end": "2024-01-01T03:00:00Z",
+      "candles": [{"venue": "base", "symbol": "ETH", "quote": "USD",
+        "points": [
+          {"ts": "2024-01-01T00:00:00Z", "open": "2000", "high": "2000", "low": "2000", "close": "2000"},
+          {"ts": "2024-01-01T01:00:00Z", "open": "1700", "high": "1700", "low": "1700", "close": "1700"},
+          {"ts": "2024-01-01T02:00:00Z", "open": "1700", "high": "1700", "low": "1700", "close": "1700"}
+        ]}],
+      "gas": [{"chain": "base", "points": [{"ts": "2024-01-01T00:00:00Z", "gas_usd": "0.02"}]}]
+    }
+  },
+  "expect": {
+    "executed": 1,
+    "rejected": 0,
+    "signals_fired": 1,
+    "open_perps": 0,
+    "open_yields": 0,
+    "balances_present": [["base", "ETH"]],
+    "snapshots_min": 3
+  }
+}

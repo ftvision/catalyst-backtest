@@ -1,0 +1,39 @@
+{
+  "name": "yield_deposit_withdraw_all",
+  "description": "Deposit 250 USDC into Aave, then chain a full withdrawal.",
+  "input": {
+    "graph": {
+      "nodes": [
+        {"id": "deposit-usdc-into-aave", "kind": "action", "subtype": "yield_deposit",
+         "config": {"chain": "base", "protocol": "aave", "pool": "usdc", "asset": "USDC", "amount": "250"}},
+        {"id": "withdraw-usdc-from-aave", "kind": "action", "subtype": "yield_withdraw",
+         "config": {"chain": "base", "protocol": "aave", "pool": "usdc", "asset": "USDC", "amount": "all"}}
+      ],
+      "edges": [{"from": "deposit-usdc-into-aave", "to": "withdraw-usdc-from-aave"}]
+    },
+    "config": {
+      "start": "2024-01-01T00:00:00Z",
+      "end": "2024-01-01T01:00:00Z",
+      "interval": "1h",
+      "initial_portfolio": {"base": {"USDC": "300"}}
+    },
+    "policy": {"profile": "strict_v1"},
+    "market_data": {
+      "schema_version": "catalyst.backtest.market_data_bundle.v1",
+      "interval": "1h",
+      "start": "2024-01-01T00:00:00Z",
+      "end": "2024-01-01T01:00:00Z",
+      "yields": [{"protocol": "aave", "pool": "usdc", "asset": "USDC", "chain": "base",
+        "points": [{"ts": "2024-01-01T00:00:00Z", "apr": "0.045"}]}],
+      "gas": [{"chain": "base", "points": [{"ts": "2024-01-01T00:00:00Z", "gas_usd": "0.02"}]}]
+    }
+  },
+  "expect": {
+    "executed": 2,
+    "rejected": 0,
+    "open_perps": 0,
+    "open_yields": 0,
+    "balances_present": [["base", "USDC"]],
+    "snapshots_min": 1
+  }
+}
