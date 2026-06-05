@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.catalyst.dev/backtest/graph.schema.json",
+  "title": "Catalyst Graph",
+  "description": "Placeholder schema for Catalyst graph inputs.",
+  "type": "object"
+}

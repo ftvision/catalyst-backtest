@@ -1,0 +1,18 @@
+[project]
+name = "catalyst-backtest-api"
+version = "0.1.0"
+description = "Backtest API package for Catalyst backtesting"
+requires-python = ">=3.12"
+dependencies = [
+  "catalyst-backtest-worker",
+  "catalyst-contracts",
+]
+
+[tool.uv.sources]
+catalyst-backtest-worker = { workspace = true }
+catalyst-contracts = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
