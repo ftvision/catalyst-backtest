@@ -13,6 +13,19 @@ too clever:
 
 See [docs/system-design.md](docs/system-design.md) for the current architecture.
 
+## Local Setup
+
+```bash
+uv sync
+cargo check --workspace
+```
+
+Useful repo checks:
+
+```bash
+make check
+```
+
 Beginner-friendly domain docs:
 
 - [Crypto trading primer](docs/crypto-trading-primer.md)

@@ -5,8 +5,20 @@ description = "Python workspace for Catalyst backtesting packages"
 requires-python = ">=3.12"
 dependencies = []
 
+[dependency-groups]
+dev = [
+  "pytest>=8.0.0",
+  "ruff>=0.8.0",
+]
+
 [tool.uv.workspace]
 members = [
   "packages/*",
 ]
 
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.catalyst.dev/backtest/backtest-request.schema.json",
+  "title": "Backtest Request",
+  "description": "Placeholder schema for backtest requests.",
+  "type": "object"
+}

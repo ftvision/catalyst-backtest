@@ -1,0 +1,22 @@
+[project]
+name = "catalyst-backtest-worker"
+version = "0.1.0"
+description = "Backtest worker package for Catalyst backtesting"
+requires-python = ">=3.12"
+dependencies = [
+  "catalyst-contracts",
+  "catalyst-graph-compiler",
+  "catalyst-market-data",
+  "catalyst-result-reporter",
+]
+
+[tool.uv.sources]
+catalyst-contracts = { workspace = true }
+catalyst-graph-compiler = { workspace = true }
+catalyst-market-data = { workspace = true }
+catalyst-result-reporter = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
