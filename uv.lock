@@ -73,6 +73,7 @@ source = { virtual = "." }
 [package.dev-dependencies]
 dev = [
     { name = "catalyst-contracts" },
+    { name = "catalyst-graph-compiler" },
     { name = "jsonschema" },
     { name = "pytest" },
     { name = "referencing" },
@@ -84,6 +85,7 @@ dev = [
 [package.metadata.requires-dev]
 dev = [
     { name = "catalyst-contracts", editable = "packages/contracts" },
+    { name = "catalyst-graph-compiler", editable = "packages/graph-compiler" },
     { name = "jsonschema", specifier = ">=4.21" },
     { name = "pytest", specifier = ">=8.0.0" },
     { name = "referencing", specifier = ">=0.34" },
