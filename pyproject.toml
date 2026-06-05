@@ -1,0 +1,12 @@
+[project]
+name = "catalyst-backtest-workspace"
+version = "0.1.0"
+description = "Python workspace for Catalyst backtesting packages"
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.uv.workspace]
+members = [
+  "packages/*",
+]
+
