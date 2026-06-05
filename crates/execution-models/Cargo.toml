@@ -8,3 +8,9 @@ repository.workspace = true
 [lib]
 path = "src/lib.rs"
 
+[dependencies]
+catalyst-contracts = { path = "../contracts" }
+catalyst-portfolio-ledger = { path = "../portfolio-ledger" }
+catalyst-simulation-policies = { path = "../simulation-policies" }
+rust_decimal = { version = "1", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
