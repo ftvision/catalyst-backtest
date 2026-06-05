@@ -74,6 +74,7 @@ source = { virtual = "." }
 dev = [
     { name = "catalyst-contracts" },
     { name = "catalyst-graph-compiler" },
+    { name = "catalyst-market-data" },
     { name = "jsonschema" },
     { name = "pytest" },
     { name = "referencing" },
@@ -86,6 +87,7 @@ dev = [
 dev = [
     { name = "catalyst-contracts", editable = "packages/contracts" },
     { name = "catalyst-graph-compiler", editable = "packages/graph-compiler" },
+    { name = "catalyst-market-data", editable = "packages/market-data" },
     { name = "jsonschema", specifier = ">=4.21" },
     { name = "pytest", specifier = ">=8.0.0" },
     { name = "referencing", specifier = ">=0.34" },
@@ -120,10 +122,14 @@ version = "0.1.0"
 source = { editable = "packages/market-data" }
 dependencies = [
     { name = "catalyst-contracts" },
+    { name = "catalyst-graph-compiler" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "catalyst-contracts", editable = "packages/contracts" }]
+requires-dist = [
+    { name = "catalyst-contracts", editable = "packages/contracts" },
+    { name = "catalyst-graph-compiler", editable = "packages/graph-compiler" },
+]
 
 [[package]]
 name = "catalyst-result-reporter"
