@@ -6,12 +6,16 @@ requires-python = ">=3.12"
 dependencies = [
   "catalyst-backtest-worker",
   "catalyst-contracts",
+  "catalyst-graph-compiler",
+  "catalyst-market-data",
   "fastapi>=0.110",
 ]
 
 [tool.uv.sources]
 catalyst-backtest-worker = { workspace = true }
 catalyst-contracts = { workspace = true }
+catalyst-graph-compiler = { workspace = true }
+catalyst-market-data = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

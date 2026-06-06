@@ -6,13 +6,28 @@ validates requests against the **contract models** and hands work to the
 
 ## Endpoints
 
+### Run lifecycle
+
 | Method & path | Purpose |
 | --- | --- |
 | `POST /backtests` | Validate a `BacktestRequest` and run it; returns `{ id, status }` (`201`). |
 | `GET /backtests/{id}` | Run status (`{ id, status, error }`). |
 | `GET /backtests/{id}/result` | The summarized `BacktestResult`. |
-| `GET /backtests/{id}/events` | The raw event log from the trace. |
+| `GET /backtests/{id}/metadata` | Run-level metadata: graph hash, resolved policy, data coverage, warnings, artifact refs, timestamps. |
+| `GET /backtests/{id}/events` | Event log, **paginated + filterable** (`type`, `node_id`, `status`, `cursor`, `limit`) → `{ items, next_cursor, total }`. |
+| `GET /backtests?graph_hash=...` | Compact **run history** for a graph (`{ items: [...] }`). |
 | `GET /health` | Liveness. |
+
+### Workbench setup (no run created)
+
+These power the Run Setup screen without creating a run, reusing the compiler,
+policy resolver, and market-data planner so the frontend never reimplements them.
+
+| Method & path | Purpose |
+| --- | --- |
+| `POST /backtests/preview` | Validate a graph and return `{ graph_hash, valid, graph_summary, data_requirements, resolved_policy, warnings }`. Invalid graphs return `valid:false` (HTTP 200), not an error. |
+| `POST /market-data/coverage` | Per-series coverage + provider metadata + missing-data warnings for `{ graph, start, end, interval }`. |
+| `GET /policy-profiles` | `strict_v1` / `conservative_v1` / `research_v1` with id, label, description, and resolved policy. |
 
 ## Validation & errors
 

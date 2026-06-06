@@ -23,3 +23,6 @@ data/
 artifacts/
 *.parquet
 *.duckdb
+
+# Local Claude Code worktrees/state
+.claude/
