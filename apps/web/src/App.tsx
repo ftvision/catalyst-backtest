@@ -25,12 +25,19 @@ import {
   auditFromApi,
   graphFromPreview,
   marketReplayFromApi,
+  marketReplayWithMarketData,
   resultFromApi,
   runHistoryFromApi,
   setupFromService,
 } from "./api/adapters";
-import { ApiError, catalystApi, type BacktestStatus } from "./api/client";
-import { buildDemoBacktestRequest, demoConfig, demoGraph, demoMarketData } from "./data/demoRequest";
+import { ApiError, catalystApi, type BacktestStatus, type MarketDataBundle } from "./api/client";
+import {
+  buildDemoBacktestRequest,
+  buildStoreBacktestRequest,
+  demoConfig,
+  demoGraph,
+  demoMarketData,
+} from "./data/demoRequest";
 import { audit, graph, marketReplay, result, runHistory, setup } from "./data/mockData";
 import { EventLensPage } from "./pages/EventLensPage";
 import { MarketReplayPage } from "./pages/MarketReplayPage";
@@ -49,6 +56,7 @@ const routes: Array<{ id: RouteId; label: string; icon: React.ReactNode }> = [
 
 type ApiStatus = "checking" | "healthy" | "offline" | "running" | "failed";
 type RunStatus = "idle" | "submitting" | "queued" | "running" | "succeeded" | "failed";
+type DataSourceMode = "store" | "inline";
 
 interface WorkbenchState {
   graph: GraphSummary;
@@ -75,6 +83,8 @@ export function App() {
   const [apiStatus, setApiStatus] = useState<ApiStatus>("checking");
   const [apiMessage, setApiMessage] = useState(`Checking ${catalystApi.baseUrl}`);
   const [runStatus, setRunStatus] = useState<RunStatus>("idle");
+  const [dataSourceMode, setDataSourceMode] = useState<DataSourceMode>("store");
+  const [activeMarketData, setActiveMarketData] = useState<MarketDataBundle>(demoMarketData);
   const [workbench, setWorkbench] = useState<WorkbenchState>({
     graph,
     setup,
@@ -98,6 +108,28 @@ export function App() {
         setApiStatus("checking");
         setApiMessage(`Checking ${catalystApi.baseUrl}`);
         await catalystApi.health();
+        let sourceMode: DataSourceMode = "store";
+        let sourceLabel = "Parquet store";
+        let marketData: MarketDataBundle;
+        try {
+          marketData = await catalystApi.loadMarketDataWindow({
+            graph: demoGraph,
+            start: demoConfig.start,
+            end: demoConfig.end,
+            interval: demoConfig.interval,
+          });
+        } catch (error) {
+          sourceMode = "inline";
+          sourceLabel = "Inline demo fallback";
+          marketData = await catalystApi.loadMarketDataWindow({
+            graph: demoGraph,
+            start: demoConfig.start,
+            end: demoConfig.end,
+            interval: demoConfig.interval,
+            market_data: demoMarketData,
+          });
+          console.warn("Fell back to inline market-data demo", error);
+        }
         const [profiles, preview, coverage] = await Promise.all([
           catalystApi.listPolicyProfiles(),
           catalystApi.previewGraph(demoGraph, { profile: setup.policy }),
@@ -106,20 +138,24 @@ export function App() {
             start: demoConfig.start,
             end: demoConfig.end,
             interval: demoConfig.interval,
-            market_data: demoMarketData,
+            ...(sourceMode === "inline" ? { market_data: marketData } : {}),
           }),
         ]);
         const history = await catalystApi.listBacktests(preview.graph_hash);
 
         if (cancelled) return;
 
+        setDataSourceMode(sourceMode);
+        setActiveMarketData(marketData);
         setWorkbench((current) => ({
           ...current,
           graph: graphFromPreview(demoGraph, preview),
+          marketReplay: marketReplayWithMarketData(current.marketReplay, marketData),
           setup: setupFromService({
             graph: demoGraph,
             config: demoConfig,
             policyProfile: setup.policy,
+            dataSourceLabel: sourceLabel,
             coverage,
             preview,
             profiles: profiles.items,
@@ -127,7 +163,7 @@ export function App() {
           runHistory: history.items.length ? runHistoryFromApi(history.items) : current.runHistory,
         }));
         setApiStatus("healthy");
-        setApiMessage(`Connected to ${catalystApi.baseUrl}`);
+        setApiMessage(`Connected to ${catalystApi.baseUrl} / ${sourceLabel}`);
       } catch (error) {
         if (cancelled) return;
         setApiStatus("offline");
@@ -170,7 +206,11 @@ export function App() {
       setRunStatus("submitting");
       setApiStatus("running");
       setApiMessage("Submitting run to Rust service");
-      const created = await catalystApi.createBacktest(buildDemoBacktestRequest(workbench.setup.policy));
+      const request =
+        dataSourceMode === "store"
+          ? buildStoreBacktestRequest(workbench.setup.policy)
+          : buildDemoBacktestRequest(workbench.setup.policy);
+      const created = await catalystApi.createBacktest(request);
       setRunStatus("queued");
       setWorkbench((current) => ({
         ...current,
@@ -188,7 +228,7 @@ export function App() {
         catalystApi.getMetadata(created.id),
         catalystApi.listBacktests(),
       ]);
-      const replay = marketReplayFromApi(serviceResult, events.items, demoMarketData);
+      const replay = marketReplayFromApi(serviceResult, events.items, activeMarketData);
       const review = resultFromApi(serviceResult, status.status);
       const auditData = auditFromApi(events.items, serviceResult, replay);
       const serviceSetup = setupFromService({
@@ -196,6 +236,7 @@ export function App() {
         graph: demoGraph,
         config: demoConfig,
         policyProfile: workbench.setup.policy,
+        dataSourceLabel: dataSourceMode === "store" ? "Parquet store" : "Inline demo fallback",
         metadata,
       });
 
@@ -214,7 +255,7 @@ export function App() {
       setSelectedEventId(replay.selectedEventId);
       setRunStatus("succeeded");
       setApiStatus("healthy");
-      setApiMessage(`Backtest ${created.id} completed`);
+      setApiMessage(`Backtest ${created.id} completed / ${dataSourceMode === "store" ? "Parquet store" : "Inline demo fallback"}`);
       setActiveRoute("result");
     } catch (error) {
       setRunStatus("failed");
@@ -305,7 +346,7 @@ export function App() {
             onRun={runBacktest}
             runLabel={runLabel}
             runDisabled={isRunning}
-            graphPayload={JSON.stringify(buildDemoBacktestRequest(workbench.setup.policy), null, 2)}
+            dataSourceLabel={dataSourceMode === "store" ? "Parquet store" : "Inline demo fallback"}
           />
         ) : null}
         {activeRoute === "replay" ? (

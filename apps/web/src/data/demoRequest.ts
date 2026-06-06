@@ -104,3 +104,11 @@ export function buildDemoBacktestRequest(policyProfile = "strict_v1"): BacktestR
     market_data: demoMarketData,
   };
 }
+
+export function buildStoreBacktestRequest(policyProfile = "strict_v1"): BacktestRequest {
+  return {
+    graph: demoGraph,
+    config: demoConfig,
+    policy: { profile: policyProfile },
+  };
+}

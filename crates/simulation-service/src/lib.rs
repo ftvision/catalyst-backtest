@@ -13,6 +13,7 @@
 //! - `GET  /backtests/{id}` `/result` `/metadata` `/events` (paginated/filterable)
 //! - `POST /backtests/preview` — validate graph + summary + data requirements + resolved policy
 //! - `POST /market-data/coverage` — per-series coverage before a run
+//! - `POST /market-data/window` — normalized bundle for the requested window
 //! - `GET  /policy-profiles`
 //!
 //! Market data is either inline in the request or read from the configured
@@ -52,6 +53,7 @@ pub fn app(state: AppState) -> Router {
         .route("/backtests/:id/metadata", get(handlers::get_metadata))
         .route("/backtests/:id/events", get(handlers::get_events))
         .route("/market-data/coverage", post(handlers::coverage))
+        .route("/market-data/window", post(handlers::market_data_window))
         .route("/policy-profiles", get(handlers::policy_profiles))
         .with_state(state)
         .layer(cors)

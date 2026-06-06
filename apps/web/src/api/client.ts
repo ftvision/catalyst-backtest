@@ -66,7 +66,7 @@ export interface BacktestRequest {
   graph: CatalystGraph;
   config: BacktestConfig;
   policy: { profile: string };
-  market_data: MarketDataBundle;
+  market_data?: MarketDataBundle;
 }
 
 export interface BacktestStatus {
@@ -260,6 +260,17 @@ export const catalystApi = {
     market_data?: MarketDataBundle;
   }) =>
     request<CoverageResponse>("/market-data/coverage", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  loadMarketDataWindow: (body: {
+    graph: CatalystGraph;
+    start: string;
+    end: string;
+    interval: string;
+    market_data?: MarketDataBundle;
+  }) =>
+    request<MarketDataBundle>("/market-data/window", {
       method: "POST",
       body: JSON.stringify(body),
     }),

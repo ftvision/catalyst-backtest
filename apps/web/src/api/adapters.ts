@@ -133,6 +133,7 @@ export function setupFromService(input: {
   graph: CatalystGraph;
   config: { start: string; end: string; interval: string; initial_portfolio: Record<string, Record<string, string>> };
   policyProfile: string;
+  dataSourceLabel?: string;
   coverage?: CoverageResponse;
   preview?: GraphPreview;
   metadata?: BacktestMetadata;
@@ -173,11 +174,42 @@ export function setupFromService(input: {
       ["API", "Rust simulation service"],
       ["Policy profile", input.profiles?.find((profile) => profile.id === input.policyProfile)?.label ?? input.policyProfile],
       ["Fill price", String(input.preview?.resolved_policy?.price_selection ?? "service policy")],
-      ["Data source", "inline market_data bundle"],
+      ["Data source", input.dataSourceLabel ?? "Parquet store"],
       ["Queue mode", "POST /backtests + status polling"],
       ["Graph hash", input.preview?.graph_hash?.slice(0, 12) ?? "-"],
     ],
     warnings: warnings.length ? warnings : ["No service warnings for this run."],
+  };
+}
+
+export function marketReplayWithMarketData(
+  current: MarketReplayData,
+  marketData: MarketDataBundle,
+): MarketReplayData {
+  const candleSeries = firstCandleSeries(marketData);
+  if (!candleSeries?.points.length) return current;
+  const candles = candleSeries.points.map((point, index) => ({
+    time: unixTime(point.ts, index),
+    open: numberValue(point.open),
+    high: numberValue(point.high),
+    low: numberValue(point.low),
+    close: numberValue(point.close),
+    volume: numberValue(point.volume),
+  }));
+
+  return {
+    ...current,
+    symbol: `${candleSeries.symbol} / ${candleSeries.quote}`,
+    venue: candleSeries.venue,
+    period: `${shortDate(marketData.start)} - ${shortDate(marketData.end)}`,
+    candles,
+    evidence: [
+      ["Data source", marketData.providers?.[0]?.name ? String(marketData.providers[0].name) : "market-data window"],
+      ["Candle series", `${candleSeries.venue} ${candleSeries.symbol}`],
+      ["Interval", marketData.interval],
+      ["Start", marketData.start],
+      ["End", marketData.end],
+    ],
   };
 }
 

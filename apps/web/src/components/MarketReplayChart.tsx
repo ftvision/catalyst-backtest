@@ -34,6 +34,15 @@ const paneStretch = {
   drawdown: 13,
 };
 
+function formatChartTime(time: UTCTimestamp) {
+  const date = new Date(Number(time) * 1000);
+  const hour = date.getUTCHours();
+  if (hour === 0) {
+    return date.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+  }
+  return `${String(hour).padStart(2, "0")}:00`;
+}
+
 export function MarketReplayChart({
   candles,
   replay,
@@ -75,6 +84,9 @@ export function MarketReplayChart({
       },
       timeScale: {
         borderColor: "#d4dae3",
+        timeVisible: true,
+        secondsVisible: false,
+        tickMarkFormatter: (time: UTCTimestamp) => formatChartTime(time),
       },
       crosshair: {
         vertLine: { color: "#2768ce", labelBackgroundColor: "#2768ce" },

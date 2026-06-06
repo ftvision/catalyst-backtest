@@ -247,6 +247,16 @@ async fn coverage_from_inline_bundle() {
     assert!(kinds.contains(&"candles") && kinds.contains(&"gas"));
 }
 
+#[tokio::test]
+async fn market_data_window_returns_inline_bundle() {
+    let body = json!({"graph": graph(), "start": "2024-01-01T00:00:00Z", "end": "2024-01-01T02:00:00Z",
+                      "interval": "1h", "market_data": inline_market_data()});
+    let (s, v) = send(&state(), "POST", "/market-data/window", Some(body)).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v["candles"][0]["points"].as_array().unwrap().len(), 2);
+    assert_eq!(v["providers"].as_array().unwrap().len(), 0);
+}
+
 // --- by-reference run reads the configured Parquet store ---
 
 fn write_eth_candles(root: &Path) {
@@ -294,4 +304,17 @@ async fn create_backtest_reads_configured_store() {
     assert_eq!(status["status"], "succeeded", "status: {status}");
     let (_, result) = send(&st, "GET", &format!("/backtests/{id}/result"), None).await;
     assert!(result["trades"].as_array().unwrap().iter().any(|t| t["status"] == "executed"));
+}
+
+#[tokio::test]
+async fn market_data_window_reads_configured_store() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_eth_candles(tmp.path());
+    let st = AppState::new(Some(tmp.path().to_string_lossy().to_string()), 1024);
+    let body = json!({"graph": graph(), "start": "2024-01-01T00:00:00Z", "end": "2024-01-01T02:00:00Z",
+                      "interval": "1h"});
+    let (s, v) = send(&st, "POST", "/market-data/window", Some(body)).await;
+    assert_eq!(s, StatusCode::OK, "body: {v}");
+    assert_eq!(v["candles"][0]["points"].as_array().unwrap().len(), 2);
+    assert_eq!(v["providers"][0]["name"], "parquet-store");
 }

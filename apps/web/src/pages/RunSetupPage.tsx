@@ -11,7 +11,6 @@ import {
   Table,
   Text,
   TextInput,
-  Textarea,
   Title,
 } from "@mantine/core";
 import { Play, ShieldAlert } from "lucide-react";
@@ -27,7 +26,7 @@ export function RunSetupPage({
   onRun,
   runLabel = "Run backtest",
   runDisabled = false,
-  graphPayload = '{"graph_id":"g_eth_threshold_base_swap","nodes":7,"edges":6}',
+  dataSourceLabel = "Parquet store",
 }: {
   graph: GraphSummary;
   setup: SetupData;
@@ -35,7 +34,7 @@ export function RunSetupPage({
   onRun: () => void;
   runLabel?: string;
   runDisabled?: boolean;
-  graphPayload?: string;
+  dataSourceLabel?: string;
 }) {
   return (
     <Stack gap="md">
@@ -122,14 +121,9 @@ export function RunSetupPage({
                 />
                 <NumberInput label="Slippage bps" value={10} readOnly />
                 <NumberInput label="Max missing candles" value={0} readOnly />
+                <TextInput label="Market data source" value={dataSourceLabel} readOnly />
+                <TextInput label="Run ID" value={setup.runId} readOnly />
               </SimpleGrid>
-              <Textarea
-                label="Graph payload"
-                minRows={4}
-                autosize
-                value={graphPayload}
-                readOnly
-              />
             </Stack>
           </Paper>
 
