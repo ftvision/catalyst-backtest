@@ -1,25 +1,14 @@
-//! Derive the executable structure from a raw graph: which actions are initial,
-//! which signals drive which actions, and which actions chain to others.
+//! The engine's internal executable view, built from a [`CompiledGraph`].
 //!
-//! This mirrors the Python graph compiler's trigger semantics so the Rust engine
-//! can run a validated graph directly.
+//! Trigger derivation lives in `catalyst-graph-compiler` (the single authoritative
+//! implementation, per ADR 0001). This module just reorganizes the compiler's
+//! output into the lookups the tick loop needs.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use rust_decimal::Decimal;
 
-use catalyst_contracts::graph::{Graph, NodeKind, NodeSubtype};
-
-fn subtype_str(subtype: &NodeSubtype) -> String {
-    match subtype {
-        NodeSubtype::Swap => "swap",
-        NodeSubtype::PerpOrder => "perp_order",
-        NodeSubtype::YieldDeposit => "yield_deposit",
-        NodeSubtype::YieldWithdraw => "yield_withdraw",
-        NodeSubtype::PriceThreshold => "price_threshold",
-    }
-    .to_string()
-}
+use catalyst_graph_compiler::{CompiledGraph, TriggerType};
 
 #[derive(Debug, Clone)]
 pub struct Signal {
@@ -47,65 +36,50 @@ pub struct ExecGraph {
 }
 
 impl ExecGraph {
-    pub fn from_graph(graph: &Graph) -> Self {
-        let enabled: HashSet<&str> =
-            graph.nodes.iter().filter(|n| n.enabled).map(|n| n.id.as_str()).collect();
-        let kind: HashMap<&str, &NodeKind> =
-            graph.nodes.iter().map(|n| (n.id.as_str(), &n.kind)).collect();
-
-        // Edges restricted to enabled endpoints.
-        let edges: Vec<(&str, &str)> = graph
-            .edges
-            .iter()
-            .filter(|e| enabled.contains(e.from.as_str()) && enabled.contains(e.to.as_str()))
-            .map(|e| (e.from.as_str(), e.to.as_str()))
-            .collect();
-
+    /// Build the engine's execution view from a compiled graph.
+    pub fn from_compiled(compiled: &CompiledGraph) -> Self {
         let mut g = ExecGraph::default();
 
-        for node in graph.nodes.iter().filter(|n| n.enabled) {
-            match node.kind {
-                NodeKind::Action => {
-                    g.actions.insert(
-                        node.id.clone(),
-                        ActionNode {
-                            id: node.id.clone(),
-                            subtype: subtype_str(&node.subtype),
-                            config: node.config.clone(),
-                        },
-                    );
-                    let has_incoming = edges.iter().any(|(_, to)| *to == node.id);
-                    if !has_incoming {
-                        g.initial_actions.push(node.id.clone());
+        for action in &compiled.actions {
+            g.actions.insert(
+                action.id.clone(),
+                ActionNode {
+                    id: action.id.clone(),
+                    subtype: action.subtype.clone(),
+                    config: action.config.clone(),
+                },
+            );
+            for trigger in &action.triggers {
+                match trigger.trigger_type {
+                    TriggerType::Initial => g.initial_actions.push(action.id.clone()),
+                    // action chains: source action -> this action
+                    TriggerType::Action => {
+                        if let Some(src) = &trigger.source_id {
+                            g.out_action_edges.entry(src.clone()).or_default().push(action.id.clone());
+                        }
                     }
-                }
-                NodeKind::Signal => {
-                    let cfg = &node.config;
-                    let symbol = cfg.get("symbol").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    let operator =
-                        cfg.get("operator").and_then(|v| v.as_str()).unwrap_or("<").to_string();
-                    let threshold = cfg
-                        .get("threshold")
-                        .and_then(|v| v.as_str())
-                        .and_then(|s| s.parse().ok())
-                        .unwrap_or(Decimal::ZERO);
-                    let targets = edges
-                        .iter()
-                        .filter(|(from, _)| *from == node.id)
-                        .map(|(_, to)| to.to_string())
-                        .collect();
-                    g.signals.push(Signal { id: node.id.clone(), symbol, operator, threshold, targets });
+                    // signal triggers are captured via the signal's `targets`.
+                    TriggerType::Signal => {}
                 }
             }
         }
 
-        // Action -> action chaining edges.
-        for (from, to) in &edges {
-            let from_is_action = matches!(kind.get(from), Some(NodeKind::Action));
-            let to_is_action = matches!(kind.get(to), Some(NodeKind::Action));
-            if from_is_action && to_is_action {
-                g.out_action_edges.entry(from.to_string()).or_default().push(to.to_string());
-            }
+        for signal in &compiled.signals {
+            let cfg = &signal.config;
+            let symbol = cfg.get("symbol").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let operator = cfg.get("operator").and_then(|v| v.as_str()).unwrap_or("<").to_string();
+            let threshold = cfg
+                .get("threshold")
+                .and_then(|v| v.as_str())
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(Decimal::ZERO);
+            g.signals.push(Signal {
+                id: signal.id.clone(),
+                symbol,
+                operator,
+                threshold,
+                targets: signal.targets.clone(),
+            });
         }
 
         g
