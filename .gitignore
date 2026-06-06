@@ -18,9 +18,12 @@ target/
 node_modules/
 .next/
 coverage/
+storybook-static/
+*.tsbuildinfo
+.qa-*.png
 
-data/
-artifacts/
+/data/
+/artifacts/
 *.parquet
 *.duckdb
 
