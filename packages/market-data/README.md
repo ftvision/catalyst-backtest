@@ -57,18 +57,40 @@ ingest_binance(store, venue="hyperliquid", symbol="ETH", binance_symbol="ETHUSDT
 src = ParquetSource("data/market-data", start, end, "1h")
 ```
 
-Or via the CLI:
+### Ingesters / CLI
+
+| Source | What | CLI |
+| --- | --- | --- |
+| **Binance klines** | candles (free, deep, keyless reference price) | `ingest-binance` |
+| **DefiLlama Aave APY** | yields (free, historical; APY% → APR fraction) | `ingest-aave-yields` |
+| **EVM gas** | per-chain gas: recent `eth_feeHistory` (real, recent-only) or a flat estimate over a window | `ingest-gas` |
 
 ```bash
+# candles (Binance reference)
 python -m catalyst_market_data.cli ingest-binance \
   --root data/market-data --venue hyperliquid --symbol ETH \
   --binance-symbol ETHUSDT --interval 1h \
   --start 2024-01-01T00:00:00Z --end 2024-02-01T00:00:00Z
+
+# Aave yields (DefiLlama pool UUID from yields.llama.fi/pools)
+python -m catalyst_market_data.cli ingest-aave-yields \
+  --root data/market-data --asset USDC --chain base --pool usdc \
+  --pool-id <defillama-pool-uuid> \
+  --start 2024-01-01T00:00:00Z --end 2024-02-01T00:00:00Z
+
+# gas: a flat estimate over a window (deep history isn't available free)
+python -m catalyst_market_data.cli ingest-gas \
+  --root data/market-data --chain base --constant 0.02 --interval 1h \
+  --start 2024-01-01T00:00:00Z --end 2024-02-01T00:00:00Z
 ```
 
 `ParquetSource` plugs into `build_bundle` like any other source — the engine is
-unchanged. (Interim: Python reads Parquet → bundle. The end state is the Rust
-loader reading the store directly, issue #29.)
+unchanged. The Rust loader (issue #29) reads the same store directly.
+
+> **Gas caveat:** free historical Base gas isn't available (`eth_feeHistory` is
+> recent-only; archival is Dune/BigQuery). `ingest-gas` offers a *real recent*
+> RPC mode and a *flat-estimate* backfill for historical windows. Treat backtest
+> gas as an approximation.
 
 ## Missing-data handling
 
