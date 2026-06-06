@@ -24,6 +24,7 @@ mod error;
 mod handlers;
 mod state;
 mod support;
+mod worker;
 
 pub use state::AppState;
 

@@ -59,8 +59,30 @@ async fn send(state: &AppState, method: &str, uri: &str, body: Option<Value>) ->
     (status, value)
 }
 
+/// State with a started worker pool (the async model needs workers to make progress).
 fn state() -> AppState {
-    AppState::default()
+    let st = AppState::default();
+    st.start_workers(2);
+    st
+}
+
+/// Enqueue a backtest and poll its status until it leaves `queued`/`running`.
+/// Returns the terminal status JSON (`succeeded` or `failed`).
+async fn run_to_completion(st: &AppState, body: Value) -> (String, Value) {
+    let (s, created) = send(st, "POST", "/backtests", Some(body)).await;
+    assert_eq!(s, StatusCode::ACCEPTED, "expected 202 on submit, body: {created}");
+    assert_eq!(created["status"], "queued");
+    let id = created["id"].as_str().unwrap().to_string();
+
+    for _ in 0..200 {
+        let (s, status) = send(st, "GET", &format!("/backtests/{id}"), None).await;
+        assert_eq!(s, StatusCode::OK);
+        match status["status"].as_str().unwrap() {
+            "succeeded" | "failed" => return (id, status),
+            _ => tokio::time::sleep(std::time::Duration::from_millis(10)).await,
+        }
+    }
+    panic!("backtest {id} did not finish in time");
 }
 
 // --- health + low-level simulate ---
@@ -81,19 +103,15 @@ async fn simulate_returns_trace() {
     assert_eq!(v["snapshots"].as_array().unwrap().len(), 2);
 }
 
-// --- run lifecycle ---
+// --- run lifecycle (submit -> poll -> fetch) ---
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn create_then_inspect_lifecycle() {
     let st = state();
-    let (s, created) = send(&st, "POST", "/backtests", Some(backtest_body())).await;
-    assert_eq!(s, StatusCode::CREATED, "body: {created}");
-    let id = created["id"].as_str().unwrap().to_string();
-    assert_eq!(created["status"], "succeeded");
-
-    let (s, status) = send(&st, "GET", &format!("/backtests/{id}"), None).await;
-    assert_eq!(s, StatusCode::OK);
-    assert_eq!(status["status"], "succeeded");
+    let (id, status) = run_to_completion(&st, backtest_body()).await;
+    assert_eq!(status["status"], "succeeded", "status: {status}");
+    assert!(status["started_at"].is_string());
+    assert!(status["finished_at"].is_string());
 
     let (s, result) = send(&st, "GET", &format!("/backtests/{id}/result"), None).await;
     assert_eq!(s, StatusCode::OK);
@@ -110,25 +128,38 @@ async fn create_then_inspect_lifecycle() {
     assert_eq!(meta["config"]["interval"], "1h");
 }
 
-#[tokio::test]
-async fn invalid_graph_creates_failed_run() {
+#[tokio::test(flavor = "multi_thread")]
+async fn result_is_409_until_done() {
+    let st = AppState::default(); // no workers started: the job stays queued
+    let (s, created) = send(&st, "POST", "/backtests", Some(backtest_body())).await;
+    assert_eq!(s, StatusCode::ACCEPTED);
+    let id = created["id"].as_str().unwrap();
+
+    let (s, v) = send(&st, "GET", &format!("/backtests/{id}/result"), None).await;
+    assert_eq!(s, StatusCode::CONFLICT);
+    assert_eq!(v["error"]["code"], "not_ready");
+    assert_eq!(v["status"], "queued");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn invalid_graph_produces_failed_run() {
     let st = state();
     let mut body = backtest_body();
     body["graph"]["edges"] = json!([{"from": "buy", "to": "ghost"}]);
-    let (s, v) = send(&st, "POST", "/backtests", Some(body)).await;
+    let (id, status) = run_to_completion(&st, body).await;
+    assert_eq!(status["status"], "failed", "status: {status}");
+    assert!(status["error"].as_str().unwrap().contains("ghost"));
+
+    let (s, result) = send(&st, "GET", &format!("/backtests/{id}/result"), None).await;
     assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
-    assert_eq!(v["error"]["code"], "backtest_failed");
-    let id = v["id"].as_str().unwrap();
-    let (s2, status) = send(&st, "GET", &format!("/backtests/{id}"), None).await;
-    assert_eq!(s2, StatusCode::OK);
-    assert_eq!(status["status"], "failed");
+    assert_eq!(result["error"]["code"], "backtest_failed");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn run_history_by_graph_hash() {
     let st = state();
-    send(&st, "POST", "/backtests", Some(backtest_body())).await;
-    send(&st, "POST", "/backtests", Some(backtest_body())).await;
+    run_to_completion(&st, backtest_body()).await;
+    run_to_completion(&st, backtest_body()).await;
     let (_, prev) = send(&st, "POST", "/backtests/preview", Some(json!({"graph": graph()}))).await;
     let gh = prev["graph_hash"].as_str().unwrap();
 
@@ -140,11 +171,10 @@ async fn run_history_by_graph_hash() {
     assert!(items[0]["summary"]["final_value_usd"].is_string());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn events_filter_and_paginate() {
     let st = state();
-    let (_, created) = send(&st, "POST", "/backtests", Some(backtest_body())).await;
-    let id = created["id"].as_str().unwrap().to_string();
+    let (id, _) = run_to_completion(&st, backtest_body()).await;
 
     let (_, all) = send(&st, "GET", &format!("/backtests/{id}/events"), None).await;
     assert!(all["total"].as_u64().unwrap() >= 1);
@@ -251,17 +281,17 @@ fn write_eth_candles(root: &Path) {
     w.close().unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn create_backtest_reads_configured_store() {
     let tmp = tempfile::tempdir().unwrap();
     write_eth_candles(tmp.path());
-    let st = AppState::new(Some(tmp.path().to_string_lossy().to_string()));
+    let st = AppState::new(Some(tmp.path().to_string_lossy().to_string()), 1024);
+    st.start_workers(2);
 
-    // no inline market_data -> the service loads from the configured store
+    // no inline market_data -> the worker loads from the configured store
     let body = json!({"graph": graph(), "config": config(), "policy": {"profile": "strict_v1"}});
-    let (s, created) = send(&st, "POST", "/backtests", Some(body)).await;
-    assert_eq!(s, StatusCode::CREATED, "body: {created}");
-    let id = created["id"].as_str().unwrap().to_string();
+    let (id, status) = run_to_completion(&st, body).await;
+    assert_eq!(status["status"], "succeeded", "status: {status}");
     let (_, result) = send(&st, "GET", &format!("/backtests/{id}/result"), None).await;
     assert!(result["trades"].as_array().unwrap().iter().any(|t| t["status"] == "executed"));
 }

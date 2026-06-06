@@ -1,4 +1,4 @@
-//! HTTP handlers for the backtest service: run lifecycle + workbench setup.
+//! HTTP handlers: async run lifecycle + workbench setup + low-level simulate.
 
 use axum::{
     extract::{Path, Query, State},
@@ -12,11 +12,10 @@ use serde_json::{json, Value};
 use catalyst_contracts::{BacktestConfig, Graph, MarketDataBundle, SimulationPolicy};
 use catalyst_graph_compiler::compile;
 use catalyst_market_data_loader::{load_bundle, BundleRef};
-use catalyst_result_reporter::summarize;
 use catalyst_simulation_engine::{run, SimulationInput};
 
 use crate::error::{error, error_with};
-use crate::state::{AppState, RunRecord};
+use crate::state::{AppState, Job, StoredRequest, SubmitError};
 use crate::support;
 
 // --- request bodies ---
@@ -75,118 +74,47 @@ pub async fn health() -> Json<Value> {
     Json(json!({ "status": "ok", "service": "catalyst-backtest-service" }))
 }
 
-// --- run lifecycle ---
+// --- run lifecycle (async) ---
 
+/// Enqueue a backtest. Returns immediately; a worker runs it. (202 Accepted)
 pub async fn create_backtest(State(state): State<AppState>, Json(body): Json<Value>) -> Response {
     let req: BacktestRequestBody = match serde_json::from_value(body) {
         Ok(r) => r,
         Err(e) => return error(StatusCode::BAD_REQUEST, "invalid_request", e.to_string()),
     };
-
+    let stored = StoredRequest {
+        graph: req.graph,
+        config: req.config,
+        policy: req.policy,
+        market_data: req.market_data,
+    };
     let id = state.next_run_id();
-    let gh = support::graph_hash(&req.graph);
-    let created = chrono::Utc::now().to_rfc3339();
-    let cfg = (req.config.start.clone(), req.config.end.clone(), req.config.interval.clone());
-    let profile = req.policy.profile.clone();
-
-    let fail = |code: &str, msg: String, http: StatusCode| -> Response {
-        state.insert(RunRecord {
-            id: id.clone(),
-            graph_hash: gh.clone(),
-            status: "failed".into(),
-            error: Some(msg.clone()),
-            policy_profile: profile.clone(),
-            start: cfg.0.clone(),
-            end: cfg.1.clone(),
-            interval: cfg.2.clone(),
-            created_at: created.clone(),
-            summary: Value::Null,
-            result: None,
-            trace: None,
-            data_coverage: vec![],
-            warnings: vec![],
-        });
-        error_with(http, code, msg, json!({ "id": id }))
-    };
-
-    let compiled = match compile(&req.graph) {
-        Ok(c) => c,
-        Err(e) => return fail("backtest_failed", e.to_string(), StatusCode::UNPROCESSABLE_ENTITY),
-    };
-
-    let bundle = match req.market_data {
-        Some(b) => b,
-        None => match &state.store_root {
-            Some(root) => {
-                let r = support::bundle_ref(root.clone(), &compiled);
-                match load_bundle(&r, &req.config.start, &req.config.end, &req.config.interval).await {
-                    Ok(b) => b,
-                    Err(e) => {
-                        return fail("data_load_error", e.to_string(), StatusCode::UNPROCESSABLE_ENTITY)
-                    }
-                }
-            }
-            None => {
-                return fail(
-                    "invalid_request",
-                    "no market_data supplied and no store configured".into(),
-                    StatusCode::BAD_REQUEST,
-                )
-            }
-        },
-    };
-
-    let providers = support::provider_values(&bundle);
-    let input = SimulationInput {
-        graph: req.graph.clone(),
-        config: req.config.clone(),
-        policy: req.policy.clone(),
-        market_data: bundle,
-    };
-    let trace = match run(&input) {
-        Ok(t) => t,
-        Err(e) => return fail("simulation_error", e.to_string(), StatusCode::UNPROCESSABLE_ENTITY),
-    };
-
-    let result = summarize(&trace, providers.clone(), None);
-    let result_json = serde_json::to_value(&result).unwrap_or(Value::Null);
-    let summary = result_json.get("summary").cloned().unwrap_or(Value::Null);
-
-    state.insert(RunRecord {
-        id: id.clone(),
-        graph_hash: gh,
-        status: "succeeded".into(),
-        error: None,
-        policy_profile: profile,
-        start: cfg.0,
-        end: cfg.1,
-        interval: cfg.2,
-        created_at: created,
-        summary,
-        result: Some(result_json),
-        trace: serde_json::to_value(&trace).ok(),
-        data_coverage: providers,
-        warnings: trace.warnings.clone(),
-    });
-
-    (StatusCode::CREATED, Json(json!({ "id": id, "status": "succeeded" }))).into_response()
+    let job = Job::queued(id.clone(), stored);
+    match state.submit(job) {
+        Ok(()) => {
+            (StatusCode::ACCEPTED, Json(json!({ "id": id, "status": "queued" }))).into_response()
+        }
+        Err(SubmitError::QueueFull) => {
+            error(StatusCode::SERVICE_UNAVAILABLE, "queue_full", "backtest queue is full; retry later")
+        }
+    }
 }
 
 pub async fn list_backtests(State(state): State<AppState>, Query(q): Query<ListQuery>) -> Json<Value> {
     let items: Vec<Value> = state
         .list(q.graph_hash.as_deref())
         .into_iter()
-        .map(|r| {
+        .map(|j| {
             json!({
-                "id": r.id, "graph_hash": r.graph_hash, "status": r.status,
-                "policy_profile": r.policy_profile, "start": r.start, "end": r.end,
-                "interval": r.interval, "created_at": r.created_at,
+                "id": j.id, "graph_hash": j.graph_hash, "status": j.status,
+                "policy_profile": j.policy_profile, "start": j.start, "end": j.end,
+                "interval": j.interval, "created_at": j.created_at,
                 "summary": {
-                    "final_value_usd": r.summary.get("final_value_usd"),
-                    "return_pct": r.summary.get("return_pct"),
-                    "max_drawdown_pct": r.summary.get("max_drawdown_pct"),
+                    "final_value_usd": j.summary.get("final_value_usd"),
+                    "return_pct": j.summary.get("return_pct"),
+                    "max_drawdown_pct": j.summary.get("max_drawdown_pct"),
                 },
-                "warning_count": r.warnings.len(),
+                "warning_count": j.warnings.len(),
             })
         })
         .collect();
@@ -195,28 +123,40 @@ pub async fn list_backtests(State(state): State<AppState>, Query(q): Query<ListQ
 
 pub async fn get_backtest(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     match state.get(&id) {
-        Some(r) => Json(json!({ "id": r.id, "status": r.status, "error": r.error })).into_response(),
+        Some(j) => Json(json!({
+            "id": j.id, "status": j.status, "error": j.error,
+            "created_at": j.created_at, "started_at": j.started_at, "finished_at": j.finished_at,
+        }))
+        .into_response(),
         None => not_found(&id),
     }
 }
 
 pub async fn get_result(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    match state.get(&id) {
-        Some(r) => match r.result {
+    let Some(j) = state.get(&id) else { return not_found(&id) };
+    match j.status.as_str() {
+        "succeeded" => match j.result {
             Some(result) => Json(result).into_response(),
             None => error(StatusCode::CONFLICT, "no_result", format!("backtest {id:?} has no result")),
         },
-        None => not_found(&id),
+        "failed" => error(StatusCode::UNPROCESSABLE_ENTITY, "backtest_failed", j.error.unwrap_or_default()),
+        other => error_with(
+            StatusCode::CONFLICT,
+            "not_ready",
+            "backtest is not finished",
+            json!({ "status": other }),
+        ),
     }
 }
 
 pub async fn get_metadata(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     match state.get(&id) {
-        Some(r) => Json(json!({
-            "id": r.id, "graph_hash": r.graph_hash, "status": r.status, "created_at": r.created_at,
-            "config": { "start": r.start, "end": r.end, "interval": r.interval },
-            "resolved_policy": support::resolved_policy_json(&r.policy_profile),
-            "data_coverage": r.data_coverage, "warnings": r.warnings, "summary": r.summary,
+        Some(j) => Json(json!({
+            "id": j.id, "graph_hash": j.graph_hash, "status": j.status,
+            "created_at": j.created_at, "started_at": j.started_at, "finished_at": j.finished_at,
+            "config": { "start": j.start, "end": j.end, "interval": j.interval },
+            "resolved_policy": support::resolved_policy_json(&j.policy_profile),
+            "data_coverage": j.data_coverage, "warnings": j.warnings, "summary": j.summary,
         }))
         .into_response(),
         None => not_found(&id),
@@ -228,11 +168,8 @@ pub async fn get_events(
     Path(id): Path<String>,
     Query(q): Query<EventQuery>,
 ) -> Response {
-    let record = match state.get(&id) {
-        Some(r) => r,
-        None => return not_found(&id),
-    };
-    let events = record
+    let Some(job) = state.get(&id) else { return not_found(&id) };
+    let events = job
         .trace
         .as_ref()
         .and_then(|t| t.get("events"))
@@ -265,7 +202,7 @@ pub async fn get_events(
     Json(json!({ "items": page, "next_cursor": next, "total": total })).into_response()
 }
 
-// --- workbench setup ---
+// --- workbench setup (synchronous; cheap) ---
 
 pub async fn preview(Json(body): Json<Value>) -> Response {
     let req: PreviewBody = match serde_json::from_value(body) {
@@ -301,9 +238,9 @@ pub async fn coverage(State(state): State<AppState>, Json(body): Json<Value>) ->
     };
     let bundle = match req.market_data {
         Some(b) => b,
-        None => match &state.store_root {
+        None => match state.store_root() {
             Some(root) => {
-                let r: BundleRef = support::bundle_ref(root.clone(), &compiled);
+                let r: BundleRef = support::bundle_ref(root, &compiled);
                 match load_bundle(&r, &req.start, &req.end, &req.interval).await {
                     Ok(b) => b,
                     Err(e) => {
@@ -331,7 +268,7 @@ fn not_found(id: &str) -> Response {
     error(StatusCode::NOT_FOUND, "not_found", format!("no backtest {id:?}"))
 }
 
-// --- low-level: run the engine and return the raw trace ---
+// --- low-level: run the engine and return the raw trace (CPU off the async pool) ---
 
 #[derive(Debug, Deserialize)]
 struct SimulateRequest {
@@ -386,8 +323,9 @@ pub async fn simulate(Json(body): Json<Value>) -> Response {
         policy: request.policy,
         market_data,
     };
-    match run(&input) {
-        Ok(trace) => (StatusCode::OK, Json(trace)).into_response(),
-        Err(e) => error(StatusCode::UNPROCESSABLE_ENTITY, "simulation_error", e.to_string()),
+    match tokio::task::spawn_blocking(move || run(&input)).await {
+        Ok(Ok(trace)) => (StatusCode::OK, Json(trace)).into_response(),
+        Ok(Err(e)) => error(StatusCode::UNPROCESSABLE_ENTITY, "simulation_error", e.to_string()),
+        Err(join) => error(StatusCode::INTERNAL_SERVER_ERROR, "internal", join.to_string()),
     }
 }
