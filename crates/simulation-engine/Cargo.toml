@@ -9,7 +9,14 @@ repository.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
+catalyst-contracts = { path = "../contracts" }
 catalyst-execution-models = { path = "../execution-models" }
 catalyst-portfolio-ledger = { path = "../portfolio-ledger" }
 catalyst-simulation-policies = { path = "../simulation-policies" }
+rust_decimal = { version = "1", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", default-features = false, features = ["std", "serde"] }
 
+[dev-dependencies]
+serde_json = "1"

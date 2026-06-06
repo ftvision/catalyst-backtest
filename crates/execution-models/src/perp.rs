@@ -140,7 +140,10 @@ fn close_perp(
     };
     let price = fill_price(bar, dir, policy);
 
-    let requested_base = parse(&cfg.size_usd) / price;
+    // Size the close by the position's entry price so a reduce-only order whose
+    // size_usd matches the opened notional closes the whole position regardless
+    // of where the mark has moved (clamped to the open size).
+    let requested_base = parse(&cfg.size_usd) / position.entry_price;
     let close_base = requested_base.min(position.size);
     let fraction = close_base / position.size;
 
