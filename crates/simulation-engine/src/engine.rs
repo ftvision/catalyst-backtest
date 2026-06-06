@@ -240,9 +240,17 @@ fn execute_and_log(
     ts_iso: &str,
     events: &mut Vec<Event>,
 ) -> bool {
-    let outcome = execute_action(action, ledger, ctx, policy);
+    // Execute on a private copy of the ledger and only commit it if the action
+    // fully filled (compare-and-swap style). This makes every action atomic:
+    // a rejection — including a partway failure in a multi-step model such as a
+    // yield deposit whose gas can't be covered — leaves the real ledger
+    // untouched, so individual models don't need to hand-roll rollbacks.
+    let mut trial = ledger.clone();
+    let outcome = execute_action(action, &mut trial, ctx, policy);
     match outcome {
         Execution::Executed(fill) => {
+            *ledger = trial; // commit the trial copy
+
             events.push(Event {
                 ts: ts_iso.to_string(),
                 event_type: "action_executed".into(),

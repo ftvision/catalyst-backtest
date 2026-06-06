@@ -3,6 +3,11 @@
 //! Deposits move principal from the chain balance into a yield position; the
 //! interest itself accrues tick-by-tick in the engine. Gas is charged in USD on
 //! the chain balance.
+//!
+//! These are the one pair of models with two fallible balance moves (the
+//! principal move and a separate gas debit). The engine executes every action on
+//! a trial copy of the ledger and only commits it on success, so a partway
+//! failure here is discarded wholesale — no manual rollback is needed.
 
 use rust_decimal::Decimal;
 
@@ -38,8 +43,6 @@ pub fn execute_yield_deposit(
         return Execution::rejected(e.to_string());
     }
     if let Err(e) = ledger.debit(chain, &cfg.asset, gas) {
-        // Roll back the principal move if gas can't be covered.
-        let _ = ledger.withdraw_yield(&cfg.protocol, &cfg.asset, chain, pool, amount);
         return Execution::rejected(e.to_string());
     }
     ledger.record_gas(gas);
@@ -81,8 +84,6 @@ pub fn execute_yield_withdraw(
         return Execution::rejected(e.to_string());
     }
     if let Err(e) = ledger.debit(chain, &cfg.asset, gas) {
-        // Roll back the withdrawal if gas can't be covered.
-        let _ = ledger.deposit_yield(&cfg.protocol, &cfg.asset, chain, pool, amount);
         return Execution::rejected(e.to_string());
     }
     ledger.record_gas(gas);

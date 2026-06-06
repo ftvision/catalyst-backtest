@@ -231,3 +231,43 @@ fn perp_open_and_close_via_signals_runs() {
     assert_eq!(count_events(&trace, "action_executed"), 2); // open + close
     assert!(trace.final_portfolio.perp_positions.is_empty()); // closed out
 }
+
+// --- Atomic execution: a multi-step action that fails partway is fully discarded ---
+
+#[test]
+fn yield_deposit_failing_on_gas_leaves_ledger_untouched() {
+    // Deposit the entire balance so the principal move succeeds but the separate
+    // gas debit cannot be covered. Without the engine's trial-copy commit this
+    // would leave 0 USDC + a 250 principal position despite the rejection.
+    let g = graph(json!({
+        "nodes": [{
+            "id": "deposit", "kind": "action", "subtype": "yield_deposit",
+            "config": {"chain": "base", "protocol": "aave", "pool": "usdc",
+                       "asset": "USDC", "amount": "250"}
+        }],
+        "edges": []
+    }));
+    let market_data: MarketDataBundle = serde_json::from_value(json!({
+        "schema_version": "catalyst.backtest.market_data_bundle.v1",
+        "interval": "1h",
+        "start": ts(0),
+        "end": ts(1),
+        "candles": [],
+        "gas": [{"chain": "base", "points": [{"ts": ts(0), "gas_usd": "0.02"}]}],
+        "yields": [{"protocol": "aave", "pool": "usdc", "asset": "USDC", "chain": "base",
+                    "points": [{"ts": ts(0), "apr": "0.045"}]}]
+    }))
+    .unwrap();
+    let input = SimulationInput {
+        graph: g,
+        config: config("base", "250", 1), // exactly enough for principal, nothing for gas
+        policy: strict_policy(),
+        market_data,
+    };
+    let trace = run(&input).unwrap();
+    assert_eq!(count_events(&trace, "action_executed"), 0);
+    assert_eq!(count_events(&trace, "action_rejected"), 1);
+    // ledger is fully unchanged: balance intact, no yield position created
+    assert_eq!(trace.final_portfolio.balances["base"]["USDC"], "250");
+    assert!(trace.final_portfolio.yield_positions.is_empty());
+}
