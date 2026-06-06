@@ -20,6 +20,14 @@ from .live import (
     Transport,
 )
 from .binance import fetch_klines, httpx_transport, ingest_binance
+from .defillama import fetch_aave_yields, ingest_aave_yields
+from .evm_gas import (
+    constant_gas_series,
+    fetch_recent_gas,
+    httpx_rpc_transport,
+    ingest_constant_gas,
+    ingest_recent_gas,
+)
 from .parquet_store import ParquetSource, ParquetStore
 from .planner import MissingDataError, build_bundle
 from .sources import FixtureSource, MarketDataSource
@@ -47,4 +55,12 @@ __all__ = [
     "fetch_klines",
     "ingest_binance",
     "httpx_transport",
+    # additional sources (#30)
+    "fetch_aave_yields",
+    "ingest_aave_yields",
+    "fetch_recent_gas",
+    "constant_gas_series",
+    "ingest_recent_gas",
+    "ingest_constant_gas",
+    "httpx_rpc_transport",
 ]
