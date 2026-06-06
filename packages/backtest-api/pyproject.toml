@@ -6,6 +6,7 @@ requires-python = ">=3.12"
 dependencies = [
   "catalyst-backtest-worker",
   "catalyst-contracts",
+  "fastapi>=0.110",
 ]
 
 [tool.uv.sources]
@@ -15,4 +16,3 @@ catalyst-contracts = { workspace = true }
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
-
