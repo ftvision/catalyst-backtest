@@ -54,12 +54,12 @@ function isoLabel(iso?: string): string {
   if (!iso) return "-";
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
-  const year = date.getUTCFullYear();
-  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(date.getUTCDate()).padStart(2, "0");
-  const hour = String(date.getUTCHours()).padStart(2, "0");
-  const minute = String(date.getUTCMinutes()).padStart(2, "0");
-  return `${year}-${month}-${day} ${hour}:${minute} UTC`;
+  return date.toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function shortDate(iso?: string): string {
@@ -105,20 +105,16 @@ function priceAt(marketData: MarketDataBundle, ts: string): number {
   return numberValue((exact ?? points[points.length - 1]).close);
 }
 
-export function graphFromPreview(
-  graph: CatalystGraph,
-  preview?: GraphPreview,
-  meta: { id?: string; name?: string; version?: string } = {},
-): GraphSummary {
+export function graphFromPreview(graph: CatalystGraph, preview?: GraphPreview): GraphSummary {
   const summary = preview?.graph_summary;
   const actionIds = summary?.actions ?? graph.nodes.filter((node) => node.kind === "action").map((node) => node.id);
   const signalIds = summary?.signals ?? graph.nodes.filter((node) => node.kind === "signal").map((node) => node.id);
 
   return {
-    id: meta.id ?? "g_inline_service_demo",
+    id: "g_inline_service_demo",
     hash: preview?.graph_hash?.slice(0, 8) ?? "service",
-    name: meta.name ?? "ETH service backtest",
-    version: meta.version ?? "service",
+    name: "ETH service backtest",
+    version: "service",
     updatedAt: new Date().toISOString().replace("T", " ").slice(0, 16),
     status: preview?.valid === false ? "warning" : "validated",
     nodeCount: numberValue(summary?.node_count, graph.nodes.length),
@@ -137,7 +133,6 @@ export function setupFromService(input: {
   graph: CatalystGraph;
   config: { start: string; end: string; interval: string; initial_portfolio: Record<string, Record<string, string>> };
   policyProfile: string;
-  dataSourceLabel?: string;
   coverage?: CoverageResponse;
   preview?: GraphPreview;
   metadata?: BacktestMetadata;
@@ -178,55 +173,11 @@ export function setupFromService(input: {
       ["API", "Rust simulation service"],
       ["Policy profile", input.profiles?.find((profile) => profile.id === input.policyProfile)?.label ?? input.policyProfile],
       ["Fill price", String(input.preview?.resolved_policy?.price_selection ?? "service policy")],
-      ["Data source", input.dataSourceLabel ?? "Parquet store"],
+      ["Data source", "inline market_data bundle"],
       ["Queue mode", "POST /backtests + status polling"],
       ["Graph hash", input.preview?.graph_hash?.slice(0, 12) ?? "-"],
     ],
     warnings: warnings.length ? warnings : ["No service warnings for this run."],
-  };
-}
-
-export function marketReplayWithMarketData(
-  current: MarketReplayData,
-  marketData: MarketDataBundle,
-): MarketReplayData {
-  const candleSeries = firstCandleSeries(marketData);
-  if (!candleSeries?.points.length) return current;
-  const candles = candleSeries.points.map((point, index) => ({
-    time: unixTime(point.ts, index),
-    open: numberValue(point.open),
-    high: numberValue(point.high),
-    low: numberValue(point.low),
-    close: numberValue(point.close),
-    volume: numberValue(point.volume),
-  }));
-  const replay = candles.map((_, index) => {
-    const existing = current.replay[index] ?? current.replay.at(-1) ?? {
-      equity: 0,
-      drawdown: 0,
-      gas: 0,
-      funding: 0,
-    };
-    return {
-      ...existing,
-      label: `T${String(index + 1).padStart(2, "0")}`,
-    };
-  });
-
-  return {
-    ...current,
-    symbol: `${candleSeries.symbol} / ${candleSeries.quote}`,
-    venue: candleSeries.venue,
-    period: `${shortDate(marketData.start)} - ${shortDate(marketData.end)}`,
-    candles,
-    replay,
-    evidence: [
-      ["Data source", marketData.providers?.[0]?.name ? String(marketData.providers[0].name) : "market-data window"],
-      ["Candle series", `${candleSeries.venue} ${candleSeries.symbol}`],
-      ["Interval", marketData.interval],
-      ["Start", marketData.start],
-      ["End", marketData.end],
-    ],
   };
 }
 
@@ -244,16 +195,8 @@ export function runHistoryFromApi(items: BacktestListItem[]): Array<Record<strin
 
 export function resultFromApi(result: BacktestResult, status?: string): ResultData {
   const summary = result.summary;
-  const equityCurve = result.equity_curve ?? [];
-  const drawdownCurve = result.drawdown_curve ?? [];
-  const equity = equityCurve.map((point) => numberValue(point.equity_usd));
-  const drawdown = drawdownCurve.map((point) => numberValue(point.drawdown_pct));
-  const trend = equityCurve.map((point, index) => ({
-    time: unixTime(point.ts, index),
-    label: isoLabel(point.ts),
-    equity: numberValue(point.equity_usd),
-    drawdown: numberValue(drawdownCurve[index]?.drawdown_pct, numberValue(drawdownCurve.at(-1)?.drawdown_pct)),
-  }));
+  const equity = result.equity_curve?.map((point) => numberValue(point.equity_usd)) ?? [];
+  const drawdown = result.drawdown_curve?.map((point) => numberValue(point.drawdown_pct)) ?? [];
   const finalValue = numberValue(summary.final_value_usd);
   const startValue = numberValue(summary.starting_value_usd);
   const pnl = numberValue(summary.pnl_usd);
@@ -286,7 +229,6 @@ export function resultFromApi(result: BacktestResult, status?: string): ResultDa
     ],
     equity,
     drawdown,
-    trend,
     portfolio: portfolioFromResult(result, finalValue),
     timeline: (result.trades ?? []).slice(-8).reverse().map((trade) => ({
       time: isoLabel(trade.ts),

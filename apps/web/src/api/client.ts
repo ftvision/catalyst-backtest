@@ -66,38 +66,7 @@ export interface BacktestRequest {
   graph: CatalystGraph;
   config: BacktestConfig;
   policy: { profile: string };
-  market_data?: MarketDataBundle;
-}
-
-export interface StrategyListItem {
-  id: string;
-  title: string;
-  source: string;
-  graph_path: string;
-}
-
-export interface StrategyDetail {
-  id: string;
-  title: string;
-  source: string;
-  graph: CatalystGraph;
-}
-
-export interface StrategyScenarioListItem {
-  id: string;
-  title: string;
-  scenario_path: string;
-}
-
-export interface StrategyScenarioDetail {
-  id: string;
-  title: string;
-  scenario: {
-    id?: string;
-    config: BacktestConfig;
-    policy?: { profile?: string };
-    market_data: MarketDataBundle;
-  };
+  market_data: MarketDataBundle;
 }
 
 export interface BacktestStatus {
@@ -274,11 +243,6 @@ export const catalystApi = {
     request<{ items: Array<{ id: string; label?: string; resolved_policy?: Record<string, JsonValue> }> }>(
       "/policy-profiles",
     ),
-  listStrategies: () => request<{ items: StrategyListItem[] }>("/strategies"),
-  getStrategy: (id: string) => request<StrategyDetail>(`/strategies/${encodeURIComponent(id)}`),
-  listStrategyScenarios: () => request<{ items: StrategyScenarioListItem[] }>("/strategy-scenarios"),
-  getStrategyScenario: (id: string) =>
-    request<StrategyScenarioDetail>(`/strategy-scenarios/${encodeURIComponent(id)}`),
   listBacktests: (graphHash?: string) =>
     request<{ items: BacktestListItem[] }>(
       `/backtests${graphHash ? `?graph_hash=${encodeURIComponent(graphHash)}` : ""}`,
@@ -296,17 +260,6 @@ export const catalystApi = {
     market_data?: MarketDataBundle;
   }) =>
     request<CoverageResponse>("/market-data/coverage", {
-      method: "POST",
-      body: JSON.stringify(body),
-    }),
-  loadMarketDataWindow: (body: {
-    graph: CatalystGraph;
-    start: string;
-    end: string;
-    interval: string;
-    market_data?: MarketDataBundle;
-  }) =>
-    request<MarketDataBundle>("/market-data/window", {
       method: "POST",
       body: JSON.stringify(body),
     }),
