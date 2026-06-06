@@ -15,6 +15,7 @@ dev = [
   "catalyst-graph-compiler",
   "catalyst-market-data",
   "catalyst-result-reporter",
+  "catalyst-backtest-worker",
 ]
 
 [tool.uv.workspace]
@@ -27,6 +28,7 @@ catalyst-contracts = { workspace = true }
 catalyst-graph-compiler = { workspace = true }
 catalyst-market-data = { workspace = true }
 catalyst-result-reporter = { workspace = true }
+catalyst-backtest-worker = { workspace = true }
 
 [tool.ruff]
 line-length = 100

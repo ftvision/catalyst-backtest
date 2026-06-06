@@ -72,6 +72,7 @@ source = { virtual = "." }
 
 [package.dev-dependencies]
 dev = [
+    { name = "catalyst-backtest-worker" },
     { name = "catalyst-contracts" },
     { name = "catalyst-graph-compiler" },
     { name = "catalyst-market-data" },
@@ -86,6 +87,7 @@ dev = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "catalyst-backtest-worker", editable = "packages/backtest-worker" },
     { name = "catalyst-contracts", editable = "packages/contracts" },
     { name = "catalyst-graph-compiler", editable = "packages/graph-compiler" },
     { name = "catalyst-market-data", editable = "packages/market-data" },
