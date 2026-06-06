@@ -17,6 +17,7 @@ fn ledger_side(side: CfgSide) -> PerpSide {
     }
 }
 
+/// Market perp order: fill at the current bar (reference price + slippage).
 pub fn execute_perp(
     ledger: &mut Ledger,
     ctx: &dyn MarketContext,
@@ -28,11 +29,44 @@ pub fn execute_perp(
         Some(b) => b,
         None => return Execution::rejected(format!("no price for {} on {venue}", cfg.symbol)),
     };
-
-    if cfg.reduce_only {
-        close_perp(ledger, policy, cfg, &bar)
+    let dir = if cfg.reduce_only {
+        // Closing direction depends on the side of the position being reduced.
+        match ledger.perp(venue, &cfg.symbol) {
+            Some(p) => match p.side {
+                PerpSide::Long => Direction::Sell,
+                PerpSide::Short => Direction::Buy,
+            },
+            None => {
+                return Execution::rejected(format!(
+                    "reduce-only order for {} but no open position",
+                    cfg.symbol
+                ))
+            }
+        }
     } else {
-        open_perp(ledger, policy, cfg, &bar)
+        match ledger_side(cfg.side.clone()) {
+            PerpSide::Long => Direction::Buy,
+            PerpSide::Short => Direction::Sell,
+        }
+    };
+    execute_perp_at(ledger, policy, cfg, fill_price(&bar, dir, policy))
+}
+
+/// Execute a perp order at an explicit fill `price` (used by both the market path
+/// above, after price selection, and the engine's resting limit-order fills).
+pub fn execute_perp_at(
+    ledger: &mut Ledger,
+    policy: &ResolvedPolicy,
+    cfg: &PerpOrderConfig,
+    price: Decimal,
+) -> Execution {
+    if price.is_zero() {
+        return Execution::rejected(format!("zero price for {}", cfg.symbol));
+    }
+    if cfg.reduce_only {
+        close_perp(ledger, policy, cfg, price)
+    } else {
+        open_perp(ledger, policy, cfg, price)
     }
 }
 
@@ -40,19 +74,10 @@ fn open_perp(
     ledger: &mut Ledger,
     policy: &ResolvedPolicy,
     cfg: &PerpOrderConfig,
-    bar: &crate::context::Bar,
+    price: Decimal,
 ) -> Execution {
     let venue = cfg.chain.as_str();
     let side = ledger_side(cfg.side.clone());
-    // Opening a long buys; opening a short sells.
-    let dir = match side {
-        PerpSide::Long => Direction::Buy,
-        PerpSide::Short => Direction::Sell,
-    };
-    let price = fill_price(bar, dir, policy);
-    if price.is_zero() {
-        return Execution::rejected(format!("zero price for {}", cfg.symbol));
-    }
 
     let notional = parse(&cfg.size_usd);
     let leverage = cfg.leverage.as_deref().map(parse).filter(|l| !l.is_zero()).unwrap_or(Decimal::ONE);
@@ -120,7 +145,7 @@ fn close_perp(
     ledger: &mut Ledger,
     policy: &ResolvedPolicy,
     cfg: &PerpOrderConfig,
-    bar: &crate::context::Bar,
+    price: Decimal,
 ) -> Execution {
     let venue = cfg.chain.as_str();
     let position = match ledger.perp(venue, &cfg.symbol) {
@@ -132,13 +157,6 @@ fn close_perp(
             ))
         }
     };
-
-    // Closing a long sells; closing a short buys.
-    let dir = match position.side {
-        PerpSide::Long => Direction::Sell,
-        PerpSide::Short => Direction::Buy,
-    };
-    let price = fill_price(bar, dir, policy);
 
     // Size the close by the position's entry price so a reduce-only order whose
     // size_usd matches the opened notional closes the whole position regardless

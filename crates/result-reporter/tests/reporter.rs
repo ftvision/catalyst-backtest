@@ -88,6 +88,37 @@ fn executed_and_rejected_trades_and_costs() {
 }
 
 #[test]
+fn limit_order_lifecycle_in_trades_and_counts() {
+    let trace = trace_from(
+        json!([snap("2024-01-01T00:00:00Z", "1000")]),
+        json!([
+            {"ts": "2024-01-01T00:00:00Z", "type": "order_placed", "node_id": "lim",
+             "detail": {"order_id": "lim#0", "kind": "perp", "side": "buy",
+                        "limit_price": "1900", "venue": "hyperliquid", "symbol": "ETH"}},
+            {"ts": "2024-01-01T01:00:00Z", "type": "order_filled", "node_id": "lim",
+             "detail": {"order_id": "lim#0", "kind": "perp_open", "venue": "hyperliquid",
+                        "symbol": "ETH", "side": "long", "price": "1900", "amount": "0.26",
+                        "value_usd": "500", "fee_usd": "0.25", "gas_usd": "0",
+                        "limit_price": "1900"}},
+            {"ts": "2024-01-01T02:00:00Z", "type": "order_expired", "node_id": "other",
+             "detail": {"order_id": "other#1"}, "reason": "time_in_force elapsed"}
+        ]),
+        empty_portfolio(),
+    );
+    let r = summarize(&trace, vec![], None);
+    // a filled limit order counts as a trade; placed/expired are lifecycle rows
+    assert_eq!(r.summary.trade_count, Some(1));
+    let filled = r.trades.iter().find(|t| t.status.as_deref() == Some("executed")).unwrap();
+    assert_eq!(filled.kind, "perp_open");
+    assert_eq!(filled.price.as_deref(), Some("1900"));
+    let placed = r.trades.iter().find(|t| t.status.as_deref() == Some("placed")).unwrap();
+    assert_eq!(placed.price.as_deref(), Some("1900")); // shows the limit price
+    assert!(r.trades.iter().any(|t| t.status.as_deref() == Some("expired")));
+    // the fill's fee rolls into costs
+    assert_eq!(r.costs.unwrap().total_fees_usd.as_deref(), Some("0.25"));
+}
+
+#[test]
 fn liquidation_is_logged() {
     let trace = trace_from(
         json!([snap("2024-01-01T00:00:00Z", "500")]),

@@ -31,6 +31,7 @@ def _load(name: str) -> dict:
         ("graph.swap.json", Graph),
         ("graph.perp-signal.json", Graph),
         ("graph.yield.json", Graph),
+        ("graph.limit-order.json", Graph),
         ("backtest-request.json", BacktestRequest),
         ("simulation-policy.strict_v1.json", SimulationPolicy),
         ("market-data-bundle.json", MarketDataBundle),

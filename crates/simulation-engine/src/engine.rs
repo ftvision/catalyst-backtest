@@ -3,13 +3,15 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use rust_decimal::Decimal;
-use serde_json::json;
+use serde_json::{json, Value};
 
+use catalyst_contracts::graph::{PerpOrderConfig, SwapConfig};
 use catalyst_contracts::trace::{Event, Portfolio, SimulationTrace, Snapshot};
 use catalyst_contracts::{BacktestConfig, Graph, MarketDataBundle, SimulationPolicy};
 use catalyst_execution_models::{
-    execute_perp, execute_swap, execute_yield_deposit, execute_yield_withdraw, is_stable, Execution,
-    MarketContext,
+    execute_perp, execute_perp_at, execute_swap, execute_swap_at, execute_yield_deposit,
+    execute_yield_withdraw, is_stable, limit_fill_price, place_perp_limit, place_swap_limit,
+    Execution, Fill, LimitPlacement, MarketContext, PlacedLimit,
 };
 use catalyst_portfolio_ledger::{Ledger, PerpPosition, PerpSide, YieldPosition};
 use catalyst_simulation_policies::{
@@ -45,6 +47,72 @@ impl std::fmt::Display for EngineError {
     }
 }
 impl std::error::Error for EngineError {}
+
+// --- limit / resting orders ---
+
+/// The config a resting order replays when it fills.
+enum RestingKind {
+    Swap(SwapConfig),
+    Perp(PerpOrderConfig),
+}
+
+impl RestingKind {
+    fn label(&self) -> &'static str {
+        match self {
+            RestingKind::Swap(_) => "swap",
+            RestingKind::Perp(_) => "perp",
+        }
+    }
+}
+
+/// A limit order resting in the book, awaiting a touch or expiry.
+struct RestingOrder {
+    id: String,
+    node_id: String,
+    /// Tick index at placement; the order is only eligible from the next tick on.
+    placed_index: usize,
+    /// `Some(n)` = good-til-`n`-bars; `None` = good-til-cancelled.
+    expire_after_bars: Option<u32>,
+    placed: PlacedLimit,
+    kind: RestingKind,
+    /// Action ids to chain when (and only when) the order fills.
+    downstream: Vec<String>,
+}
+
+/// What happened when the engine attempted an action node.
+enum ActionOutcome {
+    Executed(Fill),
+    Rejected(String),
+    Resting(RestingSpec),
+}
+
+/// A validated limit placement ready to enter the resting book.
+struct RestingSpec {
+    placed: PlacedLimit,
+    kind: RestingKind,
+    expire_after_bars: Option<u32>,
+}
+
+impl From<Execution> for ActionOutcome {
+    fn from(e: Execution) -> Self {
+        match e {
+            Execution::Executed(fill) => ActionOutcome::Executed(fill),
+            Execution::Rejected { reason } => ActionOutcome::Rejected(reason),
+        }
+    }
+}
+
+fn is_limit(order_type: &str) -> bool {
+    order_type == "limit"
+}
+
+/// Resolve time-in-force to an optional bar count. `gtc` (or absent) never expires.
+fn resolve_expiry(time_in_force: &Option<String>, expire_after_bars: Option<u32>) -> Option<u32> {
+    match time_in_force.as_deref() {
+        Some("gtc") => None,
+        _ => expire_after_bars,
+    }
+}
 
 fn interval_seconds(interval: &str) -> Option<i64> {
     Some(match interval {
@@ -82,6 +150,9 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
     let mut warnings: Vec<String> = Vec::new();
     let mut signal_state: HashMap<String, bool> = HashMap::new();
     let mut signals_ever_fired: HashSet<String> = HashSet::new();
+    // Resting limit orders awaiting a touch, plus a monotonic id counter.
+    let mut resting: Vec<RestingOrder> = Vec::new();
+    let mut order_seq: u64 = 0;
 
     let mut ticks = index.ticks(start, end);
     if ticks.is_empty() {
@@ -89,19 +160,30 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
         warnings.push("no candle data in range; ran a single degenerate tick".into());
     }
     let mut initial_done = false;
+    let mut last_ts_iso = input.config.end.clone();
 
-    for ts in ticks {
+    for (tick_index, ts) in ticks.into_iter().enumerate() {
         let ts_iso = format_ts(ts);
+        last_ts_iso = ts_iso.clone();
 
         accrue_funding(&mut ledger, &index, ts, &ts_iso, &policy, &mut events);
         accrue_yield(&mut ledger, &index, ts, interval_secs, &ts_iso, &mut events);
         check_liquidations(&mut ledger, &index, ts, &ts_iso, &policy, &mut events);
 
+        // Resting orders placed on earlier bars get a chance to fill/expire first.
+        fill_resting_orders(
+            tick_index, ts, &ts_iso, &exec_graph, &mut ledger, &index, &policy, &mut events,
+            &mut resting, &mut order_seq,
+        );
+
         let ctx = TickContext { index: &index, ts };
 
         if !initial_done {
             for action_id in &exec_graph.initial_actions {
-                run_action_chain(action_id, &exec_graph, &mut ledger, &ctx, &policy, &ts_iso, &mut events);
+                run_action_chain(
+                    action_id, &exec_graph, &mut ledger, &ctx, &policy, &ts_iso, tick_index,
+                    &mut events, &mut resting, &mut order_seq,
+                );
             }
             initial_done = true;
         }
@@ -113,11 +195,14 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
             &index,
             ts,
             &ts_iso,
+            tick_index,
             &policy,
             &mut events,
             &mut signal_state,
             &mut signals_ever_fired,
             &mut warnings,
+            &mut resting,
+            &mut order_seq,
         );
 
         let equity = compute_equity(&ledger, &index, ts);
@@ -125,6 +210,17 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
             ts: ts_iso.clone(),
             equity_usd: equity.normalize().to_string(),
             portfolio: Some(ledger.to_portfolio()),
+        });
+    }
+
+    // Any orders still resting at the end expire unfilled.
+    for order in resting.drain(..) {
+        events.push(Event {
+            ts: last_ts_iso.clone(),
+            event_type: "order_expired".into(),
+            node_id: Some(order.node_id),
+            reason: Some("backtest ended with order resting".into()),
+            detail: Some(json!({ "order_id": order.id })),
         });
     }
 
@@ -162,11 +258,14 @@ fn evaluate_signals(
     index: &BundleIndex,
     ts: i64,
     ts_iso: &str,
+    tick_index: usize,
     policy: &ResolvedPolicy,
     events: &mut Vec<Event>,
     signal_state: &mut HashMap<String, bool>,
     ever_fired: &mut HashSet<String>,
     warnings: &mut Vec<String>,
+    resting: &mut Vec<RestingOrder>,
+    order_seq: &mut u64,
 ) {
     for signal in &exec_graph.signals {
         let price = match index.price_any(&signal.symbol, ts) {
@@ -201,12 +300,16 @@ fn evaluate_signals(
                 })),
             });
             for target in &signal.targets {
-                run_action_chain(target, exec_graph, ledger, ctx, policy, ts_iso, events);
+                run_action_chain(
+                    target, exec_graph, ledger, ctx, policy, ts_iso, tick_index, events, resting,
+                    order_seq,
+                );
             }
         }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_action_chain(
     action_id: &str,
     exec_graph: &ExecGraph,
@@ -214,7 +317,10 @@ fn run_action_chain(
     ctx: &dyn MarketContext,
     policy: &ResolvedPolicy,
     ts_iso: &str,
+    tick_index: usize,
     events: &mut Vec<Event>,
+    resting: &mut Vec<RestingOrder>,
+    order_seq: &mut u64,
 ) {
     let mut stack = vec![action_id.to_string()];
     let mut visited: HashSet<String> = HashSet::new();
@@ -223,56 +329,173 @@ fn run_action_chain(
             continue;
         }
         let Some(action) = exec_graph.actions.get(&id) else { continue };
-        let executed = execute_and_log(action, ledger, ctx, policy, ts_iso, events);
-        if executed {
-            if let Some(downstream) = exec_graph.out_action_edges.get(&id) {
-                for next in downstream {
-                    stack.push(next.clone());
+
+        // Execute on a private copy of the ledger and only commit it if the action
+        // fully filled (compare-and-swap style). This makes every action atomic:
+        // a rejection — including a partway failure in a multi-step model such as a
+        // yield deposit whose gas can't be covered — leaves the real ledger
+        // untouched, so individual models don't need to hand-roll rollbacks.
+        let mut trial = ledger.clone();
+        match execute_action(action, &mut trial, ctx, policy) {
+            ActionOutcome::Executed(fill) => {
+                *ledger = trial; // commit the trial copy
+                events.push(Event {
+                    ts: ts_iso.to_string(),
+                    event_type: "action_executed".into(),
+                    node_id: Some(id.clone()),
+                    reason: None,
+                    detail: serde_json::to_value(&fill).ok(),
+                });
+                if let Some(downstream) = exec_graph.out_action_edges.get(&id) {
+                    for next in downstream {
+                        stack.push(next.clone());
+                    }
                 }
+            }
+            ActionOutcome::Rejected(reason) => {
+                events.push(Event {
+                    ts: ts_iso.to_string(),
+                    event_type: "action_rejected".into(),
+                    node_id: Some(id.clone()),
+                    reason: Some(reason),
+                    detail: None,
+                });
+            }
+            ActionOutcome::Resting(spec) => {
+                // Placement reads the ledger but never mutates it; downstream
+                // actions are deferred until (and unless) the order fills.
+                let downstream =
+                    exec_graph.out_action_edges.get(&id).cloned().unwrap_or_default();
+                let order_id = format!("{id}#{}", *order_seq);
+                *order_seq += 1;
+                events.push(Event {
+                    ts: ts_iso.to_string(),
+                    event_type: "order_placed".into(),
+                    node_id: Some(id.clone()),
+                    reason: None,
+                    detail: Some(json!({
+                        "order_id": order_id,
+                        "kind": spec.kind.label(),
+                        "side": spec.placed.side.as_str(),
+                        "limit_price": spec.placed.limit.normalize().to_string(),
+                        "venue": spec.placed.venue,
+                        "symbol": spec.placed.symbol,
+                        "expire_after_bars": spec.expire_after_bars,
+                    })),
+                });
+                resting.push(RestingOrder {
+                    id: order_id,
+                    node_id: id.clone(),
+                    placed_index: tick_index,
+                    expire_after_bars: spec.expire_after_bars,
+                    placed: spec.placed,
+                    kind: spec.kind,
+                    downstream,
+                });
             }
         }
     }
 }
 
-fn execute_and_log(
-    action: &ActionNode,
-    ledger: &mut Ledger,
-    ctx: &dyn MarketContext,
-    policy: &ResolvedPolicy,
+/// Scan resting orders against the current bar: fill the touched ones (running
+/// their downstream chains), expire any past their time-in-force, and keep the
+/// rest. Orders are only eligible from the bar *after* they were placed, so we
+/// never use intra-placement-bar information we couldn't have known.
+#[allow(clippy::too_many_arguments)]
+fn fill_resting_orders(
+    tick_index: usize,
+    ts: i64,
     ts_iso: &str,
+    exec_graph: &ExecGraph,
+    ledger: &mut Ledger,
+    index: &BundleIndex,
+    policy: &ResolvedPolicy,
     events: &mut Vec<Event>,
-) -> bool {
-    // Execute on a private copy of the ledger and only commit it if the action
-    // fully filled (compare-and-swap style). This makes every action atomic:
-    // a rejection — including a partway failure in a multi-step model such as a
-    // yield deposit whose gas can't be covered — leaves the real ledger
-    // untouched, so individual models don't need to hand-roll rollbacks.
-    let mut trial = ledger.clone();
-    let outcome = execute_action(action, &mut trial, ctx, policy);
-    match outcome {
-        Execution::Executed(fill) => {
-            *ledger = trial; // commit the trial copy
+    resting: &mut Vec<RestingOrder>,
+    order_seq: &mut u64,
+) {
+    let ctx = TickContext { index, ts };
+    let ready: Vec<RestingOrder> = std::mem::take(resting);
+    let mut keep: Vec<RestingOrder> = Vec::new();
 
-            events.push(Event {
-                ts: ts_iso.to_string(),
-                event_type: "action_executed".into(),
-                node_id: Some(action.id.clone()),
-                reason: None,
-                detail: serde_json::to_value(&fill).ok(),
-            });
-            true
+    for order in ready {
+        // Next-bar eligibility: an order placed at tick T is checked from T+1 on.
+        if order.placed_index >= tick_index {
+            keep.push(order);
+            continue;
         }
-        Execution::Rejected { reason } => {
-            events.push(Event {
-                ts: ts_iso.to_string(),
-                event_type: "action_rejected".into(),
-                node_id: Some(action.id.clone()),
-                reason: Some(reason),
-                detail: None,
-            });
-            false
+        // Time-in-force: expire before attempting a fill on a too-late bar.
+        if let Some(n) = order.expire_after_bars {
+            if tick_index > order.placed_index + n as usize {
+                events.push(Event {
+                    ts: ts_iso.to_string(),
+                    event_type: "order_expired".into(),
+                    node_id: Some(order.node_id.clone()),
+                    reason: Some("time_in_force elapsed".into()),
+                    detail: Some(json!({ "order_id": order.id })),
+                });
+                continue;
+            }
+        }
+        let bar = match ctx.bar(&order.placed.venue, &order.placed.symbol) {
+            Some(b) => b,
+            None => {
+                keep.push(order); // no data this bar; try again later
+                continue;
+            }
+        };
+        let Some(price) = limit_fill_price(&bar, order.placed.side, order.placed.limit) else {
+            keep.push(order);
+            continue;
+        };
+
+        // Fill atomically at the touched price (maker — no taker slippage).
+        let mut trial = ledger.clone();
+        let outcome = match &order.kind {
+            RestingKind::Swap(cfg) => execute_swap_at(&mut trial, &ctx, policy, cfg, price),
+            RestingKind::Perp(cfg) => execute_perp_at(&mut trial, policy, cfg, price),
+        };
+        match outcome {
+            Execution::Executed(fill) => {
+                *ledger = trial;
+                let mut detail = serde_json::to_value(&fill).unwrap_or(Value::Null);
+                if let Value::Object(map) = &mut detail {
+                    map.insert("order_id".into(), json!(order.id));
+                    map.insert(
+                        "limit_price".into(),
+                        json!(order.placed.limit.normalize().to_string()),
+                    );
+                }
+                events.push(Event {
+                    ts: ts_iso.to_string(),
+                    event_type: "order_filled".into(),
+                    node_id: Some(order.node_id.clone()),
+                    reason: None,
+                    detail: Some(detail),
+                });
+                // The order's downstream chain runs now, at the fill bar.
+                for target in &order.downstream {
+                    run_action_chain(
+                        target, exec_graph, ledger, &ctx, policy, ts_iso, tick_index, events,
+                        resting, order_seq,
+                    );
+                }
+            }
+            Execution::Rejected { reason } => {
+                events.push(Event {
+                    ts: ts_iso.to_string(),
+                    event_type: "order_rejected".into(),
+                    node_id: Some(order.node_id.clone()),
+                    reason: Some(reason),
+                    detail: Some(json!({ "order_id": order.id })),
+                });
+            }
         }
     }
+
+    // Orders placed by downstream chains this tick are already in `resting`;
+    // append the ones that are still waiting.
+    resting.extend(keep);
 }
 
 fn execute_action(
@@ -280,25 +503,47 @@ fn execute_action(
     ledger: &mut Ledger,
     ctx: &dyn MarketContext,
     policy: &ResolvedPolicy,
-) -> Execution {
+) -> ActionOutcome {
     match action.subtype.as_str() {
-        "swap" => match serde_json::from_value(action.config.clone()) {
-            Ok(cfg) => execute_swap(ledger, ctx, policy, &cfg),
-            Err(e) => Execution::rejected(format!("bad swap config: {e}")),
+        "swap" => match serde_json::from_value::<SwapConfig>(action.config.clone()) {
+            Ok(cfg) if is_limit(&cfg.order_type) => match place_swap_limit(&cfg) {
+                LimitPlacement::Placed(placed) => ActionOutcome::Resting(RestingSpec {
+                    placed,
+                    expire_after_bars: resolve_expiry(&cfg.time_in_force, cfg.expire_after_bars),
+                    kind: RestingKind::Swap(cfg),
+                }),
+                LimitPlacement::Rejected(e) => ActionOutcome::Rejected(e),
+            },
+            Ok(cfg) => execute_swap(ledger, ctx, policy, &cfg).into(),
+            Err(e) => ActionOutcome::Rejected(format!("bad swap config: {e}")),
         },
-        "perp_order" => match serde_json::from_value(action.config.clone()) {
-            Ok(cfg) => execute_perp(ledger, ctx, policy, &cfg),
-            Err(e) => Execution::rejected(format!("bad perp config: {e}")),
+        "perp_order" => match serde_json::from_value::<PerpOrderConfig>(action.config.clone()) {
+            Ok(cfg) if is_limit(&cfg.order_type) => match place_perp_limit(ledger, &cfg) {
+                LimitPlacement::Placed(placed) => ActionOutcome::Resting(RestingSpec {
+                    placed,
+                    expire_after_bars: resolve_expiry(&cfg.time_in_force, cfg.expire_after_bars),
+                    kind: RestingKind::Perp(cfg),
+                }),
+                LimitPlacement::Rejected(e) => ActionOutcome::Rejected(e),
+            },
+            Ok(cfg) => execute_perp(ledger, ctx, policy, &cfg).into(),
+            Err(e) => ActionOutcome::Rejected(format!("bad perp config: {e}")),
         },
         "yield_deposit" => match serde_json::from_value(action.config.clone()) {
-            Ok(cfg) => execute_yield_deposit(ledger, ctx, policy, &cfg),
-            Err(e) => Execution::rejected(format!("bad yield config: {e}")),
+            Ok(cfg) => execute_yield_deposit(ledger, ctx, policy, &cfg).into(),
+            Err(e) => ActionOutcome::Rejected(format!("bad yield config: {e}")),
         },
         "yield_withdraw" => match serde_json::from_value(action.config.clone()) {
-            Ok(cfg) => execute_yield_withdraw(ledger, ctx, policy, &cfg),
-            Err(e) => Execution::rejected(format!("bad yield config: {e}")),
+            Ok(cfg) => execute_yield_withdraw(ledger, ctx, policy, &cfg).into(),
+            Err(e) => ActionOutcome::Rejected(format!("bad yield config: {e}")),
         },
-        other => Execution::rejected(format!("unsupported action subtype {other}")),
+        other => ActionOutcome::rejected_subtype(other),
+    }
+}
+
+impl ActionOutcome {
+    fn rejected_subtype(subtype: &str) -> Self {
+        ActionOutcome::Rejected(format!("unsupported action subtype {subtype}"))
     }
 }
 

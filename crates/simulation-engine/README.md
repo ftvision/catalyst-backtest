@@ -22,12 +22,13 @@ At each tick, in order:
 1. **Funding** — accrue historical funding on open perps (signed; long pays when rate > 0).
 2. **Yield** — accrue `principal × apr × (interval / year)` onto yield positions.
 3. **Liquidation** — close any perp whose unrealized loss has eaten its margin.
-4. **Initial actions** (first tick only) — run actions with no incoming edge, following action→action chains.
-5. **Signals** — for each `price_threshold` signal, evaluate the condition and fire per the policy's `signal_trigger`:
+4. **Resting limit orders** — fill any whose bar touches its limit (running the order's downstream chain), and expire any past their time-in-force.
+5. **Initial actions** (first tick only) — run actions with no incoming edge, following action→action chains.
+6. **Signals** — for each `price_threshold` signal, evaluate the condition and fire per the policy's `signal_trigger`:
    - `crossing` (default): fires only on a false→true transition (so a ladder re-fires when price re-crosses, not every tick it stays below).
    - `level`: fires every tick the condition holds. `once_per_backtest`: fires at most once.
    Firing runs each target action and follows its chains.
-6. **Snapshot** — record mark-to-market equity and the full portfolio.
+7. **Snapshot** — record mark-to-market equity and the full portfolio.
 
 Every action attempt produces an `action_executed` or `action_rejected` event; a
 rejection leaves the ledger unchanged. The resolved policy is embedded in the
@@ -35,14 +36,26 @@ trace so results are explainable.
 
 ## Execution semantics
 
-The engine derives triggers from the raw graph itself (mirroring the Python graph
-compiler) and dispatches each action to the execution models:
+The engine derives triggers via `catalyst-graph-compiler` and dispatches each
+action to the execution models:
 
 | subtype | model |
 | --- | --- |
 | `swap` | EVM / Hyperliquid spot |
 | `perp_order` | Hyperliquid perp open/add or reduce-only close |
 | `yield_deposit` / `yield_withdraw` | Aave-style |
+
+### Limit orders
+
+Swaps and perps accept `order_type: "limit"` with a `limit_price`. A limit order
+is *placed* on its tick (`order_placed`) but doesn't fill — it **rests** until a
+later bar touches it (`order_filled`) or its time-in-force elapses
+(`order_expired`); orders still resting at the end of the run expire. Eligibility
+starts the bar *after* placement (no intra-placement-bar look-ahead), fills are
+gap-aware and carry no taker slippage, and a filled order's downstream actions run
+at the fill bar. Time-in-force is `gtc` (default) or `good_til_bars` +
+`expire_after_bars`. See [`catalyst-execution-models`](../execution-models/README.md)
+for the touch/fill rules.
 
 ## Tests
 
@@ -53,3 +66,6 @@ cargo test -p catalyst-simulation-engine
 Golden-style tests over synthetic market data cover threshold crossing (fires
 once while held), repeated signals (re-fire on re-cross), action chaining,
 rejected actions, perp round trips, and policy metadata in the trace.
+`tests/limit_orders.rs` covers the resting-order lifecycle: rest-then-fill,
+next-bar eligibility, gap-through fill price, time-in-force expiry, and
+reduce-only take-profit.

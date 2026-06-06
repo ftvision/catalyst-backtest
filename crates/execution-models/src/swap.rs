@@ -14,6 +14,19 @@ use crate::context::MarketContext;
 use crate::outcome::{Execution, Fill};
 use crate::pricing::{fee_usd, fill_price, gas_usd, is_stable, parse, Direction};
 
+/// Resolve a swap's trade direction and the priced base asset.
+fn swap_direction(cfg: &SwapConfig) -> Result<(Direction, &str), String> {
+    match (is_stable(&cfg.from_asset), is_stable(&cfg.to_asset)) {
+        (true, false) => Ok((Direction::Buy, cfg.to_asset.as_str())),
+        (false, true) => Ok((Direction::Sell, cfg.from_asset.as_str())),
+        _ => Err(format!(
+            "unsupported swap {}->{}: exactly one side must be a stable asset",
+            cfg.from_asset, cfg.to_asset
+        )),
+    }
+}
+
+/// Market swap: fill at the current bar (reference price + slippage).
 pub fn execute_swap(
     ledger: &mut Ledger,
     ctx: &dyn MarketContext,
@@ -21,22 +34,44 @@ pub fn execute_swap(
     cfg: &SwapConfig,
 ) -> Execution {
     let venue = cfg.chain.as_str();
-    let (dir, base) = match (is_stable(&cfg.from_asset), is_stable(&cfg.to_asset)) {
-        (true, false) => (Direction::Buy, cfg.to_asset.as_str()),
-        (false, true) => (Direction::Sell, cfg.from_asset.as_str()),
-        _ => {
-            return Execution::rejected(format!(
-                "unsupported swap {}->{}: exactly one side must be a stable asset",
-                cfg.from_asset, cfg.to_asset
-            ))
-        }
+    let (dir, base) = match swap_direction(cfg) {
+        Ok(x) => x,
+        Err(e) => return Execution::rejected(e),
     };
-
     let bar = match ctx.bar(venue, base) {
         Some(b) => b,
         None => return Execution::rejected(format!("no price for {base} on {venue}")),
     };
-    let price = fill_price(&bar, dir, policy);
+    swap_at(ledger, ctx, policy, cfg, dir, base, fill_price(&bar, dir, policy))
+}
+
+/// Execute a swap at an explicit fill `price` (used by the engine's resting
+/// limit-order fills). Direction and base are re-derived from the config.
+pub fn execute_swap_at(
+    ledger: &mut Ledger,
+    ctx: &dyn MarketContext,
+    policy: &ResolvedPolicy,
+    cfg: &SwapConfig,
+    price: Decimal,
+) -> Execution {
+    let (dir, base) = match swap_direction(cfg) {
+        Ok(x) => x,
+        Err(e) => return Execution::rejected(e),
+    };
+    swap_at(ledger, ctx, policy, cfg, dir, base, price)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn swap_at(
+    ledger: &mut Ledger,
+    ctx: &dyn MarketContext,
+    policy: &ResolvedPolicy,
+    cfg: &SwapConfig,
+    dir: Direction,
+    base: &str,
+    price: Decimal,
+) -> Execution {
+    let venue = cfg.chain.as_str();
     if price.is_zero() {
         return Execution::rejected(format!("zero price for {base} on {venue}"));
     }
