@@ -77,12 +77,12 @@ fn loads_candles_and_gas_within_window() {
             ..Default::default()
         },
     };
-    let bundle = load_bundle(
+    let bundle = pollster::block_on(load_bundle(
         &bundle_ref,
         "2024-01-01T00:00:00Z",
         "2024-01-01T03:00:00Z",
         "1h",
-    )
+    ))
     .unwrap();
 
     assert_eq!(bundle.candles.len(), 1);
@@ -114,7 +114,9 @@ fn window_filters_rows_outside_range() {
         },
     };
     // ask for only the first two hours
-    let bundle = load_bundle(&bundle_ref, "2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z", "1h").unwrap();
+    let bundle =
+        pollster::block_on(load_bundle(&bundle_ref, "2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z", "1h"))
+            .unwrap();
     assert_eq!(bundle.candles[0].points.len(), 2);
 }
 
@@ -128,7 +130,9 @@ fn missing_series_warns_and_is_incomplete() {
             ..Default::default()
         },
     };
-    let bundle = load_bundle(&bundle_ref, "2024-01-01T00:00:00Z", "2024-01-01T03:00:00Z", "1h").unwrap();
+    let bundle =
+        pollster::block_on(load_bundle(&bundle_ref, "2024-01-01T00:00:00Z", "2024-01-01T03:00:00Z", "1h"))
+            .unwrap();
     assert!(bundle.candles[0].points.is_empty());
     assert!(bundle.warnings.iter().any(|w| w.contains("no candles for ETH")));
     assert_eq!(bundle.providers[0].coverage.as_ref().unwrap().complete, Some(false));
@@ -145,7 +149,30 @@ fn round_trips_through_the_contract() {
             ..Default::default()
         },
     };
-    let bundle = load_bundle(&bundle_ref, "2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z", "1h").unwrap();
+    let bundle =
+        pollster::block_on(load_bundle(&bundle_ref, "2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z", "1h"))
+            .unwrap();
     let json = serde_json::to_string(&bundle).unwrap();
     let _back: catalyst_contracts::MarketDataBundle = serde_json::from_str(&json).unwrap();
+}
+
+#[test]
+fn reads_via_explicit_file_url() {
+    // Same data, but addressed through an object_store URL (file://) rather than a
+    // bare path — proves the object_store URL path that s3:// / gs:// also use.
+    let tmp = tempfile::tempdir().unwrap();
+    write_candles(tmp.path(), "base", "ETH", "1h", "2024-01-01", &[H0, H0 + HOUR]);
+    let url = url::Url::from_directory_path(tmp.path()).unwrap();
+    let bundle_ref = BundleRef {
+        root: url.to_string(),
+        data_requirements: DataRequirements {
+            candles: vec![CandleReq { venue: "base".into(), symbol: "ETH".into() }],
+            ..Default::default()
+        },
+    };
+    let bundle =
+        pollster::block_on(load_bundle(&bundle_ref, "2024-01-01T00:00:00Z", "2024-01-01T02:00:00Z", "1h"))
+            .unwrap();
+    assert_eq!(bundle.candles[0].points.len(), 2);
+    assert_eq!(bundle.candles[0].points[0].close, "2000");
 }

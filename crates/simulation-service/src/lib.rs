@@ -95,7 +95,9 @@ async fn simulate(Json(body): Json<serde_json::Value>) -> Response {
                 &request.config.start,
                 &request.config.end,
                 &request.config.interval,
-            ) {
+            )
+            .await
+            {
                 Ok(bundle) => bundle,
                 Err(e) => return error(StatusCode::UNPROCESSABLE_ENTITY, "data_load_error", e.to_string()),
             }
