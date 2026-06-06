@@ -556,6 +556,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "catalyst-result-reporter"
+version = "0.1.0"
+dependencies = [
+ "catalyst-contracts",
+ "rust_decimal",
+ "serde_json",
+]
+
+[[package]]
 name = "catalyst-simulation-engine"
 version = "0.1.0"
 dependencies = [
