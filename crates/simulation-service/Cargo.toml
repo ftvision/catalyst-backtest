@@ -15,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 catalyst-contracts = { path = "../contracts" }
 catalyst-simulation-engine = { path = "../simulation-engine" }
+catalyst-market-data-loader = { path = "../market-data-loader" }
 axum = "0.7"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
 serde = { version = "1", features = ["derive"] }
@@ -23,3 +24,6 @@ serde_json = "1"
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
+arrow = "53"
+parquet = "53"
+tempfile = "3"

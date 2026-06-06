@@ -1,8 +1,8 @@
 # catalyst-simulation-service
 
 HTTP wrapper (Axum) around the Rust simulation engine. The HTTP boundary uses the
-shared contract types end to end. The service does **no** market-data fetching —
-the caller supplies a fully normalized `MarketDataBundle` in the request.
+shared contract types end to end. The service does **no** market-data *fetching*;
+market data is supplied either inline or by reference to the Parquet store.
 
 ## Endpoints
 
@@ -14,22 +14,28 @@ the caller supplies a fully normalized `MarketDataBundle` in the request.
 
 ### `POST /simulate`
 
-Request body:
+Provide **exactly one** of `market_data` (inline) or `market_data_ref` (read from
+the Parquet store directly — issue #29, so bulk data doesn't cross the wire):
 
 ```json
-{
-  "graph": { ... },              // catalyst graph
-  "config": { ... },             // backtest config (start/end/interval/initial_portfolio)
-  "policy": { "profile": "strict_v1" },
-  "market_data": { ... }         // normalized MarketDataBundle
-}
+// inline bundle
+{ "graph": {...}, "config": {...}, "policy": {"profile": "strict_v1"},
+  "market_data": { ... } }
+
+// by reference (the service loads candles/funding/... from the Parquet store)
+{ "graph": {...}, "config": {...}, "policy": {"profile": "strict_v1"},
+  "market_data_ref": {
+    "root": "data/market-data",
+    "data_requirements": { "candles": [{"venue": "base", "symbol": "ETH"}] }
+  } }
 ```
 
 Responses:
 
 - `200` — a `SimulationTrace`.
-- `400 invalid_request` — body did not match the request contract.
+- `400 invalid_request` — body didn't match the contract, or neither/both of `market_data`/`market_data_ref` supplied.
 - `422 simulation_error` — the engine rejected the run (e.g. unknown interval).
+- `422 data_load_error` — a `market_data_ref` could not be read from the store.
 
 Errors are structured:
 
