@@ -1,0 +1,217 @@
+{
+  "g01_evm_swap_buy_eth_base": {
+    "nodes": [
+      { "id": "buy-eth-on-base", "kind": "action", "subtype": "swap",
+        "config": { "from_asset": "USDC", "to_asset": "ETH", "amount": "100", "chain": "base" },
+        "enabled": true }
+    ],
+    "edges": []
+  },
+  "g02_hl_spot_buy_eth": {
+    "nodes": [
+      { "id": "buy-eth-spot", "kind": "action", "subtype": "swap",
+        "config": { "from_asset": "USDC", "to_asset": "ETH", "amount": "100", "chain": "hyperliquid" },
+        "enabled": true }
+    ],
+    "edges": []
+  },
+  "g03_hl_spot_buy_then_sell": {
+    "nodes": [
+      { "id": "buy-eth-spot", "kind": "action", "subtype": "swap",
+        "config": { "from_asset": "USDC", "to_asset": "ETH", "amount": "100", "chain": "hyperliquid" },
+        "enabled": true },
+      { "id": "sell-eth-spot", "kind": "action", "subtype": "swap",
+        "config": { "from_asset": "ETH", "to_asset": "USDC", "amount": "0.04", "chain": "hyperliquid" },
+        "enabled": true }
+    ],
+    "edges": [{ "from": "buy-eth-spot", "to": "sell-eth-spot" }]
+  },
+  "g04_hl_spot_ladder": {
+    "nodes": [
+      { "id": "build-initial-eth-inventory", "kind": "action", "subtype": "swap",
+        "config": { "from_asset": "USDC", "to_asset": "ETH", "amount": "250", "chain": "hyperliquid" }, "enabled": true },
+      { "id": "eth-below-1900", "kind": "signal", "subtype": "price_threshold",
+        "config": { "symbol": "ETH", "operator": "<", "threshold": "1900" }, "enabled": true },
+      { "id": "buy-eth-spot-100", "kind": "action", "subtype": "swap",
+        "config": { "from_asset": "USDC", "to_asset": "ETH", "amount": "100", "chain": "hyperliquid" }, "enabled": true },
+      { "id": "eth-below-1700", "kind": "signal", "subtype": "price_threshold",
+        "config": { "symbol": "ETH", "operator": "<", "threshold": "1700" }, "enabled": true },
+      { "id": "buy-eth-spot-150", "kind": "action", "subtype": "swap",
+        "config": { "from_asset": "USDC", "to_asset": "ETH", "amount": "150", "chain": "hyperliquid" }, "enabled": true },
+      { "id": "eth-above-2200", "kind": "signal", "subtype": "price_threshold",
+        "config": { "symbol": "ETH", "operator": ">", "threshold": "2200" }, "enabled": true },
+      { "id": "sell-eth-spot-004", "kind": "action", "subtype": "swap",
+        "config": { "from_asset": "ETH", "to_asset": "USDC", "amount": "0.04", "chain": "hyperliquid" }, "enabled": true },
+      { "id": "eth-above-2500", "kind": "signal", "subtype": "price_threshold",
+        "config": { "symbol": "ETH", "operator": ">", "threshold": "2500" }, "enabled": true },
+      { "id": "sell-eth-spot-006", "kind": "action", "subtype": "swap",
+        "config": { "from_asset": "ETH", "to_asset": "USDC", "amount": "0.06", "chain": "hyperliquid" }, "enabled": true }
+    ],
+    "edges": [
+      { "from": "eth-below-1900", "to": "buy-eth-spot-100" },
+      { "from": "eth-below-1700", "to": "buy-eth-spot-150" },
+      { "from": "eth-above-2200", "to": "sell-eth-spot-004" },
+      { "from": "eth-above-2500", "to": "sell-eth-spot-006" }
+    ]
+  },
+  "g05_hl_perp_open_long": {
+    "nodes": [
+      { "id": "open-eth-long-5x", "kind": "action", "subtype": "perp_order",
+        "config": { "symbol": "ETH", "side": "long", "size_usd": "500", "leverage": "5", "chain": "hyperliquid", "order_type": "market", "reduce_only": false }, "enabled": true }
+    ],
+    "edges": []
+  },
+  "g06_hl_perp_open_close": {
+    "nodes": [
+      { "id": "open-eth-long-5x", "kind": "action", "subtype": "perp_order",
+        "config": { "symbol": "ETH", "side": "long", "size_usd": "500", "leverage": "5", "chain": "hyperliquid", "order_type": "market", "reduce_only": false }, "enabled": true },
+      { "id": "close-eth-long", "kind": "action", "subtype": "perp_order",
+        "config": { "symbol": "ETH", "side": "short", "size_usd": "500", "chain": "hyperliquid", "order_type": "market", "reduce_only": true }, "enabled": true }
+    ],
+    "edges": [{ "from": "open-eth-long-5x", "to": "close-eth-long" }]
+  },
+  "g07_hl_perp_round_trips": {
+    "nodes": [
+      { "id": "open-initial-eth-long-5x", "kind": "action", "subtype": "perp_order",
+        "config": { "symbol": "ETH", "side": "long", "size_usd": "500", "leverage": "5", "chain": "hyperliquid", "order_type": "market", "reduce_only": false }, "enabled": true },
+      { "id": "eth-below-1800", "kind": "signal", "subtype": "price_threshold",
+        "config": { "symbol": "ETH", "operator": "<", "threshold": "1800" }, "enabled": true },
+      { "id": "open-eth-long-5x", "kind": "action", "subtype": "perp_order",
+        "config": { "symbol": "ETH", "side": "long", "size_usd": "500", "leverage": "5", "chain": "hyperliquid", "order_type": "market", "reduce_only": false }, "enabled": true },
+      { "id": "eth-above-2300", "kind": "signal", "subtype": "price_threshold",
+        "config": { "symbol": "ETH", "operator": ">", "threshold": "2300" }, "enabled": true },
+      { "id": "close-eth-long", "kind": "action", "subtype": "perp_order",
+        "config": { "symbol": "ETH", "side": "short", "size_usd": "1000", "chain": "hyperliquid", "order_type": "market", "reduce_only": true }, "enabled": true }
+    ],
+    "edges": [
+      { "from": "eth-below-1800", "to": "open-eth-long-5x" },
+      { "from": "eth-above-2300", "to": "close-eth-long" }
+    ]
+  },
+  "g08_evm_yield_deposit": {
+    "nodes": [
+      { "id": "deposit-usdc-into-aave", "kind": "action", "subtype": "yield_deposit",
+        "config": { "chain": "base", "protocol": "aave", "pool": "usdc", "asset": "USDC", "amount": "250" }, "enabled": true }
+    ],
+    "edges": []
+  },
+  "g09_evm_yield_deposit_withdraw_partial": {
+    "nodes": [
+      { "id": "deposit-usdc-into-aave", "kind": "action", "subtype": "yield_deposit",
+        "config": { "chain": "base", "protocol": "aave", "pool": "usdc", "asset": "USDC", "amount": "250" }, "enabled": true },
+      { "id": "withdraw-usdc-from-aave", "kind": "action", "subtype": "yield_withdraw",
+        "config": { "chain": "base", "protocol": "aave", "pool": "usdc", "asset": "USDC", "amount": "100" }, "enabled": true }
+    ],
+    "edges": [{ "from": "deposit-usdc-into-aave", "to": "withdraw-usdc-from-aave" }]
+  },
+  "g10_evm_yield_deposit_withdraw_all": {
+    "nodes": [
+      { "id": "deposit-usdc-into-aave", "kind": "action", "subtype": "yield_deposit",
+        "config": { "chain": "base", "protocol": "aave", "pool": "usdc", "asset": "USDC", "amount": "250" }, "enabled": true },
+      { "id": "withdraw-usdc-from-aave", "kind": "action", "subtype": "yield_withdraw",
+        "config": { "chain": "base", "protocol": "aave", "pool": "usdc", "asset": "USDC", "amount": "all" }, "enabled": true }
+    ],
+    "edges": [{ "from": "deposit-usdc-into-aave", "to": "withdraw-usdc-from-aave" }]
+  },
+  "g11_evm_swap_if_below": {
+    "nodes": [
+      { "id": "eth-below-1800", "kind": "signal", "subtype": "price_threshold",
+        "config": { "symbol": "ETH", "operator": "<", "threshold": "1800" }, "enabled": true },
+      { "id": "buy-eth-on-base", "kind": "action", "subtype": "swap",
+        "config": { "from_asset": "USDC", "to_asset": "ETH", "amount": "100", "chain": "base" }, "enabled": true }
+    ],
+    "edges": [{ "from": "eth-below-1800", "to": "buy-eth-on-base" }]
+  },
+  "g12_evm_swap_dca_ladder": {
+    "nodes": [
+      { "id": "build-initial-eth-inventory", "kind": "action", "subtype": "swap",
+        "config": { "from_asset": "USDC", "to_asset": "ETH", "amount": "300", "chain": "base" }, "enabled": true },
+      { "id": "eth-below-1850", "kind": "signal", "subtype": "price_threshold",
+        "config": { "symbol": "ETH", "operator": "<", "threshold": "1850" }, "enabled": true },
+      { "id": "buy-eth-on-base-100", "kind": "action", "subtype": "swap",
+        "config": { "from_asset": "USDC", "to_asset": "ETH", "amount": "100", "chain": "base" }, "enabled": true },
+      { "id": "eth-below-1650", "kind": "signal", "subtype": "price_threshold",
+        "config": { "symbol": "ETH", "operator": "<", "threshold": "1650" }, "enabled": true },
+      { "id": "buy-eth-on-base-200", "kind": "action", "subtype": "swap",
+        "config": { "from_asset": "USDC", "to_asset": "ETH", "amount": "200", "chain": "base" }, "enabled": true },
+      { "id": "eth-above-2300", "kind": "signal", "subtype": "price_threshold",
+        "config": { "symbol": "ETH", "operator": ">", "threshold": "2300" }, "enabled": true },
+      { "id": "sell-eth-on-base-005", "kind": "action", "subtype": "swap",
+        "config": { "from_asset": "ETH", "to_asset": "USDC", "amount": "0.05", "chain": "base" }, "enabled": true },
+      { "id": "eth-above-2600", "kind": "signal", "subtype": "price_threshold",
+        "config": { "symbol": "ETH", "operator": ">", "threshold": "2600" }, "enabled": true },
+      { "id": "sell-eth-on-base-005-more", "kind": "action", "subtype": "swap",
+        "config": { "from_asset": "ETH", "to_asset": "USDC", "amount": "0.05", "chain": "base" }, "enabled": true }
+    ],
+    "edges": [
+      { "from": "eth-below-1850", "to": "buy-eth-on-base-100" },
+      { "from": "eth-below-1650", "to": "buy-eth-on-base-200" },
+      { "from": "eth-above-2300", "to": "sell-eth-on-base-005" },
+      { "from": "eth-above-2600", "to": "sell-eth-on-base-005-more" }
+    ]
+  },
+  "g13_hl_perp_long_short_swings": {
+    "nodes": [
+      { "id": "open-initial-eth-long-2x", "kind": "action", "subtype": "perp_order",
+        "config": { "symbol": "ETH", "side": "long", "size_usd": "500", "leverage": "2", "chain": "hyperliquid", "order_type": "market", "reduce_only": false }, "enabled": true },
+      { "id": "eth-below-1500", "kind": "signal", "subtype": "price_threshold",
+        "config": { "symbol": "ETH", "operator": "<", "threshold": "1500" }, "enabled": true },
+      { "id": "close-eth-short", "kind": "action", "subtype": "perp_order",
+        "config": { "symbol": "ETH", "side": "long", "size_usd": "1000", "chain": "hyperliquid", "order_type": "market", "reduce_only": true }, "enabled": true },
+      { "id": "eth-below-1800", "kind": "signal", "subtype": "price_threshold",
+        "config": { "symbol": "ETH", "operator": "<", "threshold": "1800" }, "enabled": true },
+      { "id": "open-eth-long-2x", "kind": "action", "subtype": "perp_order",
+        "config": { "symbol": "ETH", "side": "long", "size_usd": "500", "leverage": "2", "chain": "hyperliquid", "order_type": "market", "reduce_only": false }, "enabled": true },
+      { "id": "eth-above-2200", "kind": "signal", "subtype": "price_threshold",
+        "config": { "symbol": "ETH", "operator": ">", "threshold": "2200" }, "enabled": true },
+      { "id": "close-eth-long", "kind": "action", "subtype": "perp_order",
+        "config": { "symbol": "ETH", "side": "short", "size_usd": "1000", "chain": "hyperliquid", "order_type": "market", "reduce_only": true }, "enabled": true },
+      { "id": "eth-above-2500", "kind": "signal", "subtype": "price_threshold",
+        "config": { "symbol": "ETH", "operator": ">", "threshold": "2500" }, "enabled": true },
+      { "id": "open-eth-short-3x", "kind": "action", "subtype": "perp_order",
+        "config": { "symbol": "ETH", "side": "short", "size_usd": "750", "leverage": "3", "chain": "hyperliquid", "order_type": "market", "reduce_only": false }, "enabled": true }
+    ],
+    "edges": [
+      { "from": "eth-below-1500", "to": "close-eth-short" },
+      { "from": "eth-below-1800", "to": "open-eth-long-2x" },
+      { "from": "eth-above-2200", "to": "close-eth-long" },
+      { "from": "eth-above-2500", "to": "open-eth-short-3x" }
+    ]
+  },
+  "g14_hl_perp_add_close": {
+    "nodes": [
+      { "id": "open-initial-eth-short-3x", "kind": "action", "subtype": "perp_order",
+        "config": { "symbol": "ETH", "side": "short", "size_usd": "750", "leverage": "3", "chain": "hyperliquid", "order_type": "market", "reduce_only": false }, "enabled": true },
+      { "id": "eth-above-2400", "kind": "signal", "subtype": "price_threshold",
+        "config": { "symbol": "ETH", "operator": ">", "threshold": "2400" }, "enabled": true },
+      { "id": "open-eth-short-10x", "kind": "action", "subtype": "perp_order",
+        "config": { "symbol": "ETH", "side": "short", "size_usd": "750", "leverage": "10", "chain": "hyperliquid", "order_type": "market", "reduce_only": false }, "enabled": true },
+      { "id": "eth-below-1900", "kind": "signal", "subtype": "price_threshold",
+        "config": { "symbol": "ETH", "operator": "<", "threshold": "1900" }, "enabled": true },
+      { "id": "close-eth-short", "kind": "action", "subtype": "perp_order",
+        "config": { "symbol": "ETH", "side": "long", "size_usd": "2000", "chain": "hyperliquid", "order_type": "market", "reduce_only": true }, "enabled": true }
+    ],
+    "edges": [
+      { "from": "eth-above-2400", "to": "open-eth-short-10x" },
+      { "from": "eth-below-1900", "to": "close-eth-short" }
+    ]
+  },
+  "g15_evm_yield_add_withdraw": {
+    "nodes": [
+      { "id": "deposit-initial-usdc-into-aave", "kind": "action", "subtype": "yield_deposit",
+        "config": { "chain": "base", "protocol": "aave", "pool": "usdc", "asset": "USDC", "amount": "250" }, "enabled": true },
+      { "id": "eth-below-1800", "kind": "signal", "subtype": "price_threshold",
+        "config": { "symbol": "ETH", "operator": "<", "threshold": "1800" }, "enabled": true },
+      { "id": "deposit-usdc-into-aave", "kind": "action", "subtype": "yield_deposit",
+        "config": { "chain": "base", "protocol": "aave", "pool": "usdc", "asset": "USDC", "amount": "250" }, "enabled": true },
+      { "id": "eth-above-2400", "kind": "signal", "subtype": "price_threshold",
+        "config": { "symbol": "ETH", "operator": ">", "threshold": "2400" }, "enabled": true },
+      { "id": "withdraw-usdc-from-aave", "kind": "action", "subtype": "yield_withdraw",
+        "config": { "chain": "base", "protocol": "aave", "pool": "usdc", "asset": "USDC", "amount": "all" }, "enabled": true }
+    ],
+    "edges": [
+      { "from": "eth-below-1800", "to": "deposit-usdc-into-aave" },
+      { "from": "eth-above-2400", "to": "withdraw-usdc-from-aave" }
+    ]
+  }
+}
