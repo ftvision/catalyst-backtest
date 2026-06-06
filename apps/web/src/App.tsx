@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ActionIcon,
   Badge,
@@ -21,11 +21,22 @@ import {
   Gauge,
   Play,
 } from "lucide-react";
+import {
+  auditFromApi,
+  graphFromPreview,
+  marketReplayFromApi,
+  resultFromApi,
+  runHistoryFromApi,
+  setupFromService,
+} from "./api/adapters";
+import { ApiError, catalystApi, type BacktestStatus } from "./api/client";
+import { buildDemoBacktestRequest, demoConfig, demoGraph, demoMarketData } from "./data/demoRequest";
 import { audit, graph, marketReplay, result, runHistory, setup } from "./data/mockData";
 import { EventLensPage } from "./pages/EventLensPage";
 import { MarketReplayPage } from "./pages/MarketReplayPage";
 import { ResultReviewPage } from "./pages/ResultReviewPage";
 import { RunSetupPage } from "./pages/RunSetupPage";
+import type { AuditData, GraphSummary, MarketReplayData, ResultData, SetupData } from "./types";
 
 type RouteId = "setup" | "replay" | "lens" | "result";
 
@@ -36,18 +47,103 @@ const routes: Array<{ id: RouteId; label: string; icon: React.ReactNode }> = [
   { id: "result", label: "Result Review", icon: <FileChartColumn size={14} /> },
 ];
 
+type ApiStatus = "checking" | "healthy" | "offline" | "running" | "failed";
+type RunStatus = "idle" | "submitting" | "queued" | "running" | "succeeded" | "failed";
+
+interface WorkbenchState {
+  graph: GraphSummary;
+  setup: SetupData;
+  marketReplay: MarketReplayData;
+  result: ResultData;
+  audit: AuditData;
+  runHistory: Array<Record<string, string>>;
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof ApiError) return error.code ? `${error.code}: ${error.message}` : error.message;
+  if (error instanceof Error) return error.message;
+  return "Unknown service error";
+}
+
 export function App() {
   const [activeRoute, setActiveRoute] = useState<RouteId>("replay");
   const [selectedEventId, setSelectedEventId] = useState(marketReplay.selectedEventId);
+  const [apiStatus, setApiStatus] = useState<ApiStatus>("checking");
+  const [apiMessage, setApiMessage] = useState(`Checking ${catalystApi.baseUrl}`);
+  const [runStatus, setRunStatus] = useState<RunStatus>("idle");
+  const [workbench, setWorkbench] = useState<WorkbenchState>({
+    graph,
+    setup,
+    marketReplay,
+    result,
+    audit,
+    runHistory,
+  });
   const clipboard = useClipboard({ timeout: 900 });
 
   const selectedEvent = useMemo(
-    () => marketReplay.events.find((event) => event.id === selectedEventId),
-    [selectedEventId],
+    () => workbench.marketReplay.events.find((event) => event.id === selectedEventId),
+    [selectedEventId, workbench.marketReplay.events],
   );
 
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadServiceWorkbench() {
+      try {
+        setApiStatus("checking");
+        setApiMessage(`Checking ${catalystApi.baseUrl}`);
+        await catalystApi.health();
+        const [profiles, preview, coverage] = await Promise.all([
+          catalystApi.listPolicyProfiles(),
+          catalystApi.previewGraph(demoGraph, { profile: setup.policy }),
+          catalystApi.checkCoverage({
+            graph: demoGraph,
+            start: demoConfig.start,
+            end: demoConfig.end,
+            interval: demoConfig.interval,
+            market_data: demoMarketData,
+          }),
+        ]);
+        const history = await catalystApi.listBacktests(preview.graph_hash);
+
+        if (cancelled) return;
+
+        setWorkbench((current) => ({
+          ...current,
+          graph: graphFromPreview(demoGraph, preview),
+          setup: setupFromService({
+            graph: demoGraph,
+            config: demoConfig,
+            policyProfile: setup.policy,
+            coverage,
+            preview,
+            profiles: profiles.items,
+          }),
+          runHistory: history.items.length ? runHistoryFromApi(history.items) : current.runHistory,
+        }));
+        setApiStatus("healthy");
+        setApiMessage(`Connected to ${catalystApi.baseUrl}`);
+      } catch (error) {
+        if (cancelled) return;
+        setApiStatus("offline");
+        setApiMessage(`Using mock data: ${errorMessage(error)}`);
+      }
+    }
+
+    void loadServiceWorkbench();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   function downloadPayload() {
-    const payload = JSON.stringify({ graph, setup, marketReplay, result, audit }, null, 2);
+    const payload = JSON.stringify({ ...workbench, api: { status: apiStatus, message: apiMessage } }, null, 2);
     const blob = new Blob([payload], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -56,6 +152,86 @@ export function App() {
     link.click();
     URL.revokeObjectURL(url);
   }
+
+  async function waitForRun(id: string): Promise<BacktestStatus> {
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      const status = await catalystApi.getBacktest(id);
+      if (status.status === "succeeded" || status.status === "failed") return status;
+      setRunStatus(status.status === "running" ? "running" : "queued");
+      setApiStatus("running");
+      setApiMessage(`Backtest ${id} is ${status.status}`);
+      await sleep(500);
+    }
+    throw new Error(`Backtest ${id} did not finish within 60 seconds`);
+  }
+
+  async function runBacktest() {
+    try {
+      setRunStatus("submitting");
+      setApiStatus("running");
+      setApiMessage("Submitting run to Rust service");
+      const created = await catalystApi.createBacktest(buildDemoBacktestRequest(workbench.setup.policy));
+      setRunStatus("queued");
+      setWorkbench((current) => ({
+        ...current,
+        setup: { ...current.setup, runId: created.id },
+      }));
+
+      const status = await waitForRun(created.id);
+      if (status.status === "failed") {
+        throw new Error(status.error ?? `Backtest ${created.id} failed`);
+      }
+
+      const [serviceResult, events, metadata, history] = await Promise.all([
+        catalystApi.getResult(created.id),
+        catalystApi.getEvents(created.id, { limit: 100 }),
+        catalystApi.getMetadata(created.id),
+        catalystApi.listBacktests(),
+      ]);
+      const replay = marketReplayFromApi(serviceResult, events.items, demoMarketData);
+      const review = resultFromApi(serviceResult, status.status);
+      const auditData = auditFromApi(events.items, serviceResult, replay);
+      const serviceSetup = setupFromService({
+        runId: created.id,
+        graph: demoGraph,
+        config: demoConfig,
+        policyProfile: workbench.setup.policy,
+        metadata,
+      });
+
+      setWorkbench((current) => ({
+        ...current,
+        setup: {
+          ...current.setup,
+          ...serviceSetup,
+          coverage: current.setup.coverage,
+        },
+        marketReplay: replay,
+        result: review,
+        audit: auditData,
+        runHistory: history.items.length ? runHistoryFromApi(history.items) : current.runHistory,
+      }));
+      setSelectedEventId(replay.selectedEventId);
+      setRunStatus("succeeded");
+      setApiStatus("healthy");
+      setApiMessage(`Backtest ${created.id} completed`);
+      setActiveRoute("result");
+    } catch (error) {
+      setRunStatus("failed");
+      setApiStatus("failed");
+      setApiMessage(errorMessage(error));
+    }
+  }
+
+  const runLabel =
+    runStatus === "submitting"
+      ? "Submitting"
+      : runStatus === "queued"
+        ? "Queued"
+        : runStatus === "running"
+          ? "Running"
+          : "Run backtest";
+  const isRunning = runStatus === "submitting" || runStatus === "queued" || runStatus === "running";
 
   return (
     <div className="app-shell">
@@ -68,12 +244,16 @@ export function App() {
             <Stack gap={1}>
               <Group gap="xs">
                 <Title order={1}>Catalyst Backtest</Title>
-                <Badge variant="light" color="teal" radius="sm">
-                  API healthy
+                <Badge
+                  variant="light"
+                  color={apiStatus === "healthy" ? "teal" : apiStatus === "offline" ? "gray" : apiStatus === "failed" ? "red" : "blue"}
+                  radius="sm"
+                >
+                  API {apiStatus}
                 </Badge>
               </Group>
               <Text size="sm" c="dimmed">
-                Graph validation, historical replay, and trace audit.
+                {apiMessage}
               </Text>
             </Stack>
           </Group>
@@ -84,11 +264,11 @@ export function App() {
                 Selected event
               </Text>
               <Text size="xs" c="dimmed" className="mono">
-                {selectedEvent ? `${selectedEvent.index} ${selectedEvent.label}` : setup.runId}
+                {selectedEvent ? `${selectedEvent.index} ${selectedEvent.label}` : workbench.setup.runId}
               </Text>
             </Stack>
             <Tooltip label={clipboard.copied ? "Copied" : "Copy run ID"}>
-              <ActionIcon aria-label="Copy run ID" onClick={() => clipboard.copy(setup.runId)}>
+              <ActionIcon aria-label="Copy run ID" onClick={() => clipboard.copy(workbench.setup.runId)}>
                 <Clipboard size={16} />
               </ActionIcon>
             </Tooltip>
@@ -97,8 +277,8 @@ export function App() {
                 <Download size={16} />
               </ActionIcon>
             </Tooltip>
-            <Button leftSection={<Play size={14} />} onClick={() => setActiveRoute("result")}>
-              Run backtest
+            <Button leftSection={<Play size={14} />} onClick={runBacktest} loading={isRunning}>
+              {runLabel}
             </Button>
           </Group>
         </div>
@@ -119,18 +299,21 @@ export function App() {
       <main className="workspace">
         {activeRoute === "setup" ? (
           <RunSetupPage
-            graph={graph}
-            setup={setup}
-            runHistory={runHistory}
-            onRun={() => setActiveRoute("result")}
+            graph={workbench.graph}
+            setup={workbench.setup}
+            runHistory={workbench.runHistory}
+            onRun={runBacktest}
+            runLabel={runLabel}
+            runDisabled={isRunning}
+            graphPayload={JSON.stringify(buildDemoBacktestRequest(workbench.setup.policy), null, 2)}
           />
         ) : null}
         {activeRoute === "replay" ? (
           <MarketReplayPage
-            graph={graph}
-            setup={setup}
-            result={result}
-            replay={marketReplay}
+            graph={workbench.graph}
+            setup={workbench.setup}
+            result={workbench.result}
+            replay={workbench.marketReplay}
             selectedEventId={selectedEventId}
             onSelectEvent={setSelectedEventId}
             onInspectEvent={() => setActiveRoute("lens")}
@@ -138,17 +321,17 @@ export function App() {
         ) : null}
         {activeRoute === "lens" ? (
           <EventLensPage
-            audit={audit}
-            replay={marketReplay}
-            result={result}
-            setup={setup}
+            audit={workbench.audit}
+            replay={workbench.marketReplay}
+            result={workbench.result}
+            setup={workbench.setup}
             selectedEventId={selectedEventId}
             selectedReplayEvent={selectedEvent}
             onSelectEvent={setSelectedEventId}
           />
         ) : null}
         {activeRoute === "result" ? (
-          <ResultReviewPage graph={graph} setup={setup} result={result} />
+          <ResultReviewPage graph={workbench.graph} setup={workbench.setup} result={workbench.result} />
         ) : null}
       </main>
     </div>

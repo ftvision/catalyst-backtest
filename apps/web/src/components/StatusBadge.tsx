@@ -17,7 +17,13 @@ const stateColors: Record<string, string> = {
   danger: "red",
   rejected: "red",
   healthy: "teal",
+  succeeded: "teal",
+  queued: "blue",
+  submitting: "blue",
   running: "blue",
+  checking: "blue",
+  offline: "gray",
+  failed: "red",
 };
 
 export function StatusBadge({ status, label }: { status: string; label?: string }) {

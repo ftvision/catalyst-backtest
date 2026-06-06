@@ -25,11 +25,17 @@ export function RunSetupPage({
   setup,
   runHistory,
   onRun,
+  runLabel = "Run backtest",
+  runDisabled = false,
+  graphPayload = '{"graph_id":"g_eth_threshold_base_swap","nodes":7,"edges":6}',
 }: {
   graph: GraphSummary;
   setup: SetupData;
   runHistory: Array<Record<string, string>>;
   onRun: () => void;
+  runLabel?: string;
+  runDisabled?: boolean;
+  graphPayload?: string;
 }) {
   return (
     <Stack gap="md">
@@ -37,8 +43,8 @@ export function RunSetupPage({
         title="Run Setup"
         subtitle="Resolve graph requirements, portfolio, data coverage, and policy before creating a run."
         action={
-          <Button leftSection={<Play size={14} />} onClick={onRun}>
-            Run backtest
+          <Button leftSection={<Play size={14} />} onClick={onRun} disabled={runDisabled}>
+            {runLabel}
           </Button>
         }
       />
@@ -121,7 +127,7 @@ export function RunSetupPage({
                 label="Graph payload"
                 minRows={4}
                 autosize
-                value='{"graph_id":"g_eth_threshold_base_swap","nodes":7,"edges":6}'
+                value={graphPayload}
                 readOnly
               />
             </Stack>

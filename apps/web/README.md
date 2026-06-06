@@ -32,6 +32,19 @@ npm run dev
 
 Then open `http://127.0.0.1:4173`.
 
+The frontend connects to the Rust simulation service at
+`http://127.0.0.1:8080` by default. Override it with:
+
+```bash
+VITE_CATALYST_API_BASE=http://127.0.0.1:8080 npm run dev
+```
+
+Run the service from the repo root:
+
+```bash
+cargo run -p catalyst-simulation-service
+```
+
 Inspect UI states in Storybook:
 
 ```bash

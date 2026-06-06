@@ -29,12 +29,19 @@ mod worker;
 pub use state::AppState;
 
 use axum::{
+    http::Method,
     routing::{get, post},
     Router,
 };
+use tower_http::cors::{Any, CorsLayer};
 
 /// Build the router with injected state. Exposed so tests can drive it without a socket.
 pub fn app(state: AppState) -> Router {
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_headers(Any);
+
     Router::new()
         .route("/health", get(handlers::health))
         .route("/simulate", post(handlers::simulate))
@@ -47,4 +54,5 @@ pub fn app(state: AppState) -> Router {
         .route("/market-data/coverage", post(handlers::coverage))
         .route("/policy-profiles", get(handlers::policy_profiles))
         .with_state(state)
+        .layer(cors)
 }
