@@ -24,6 +24,47 @@ Out of scope for the first version:
 - order-book level execution
 - runtime language switching
 
+## Language boundary (ADR 0001 — target architecture)
+
+The deterministic **service/run path is Rust**; **Python is a client + data
+plumbing only**. See [adr/0001-language-boundary.md](adr/0001-language-boundary.md).
+
+```mermaid
+flowchart LR
+  subgraph PY["Python (edges)"]
+    Ingest["data-source adapters + ingestion"]
+    Research["notebooks / analysis (API client)"]
+  end
+  subgraph STORE["Boundary = data at rest"]
+    Parquet["Parquet market-data store"]
+  end
+  subgraph RS["Rust (service / run path)"]
+    API["HTTP API (axum)"]
+    Core["compile → policy → execution → ledger → engine → reporter"]
+    Loader["Parquet loader (object_store)"]
+  end
+
+  Ingest -->|writes| Parquet
+  Parquet -->|read| Loader --> Core
+  API --> Core
+  Research -->|HTTP| API
+```
+
+- **Rust owns**: contracts (serde), compile, policy, execution, ledger, engine,
+  Parquet loader, reporter, orchestration, HTTP API.
+- **Python owns**: ingestion (writes the store) and analysis (calls the API).
+- **No domain logic crosses the boundary.** The only cross-language overlap is
+  data *shapes* (the JSON-Schema contracts below), single-sourced and
+  fixture-guarded.
+
+This resolves the duplication in #28 and the JSON-bundle boundary in #29.
+
+> **Current vs target.** The sections below describe the system as a Python
+> orchestrator (`backtest-api`/`backtest-worker`) calling a Rust simulation
+> service. That is the **current, transitional** layout; the run path is being
+> moved to Rust per ADR 0001 (migration tracked in #43). Treat the Python
+> orchestration/compiler/reporter boxes as transitional.
+
 ## Repository Shape
 
 ```text

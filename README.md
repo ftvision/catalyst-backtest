@@ -2,16 +2,32 @@
 
 Foundation repo for a graph-driven backtesting system.
 
-The first version keeps the system modular without making the module system itself
-too clever:
-
 - Python packages live under `packages/` and are managed with `uv`.
 - Rust crates live under `crates/` and are managed with Cargo.
-- Python handles orchestration, graph compilation, market data, jobs, and reporting.
-- Rust handles deterministic simulation, portfolio accounting, and execution models.
-- The first integration boundary is HTTP: Python worker -> Rust simulation service.
 
-See [docs/system-design.md](docs/system-design.md) for the current architecture.
+## Architecture direction (ADR 0001)
+
+The **deterministic service/run path is Rust** (compile → policy → execution →
+ledger → engine → reporter → HTTP API). **Python is a client and data plumbing
+only**: it ingests historical data into the Parquet store and, for research,
+calls the Rust API and deserializes results for analysis.
+
+The **language boundary is data at rest** — the Parquet market-data store (Python
+writes, Rust reads) plus the Rust HTTP API. No domain logic is shared across
+languages; the only cross-language overlap is data *shapes* (the JSON-Schema
+contracts in `schemas/`, projected to Rust serde and Python Pydantic and guarded
+by round-trip fixtures).
+
+| Side | Owns |
+| --- | --- |
+| **Rust** (`crates/`) | contracts, compile, policy, execution, ledger, engine, Parquet loader, reporter, orchestration, HTTP API |
+| **Python** (`packages/`) | data-source adapters + ingestion (write the store); analysis/notebooks (client of the Rust API) |
+
+> The current code still has parts of the run path in Python (compiler, reporter,
+> worker, API); these are being moved to Rust per
+> [ADR 0001](docs/adr/0001-language-boundary.md) (tracked migration). Until then,
+> [docs/system-design.md](docs/system-design.md) describes both the current
+> (transitional) layout and the target.
 
 ## Local Setup
 
