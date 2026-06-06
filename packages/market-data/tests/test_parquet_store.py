@@ -168,3 +168,12 @@ def test_ingest_binance_writes_store(tmp_path) -> None:
 def test_fetch_klines_without_transport_refuses_network() -> None:
     with pytest.raises(RuntimeError, match="no transport"):
         fetch_klines("ETHUSDT", "1h", dt(1, 0), dt(1, 1))
+
+
+def test_fetch_klines_rejects_error_response() -> None:
+    # Binance returns a JSON object (not a list) on errors like a 451 geo-block.
+    def error_transport(url, params):
+        return {"code": 0, "msg": "Service unavailable from a restricted location"}
+
+    with pytest.raises(RuntimeError, match="not klines"):
+        fetch_klines("ETHUSDT", "1h", dt(1, 0), dt(1, 1), transport=error_transport)

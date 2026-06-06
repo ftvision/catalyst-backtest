@@ -18,7 +18,9 @@ from catalyst_contracts import Candle
 
 from .parquet_store import ParquetStore
 
-BINANCE_KLINES_URL = "https://api.binance.com/api/v3/klines"
+# Public market-data mirror: same API shape as api.binance.com but keyless and
+# not geo-restricted (api.binance.com returns 451 from many regions).
+BINANCE_KLINES_URL = "https://data-api.binance.vision/api/v3/klines"
 _MAX_LIMIT = 1000
 
 # Binance uses the same interval strings we do.
@@ -88,6 +90,11 @@ def fetch_klines(
         )
         if not rows:
             break
+        if not isinstance(rows, list):
+            # Binance signals errors (e.g. 451 geo-block) as a JSON object, not a
+            # list of klines — surface it clearly instead of mis-parsing.
+            msg = rows.get("msg") if isinstance(rows, dict) else rows
+            raise RuntimeError(f"unexpected Binance response (not klines): {msg}")
         for row in rows:
             open_ms = int(row[0])
             if open_ms in seen or open_ms > end_ms:
