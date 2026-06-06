@@ -34,9 +34,6 @@ const paneStretch = {
   drawdown: 13,
 };
 
-const compactLeadBars = 4;
-const compactTrailingBars = 24;
-
 function formatChartTime(time: UTCTimestamp) {
   const date = new Date(Number(time) * 1000);
   const hour = date.getUTCHours();

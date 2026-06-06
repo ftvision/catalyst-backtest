@@ -27,7 +27,7 @@ export function RunSetupPage({
   onRun,
   runLabel = "Run backtest",
   runDisabled = false,
-  graphPayload = '{"graph_id":"g_eth_threshold_base_swap","nodes":7,"edges":6}',
+  dataSourceLabel = "Parquet store",
 }: {
   graph: GraphSummary;
   setup: SetupData;
@@ -35,7 +35,7 @@ export function RunSetupPage({
   onRun: () => void;
   runLabel?: string;
   runDisabled?: boolean;
-  graphPayload?: string;
+  dataSourceLabel?: string;
 }) {
   const strategyOptions = strategies.map((strategy) => ({
     value: strategy.id,
@@ -153,13 +153,6 @@ export function RunSetupPage({
                 <TextInput label="Market data source" value={dataSourceLabel} readOnly />
                 <TextInput label="Run ID" value={setup.runId} readOnly />
               </SimpleGrid>
-              <Textarea
-                label="Graph payload"
-                minRows={4}
-                autosize
-                value={graphPayload}
-                readOnly
-              />
             </Stack>
           </Paper>
 

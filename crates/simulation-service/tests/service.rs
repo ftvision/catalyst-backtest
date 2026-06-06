@@ -409,3 +409,16 @@ async fn market_data_window_reads_configured_store() {
     assert_eq!(v["candles"][0]["points"].as_array().unwrap().len(), 2);
     assert_eq!(v["providers"][0]["name"], "parquet-store");
 }
+
+#[tokio::test]
+async fn market_data_window_reads_configured_store() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_eth_candles(tmp.path());
+    let st = AppState::new(Some(tmp.path().to_string_lossy().to_string()), 1024);
+    let body = json!({"graph": graph(), "start": "2024-01-01T00:00:00Z", "end": "2024-01-01T02:00:00Z",
+                      "interval": "1h"});
+    let (s, v) = send(&st, "POST", "/market-data/window", Some(body)).await;
+    assert_eq!(s, StatusCode::OK, "body: {v}");
+    assert_eq!(v["candles"][0]["points"].as_array().unwrap().len(), 2);
+    assert_eq!(v["providers"][0]["name"], "parquet-store");
+}
