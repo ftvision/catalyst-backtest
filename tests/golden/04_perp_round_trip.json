@@ -1,0 +1,42 @@
+{
+  "name": "perp_round_trip",
+  "description": "Open a 5x ETH long on Hyperliquid, then chain a reduce-only close.",
+  "input": {
+    "graph": {
+      "nodes": [
+        {"id": "open-eth-long-5x", "kind": "action", "subtype": "perp_order",
+         "config": {"symbol": "ETH", "side": "long", "size_usd": "500", "leverage": "5",
+                    "chain": "hyperliquid", "order_type": "market", "reduce_only": false}},
+        {"id": "close-eth-long", "kind": "action", "subtype": "perp_order",
+         "config": {"symbol": "ETH", "side": "short", "size_usd": "500",
+                    "chain": "hyperliquid", "order_type": "market", "reduce_only": true}}
+      ],
+      "edges": [{"from": "open-eth-long-5x", "to": "close-eth-long"}]
+    },
+    "config": {
+      "start": "2024-01-01T00:00:00Z",
+      "end": "2024-01-01T01:00:00Z",
+      "interval": "1h",
+      "initial_portfolio": {"hyperliquid": {"USDC": "1000"}}
+    },
+    "policy": {"profile": "strict_v1"},
+    "market_data": {
+      "schema_version": "catalyst.backtest.market_data_bundle.v1",
+      "interval": "1h",
+      "start": "2024-01-01T00:00:00Z",
+      "end": "2024-01-01T01:00:00Z",
+      "candles": [{"venue": "hyperliquid", "symbol": "ETH", "quote": "USD",
+        "points": [{"ts": "2024-01-01T00:00:00Z", "open": "2000", "high": "2000", "low": "2000", "close": "2000"}]}],
+      "funding": [{"venue": "hyperliquid", "symbol": "ETH",
+        "points": [{"ts": "2024-01-01T00:00:00Z", "rate": "0.0001"}]}]
+    }
+  },
+  "expect": {
+    "executed": 2,
+    "rejected": 0,
+    "open_perps": 0,
+    "open_yields": 0,
+    "balances_present": [["hyperliquid", "USDC"]],
+    "snapshots_min": 1
+  }
+}
