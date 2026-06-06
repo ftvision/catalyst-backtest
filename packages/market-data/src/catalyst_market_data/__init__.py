@@ -19,6 +19,8 @@ from .live import (
     NetworkDisabledTransport,
     Transport,
 )
+from .binance import fetch_klines, httpx_transport, ingest_binance
+from .parquet_store import ParquetSource, ParquetStore
 from .planner import MissingDataError, build_bundle
 from .sources import FixtureSource, MarketDataSource
 
@@ -39,4 +41,10 @@ __all__ = [
     "BundleCache",
     "bundle_key",
     "DEFAULT_CACHE_ROOT",
+    # historical store (#30)
+    "ParquetStore",
+    "ParquetSource",
+    "fetch_klines",
+    "ingest_binance",
+    "httpx_transport",
 ]

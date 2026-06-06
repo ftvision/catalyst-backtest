@@ -33,9 +33,42 @@ implementations:
 | `HyperliquidSource` | Real Hyperliquid `info` API candles + funding; HTTP is **injected** via a `Transport`. |
 | `CallableGasSource` / `CallableYieldSource` | Thin abstractions normalizing an injected fetch callable (Base RPC gas, Aave subgraph yields). |
 | `CompositeSource` | Routes each kind to a dedicated source (HL candles/funding, EVM gas, Aave yields). |
+| `ParquetSource` | Reads the **historical Parquet store** for deep history (see below). |
 
 Network access is always injected. The default transport (`NetworkDisabledTransport`)
 refuses to make calls, so fixture-backed runs are guaranteed offline.
+
+## Historical store (deep history)
+
+Live APIs are retention-limited (e.g. Hyperliquid `candleSnapshot` only serves
+recent windows). The durable **series store** holds deep history as partitioned
+Parquet; see [docs/market-data-storage.md](../../docs/market-data-storage.md) for
+the layout/columns (the cross-language storage contract).
+
+```python
+from catalyst_market_data import ParquetStore, ParquetSource, ingest_binance, httpx_transport
+
+# Backfill ETH candles from Binance klines (free, deep, keyless):
+store = ParquetStore("data/market-data")
+ingest_binance(store, venue="hyperliquid", symbol="ETH", binance_symbol="ETHUSDT",
+               interval="1h", start=start, end=end, transport=httpx_transport())
+
+# Read them back as a MarketDataSource:
+src = ParquetSource("data/market-data", start, end, "1h")
+```
+
+Or via the CLI:
+
+```bash
+python -m catalyst_market_data.cli ingest-binance \
+  --root data/market-data --venue hyperliquid --symbol ETH \
+  --binance-symbol ETHUSDT --interval 1h \
+  --start 2024-01-01T00:00:00Z --end 2024-02-01T00:00:00Z
+```
+
+`ParquetSource` plugs into `build_bundle` like any other source — the engine is
+unchanged. (Interim: Python reads Parquet → bundle. The end state is the Rust
+loader reading the store directly, issue #29.)
 
 ## Missing-data handling
 
