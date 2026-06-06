@@ -15,16 +15,24 @@
 //!
 //! Value columns are decimal-strings (matching the contract), `ts` is
 //! `timestamp[us, UTC]`. Reads are partition-pruned by date and window-filtered
-//! by timestamp — only the needed files/rows are touched. Local filesystem only
-//! for now (object_store / S3 is a later step).
+//! by timestamp — only the needed files/rows are touched.
+//!
+//! Storage is accessed through [`object_store`], so the `root` of a [`BundleRef`]
+//! can be a local path, `file://`, `s3://bucket/prefix`, or `gs://...` — the same
+//! code path reads all of them. Loading is async (object stores are async); the
+//! parquet decode itself is synchronous over the fetched bytes.
 
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use arrow::array::{Array, StringArray, TimestampMicrosecondArray};
+use bytes::Bytes;
 use chrono::{DateTime, NaiveDate, Utc};
+use futures::StreamExt;
+use object_store::{path::Path as StorePath, ObjectStore};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use serde::{Deserialize, Serialize};
+use url::Url;
 
 use catalyst_contracts::market_data::{
     Candle, CandleSeries, Coverage, FundingPoint, FundingSeries, GasPoint, GasSeries, Provider,
@@ -83,6 +91,7 @@ pub struct BundleRef {
 pub enum LoaderError {
     Time(String),
     Read(String),
+    Store(String),
 }
 
 impl fmt::Display for LoaderError {
@@ -90,6 +99,7 @@ impl fmt::Display for LoaderError {
         match self {
             LoaderError::Time(m) => write!(f, "bad timestamp: {m}"),
             LoaderError::Read(m) => write!(f, "parquet read error: {m}"),
+            LoaderError::Store(m) => write!(f, "object store error: {m}"),
         }
     }
 }
@@ -107,55 +117,93 @@ fn micros_to_iso(micros: i64) -> String {
         .unwrap_or_default()
 }
 
+/// Resolve a `root` (local path, `file://`, `s3://`, `gs://`, ...) into an object
+/// store plus the base path within it.
+fn resolve_store(root: &str) -> Result<(Arc<dyn ObjectStore>, StorePath), LoaderError> {
+    let url = if root.contains("://") {
+        Url::parse(root).map_err(|e| LoaderError::Store(format!("bad root url {root:?}: {e}")))?
+    } else {
+        // A bare path -> a file:// URL (made absolute against the CWD).
+        let abs = std::path::absolute(root).map_err(|e| LoaderError::Store(e.to_string()))?;
+        Url::from_directory_path(&abs)
+            .map_err(|_| LoaderError::Store(format!("cannot form file url for {abs:?}")))?
+    };
+    let (store, path) =
+        object_store::parse_url(&url).map_err(|e| LoaderError::Store(e.to_string()))?;
+    Ok((Arc::from(store), path))
+}
+
+fn child(base: &StorePath, parts: &[String]) -> StorePath {
+    let mut p = base.clone();
+    for part in parts {
+        p = p.child(part.as_str());
+    }
+    p
+}
+
 /// A row: (ts micros, value columns as optional decimal-strings, in `value_cols` order).
 type Row = (i64, Vec<Option<String>>);
 
-/// Read every `*.parquet` in `dir` whose filename date falls in the window, and
-/// return rows whose `ts` is within `[start_us, end_us]`, sorted by `ts`.
-fn read_window(
-    dir: &Path,
+/// Read every `*.parquet` under `prefix` whose filename date falls in the window,
+/// and return rows whose `ts` is within `[start_us, end_us]`, sorted by `ts`.
+async fn read_window(
+    store: &Arc<dyn ObjectStore>,
+    prefix: &StorePath,
     value_cols: &[&str],
     start_us: i64,
     end_us: i64,
 ) -> Result<Vec<Row>, LoaderError> {
-    if !dir.is_dir() {
-        return Ok(Vec::new());
-    }
     let start_date = DateTime::<Utc>::from_timestamp_micros(start_us).map(|d| d.date_naive());
     let end_date = DateTime::<Utc>::from_timestamp_micros(end_us).map(|d| d.date_naive());
 
-    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
-        .map_err(|e| LoaderError::Read(e.to_string()))?
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().map(|x| x == "parquet").unwrap_or(false))
-        .collect();
-    files.sort();
-
-    let mut rows: Vec<Row> = Vec::new();
-    for path in files {
+    // List objects under the prefix (a missing prefix simply yields nothing).
+    let mut listing = store.list(Some(prefix));
+    let mut locations: Vec<StorePath> = Vec::new();
+    while let Some(item) = listing.next().await {
+        let meta = match item {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let name = meta.location.filename().unwrap_or("");
+        if !name.ends_with(".parquet") {
+            continue;
+        }
         // Partition pruning by the file's date stem.
-        if let (Some(stem), Some(sd), Some(ed)) = (path.file_stem(), start_date, end_date) {
-            if let Ok(file_date) = stem.to_string_lossy().parse::<NaiveDate>() {
+        if let (Some(sd), Some(ed)) = (start_date, end_date) {
+            let stem = name.trim_end_matches(".parquet");
+            if let Ok(file_date) = stem.parse::<NaiveDate>() {
                 if file_date < sd || file_date > ed {
                     continue;
                 }
             }
         }
-        read_file(&path, value_cols, start_us, end_us, &mut rows)?;
+        locations.push(meta.location);
+    }
+    locations.sort();
+
+    let mut rows: Vec<Row> = Vec::new();
+    for loc in locations {
+        let bytes = store
+            .get(&loc)
+            .await
+            .map_err(|e| LoaderError::Store(e.to_string()))?
+            .bytes()
+            .await
+            .map_err(|e| LoaderError::Store(e.to_string()))?;
+        parse_bytes(bytes, value_cols, start_us, end_us, &mut rows)?;
     }
     rows.sort_by_key(|(ts, _)| *ts);
     Ok(rows)
 }
 
-fn read_file(
-    path: &Path,
+fn parse_bytes(
+    bytes: Bytes,
     value_cols: &[&str],
     start_us: i64,
     end_us: i64,
     out: &mut Vec<Row>,
 ) -> Result<(), LoaderError> {
-    let file = std::fs::File::open(path).map_err(|e| LoaderError::Read(e.to_string()))?;
-    let reader = ParquetRecordBatchReaderBuilder::try_new(file)
+    let reader = ParquetRecordBatchReaderBuilder::try_new(bytes)
         .map_err(|e| LoaderError::Read(e.to_string()))?
         .build()
         .map_err(|e| LoaderError::Read(e.to_string()))?;
@@ -196,13 +244,13 @@ fn req(s: &str) -> String {
 }
 
 /// Load a [`MarketDataBundle`] from the store for the given requirements + window.
-pub fn load_bundle(
+pub async fn load_bundle(
     bundle_ref: &BundleRef,
     start: &str,
     end: &str,
     interval: &str,
 ) -> Result<MarketDataBundle, LoaderError> {
-    let root = Path::new(&bundle_ref.root);
+    let (store, base) = resolve_store(&bundle_ref.root)?;
     let start_us = parse_micros(start)?;
     let end_us = parse_micros(end)?;
     let reqs = &bundle_ref.data_requirements;
@@ -218,12 +266,18 @@ pub fn load_bundle(
     // candles
     let mut candles = Vec::new();
     for r in &reqs.candles {
-        let dir = root
-            .join("candles")
-            .join(format!("venue={}", r.venue))
-            .join(format!("symbol={}", r.symbol))
-            .join(format!("interval={interval}"));
-        let rows = read_window(&dir, &["open", "high", "low", "close", "volume"], start_us, end_us)?;
+        let prefix = child(
+            &base,
+            &[
+                "candles".to_string(),
+                format!("venue={}", r.venue),
+                format!("symbol={}", r.symbol),
+                format!("interval={interval}"),
+            ],
+        );
+        let rows =
+            read_window(&store, &prefix, &["open", "high", "low", "close", "volume"], start_us, end_us)
+                .await?;
         if rows.is_empty() {
             warnings.push(format!("no candles for {} on {} from 'parquet-store'", r.symbol, r.venue));
         }
@@ -251,8 +305,11 @@ pub fn load_bundle(
     // funding
     let mut funding = Vec::new();
     for r in &reqs.funding {
-        let dir = root.join("funding").join(format!("venue={}", r.venue)).join(format!("symbol={}", r.symbol));
-        let rows = read_window(&dir, &["rate"], start_us, end_us)?;
+        let prefix = child(
+            &base,
+            &["funding".to_string(), format!("venue={}", r.venue), format!("symbol={}", r.symbol)],
+        );
+        let rows = read_window(&store, &prefix, &["rate"], start_us, end_us).await?;
         if rows.is_empty() {
             warnings.push(format!("no funding for {} on {} from 'parquet-store'", r.symbol, r.venue));
         }
@@ -272,8 +329,8 @@ pub fn load_bundle(
     // gas
     let mut gas = Vec::new();
     for r in &reqs.gas {
-        let dir = root.join("gas").join(format!("chain={}", r.chain));
-        let rows = read_window(&dir, &["gas_usd"], start_us, end_us)?;
+        let prefix = child(&base, &["gas".to_string(), format!("chain={}", r.chain)]);
+        let rows = read_window(&store, &prefix, &["gas_usd"], start_us, end_us).await?;
         if rows.is_empty() {
             warnings.push(format!("no gas for {} from 'parquet-store'", r.chain));
         }
@@ -293,13 +350,17 @@ pub fn load_bundle(
     let mut yields = Vec::new();
     for r in &reqs.yields {
         let pool = r.pool.clone().unwrap_or_else(|| "_none".to_string());
-        let dir = root
-            .join("yields")
-            .join(format!("protocol={}", r.protocol))
-            .join(format!("asset={}", r.asset))
-            .join(format!("chain={}", r.chain))
-            .join(format!("pool={pool}"));
-        let rows = read_window(&dir, &["apr"], start_us, end_us)?;
+        let prefix = child(
+            &base,
+            &[
+                "yields".to_string(),
+                format!("protocol={}", r.protocol),
+                format!("asset={}", r.asset),
+                format!("chain={}", r.chain),
+                format!("pool={pool}"),
+            ],
+        );
+        let rows = read_window(&store, &prefix, &["apr"], start_us, end_us).await?;
         if rows.is_empty() {
             warnings.push(format!("no yields for {}/{} on {} from 'parquet-store'", r.protocol, r.asset, r.chain));
         }
