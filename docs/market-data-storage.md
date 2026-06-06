@@ -2,8 +2,12 @@
 
 The **historical series store** is the durable source of truth for deep history
 (candles, funding, gas, yields). It sits *upstream* of the per-run `BundleCache`.
-This doc is the cross-language storage contract: both the Python ingesters /
-`ParquetSource` and the future Rust loader (issue #29) read this exact layout.
+
+Per [ADR 0001](adr/0001-language-boundary.md), this store **is** the Python↔Rust
+boundary: Python ingesters **write** it and the Rust loader **reads** it — the two
+languages communicate through this data at rest, not through shared code. This doc
+is therefore the cross-language storage contract; both sides must agree on it
+exactly.
 
 ## Format & layout
 
