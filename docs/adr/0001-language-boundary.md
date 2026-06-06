@@ -61,11 +61,15 @@ Put it entirely on one side; let the other side call across a thin seam.
 
 ## Migration (incremental, each shippable — see #43)
 
-1. **Reporter → Rust** — the service returns the summarized result.
-2. **Compiler → Rust** — data-requirement extraction beside `ExecGraph`; the
+**Status: complete.** All five steps have shipped; the run path is entirely Rust.
+
+1. ✅ **Reporter → Rust** — the service returns the summarized result.
+2. ✅ **Compiler → Rust** — data-requirement extraction beside `ExecGraph`; the
    service compiles internally instead of taking `data_requirements` in the
    request (resolves #28).
-3. **API → Rust (`axum`)** — run lifecycle + preview/coverage/policy-profiles
+3. ✅ **API → Rust (`axum`)** — run lifecycle + preview/coverage/policy-profiles
    using the Rust compiler/policy directly → delete the Python policy mirror.
-4. **Orchestration + persistence → Rust** — run status + artifact store.
-5. **Retire** the Python run-path packages; Python = ingestion + analysis client.
+   (Runs are async: submit → poll → fetch, drained by a bounded worker pool.)
+4. ✅ **Orchestration + persistence → Rust** — run status + artifact store.
+5. ✅ **Retire** the Python run-path packages; Python = ingestion + analysis
+   client (`contracts` + `market-data` only).

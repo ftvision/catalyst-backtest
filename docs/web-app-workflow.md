@@ -87,14 +87,14 @@ Both screens read entirely from `backtest-result.schema.json` +
 The app shell/framework is intentionally **not** chosen in this issue. `apps/web`
 stays a placeholder until the UI implementation issue starts. The only hard
 constraint: the frontend consumes the existing JSON contracts and the
-`backtest-api` endpoints.
+`simulation-service` endpoints.
 
 ## Ready-to-file UI implementation issue
 
 > **Title:** Implement web app v1 — Run Setup + Result Review
 >
 > **Scope:** Build the two screens in [web-app-workflow.md](web-app-workflow.md)
-> against the `backtest-api` endpoints.
+> against the `simulation-service` endpoints.
 >
 > **Deliverables**
 > - Run Setup screen: graph summary, run config (range/interval/portfolio),

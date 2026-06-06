@@ -1,12 +1,11 @@
 """Market data source abstraction and a network-free fixture source.
 
 A :class:`MarketDataSource` knows how to return normalized series for the four
-data kinds the simulator needs: candles, funding, gas, and yields. The planner
-(:mod:`catalyst_market_data.planner`) asks a source for exactly the series a
-compiled graph requires.
+data kinds: candles, funding, gas, and yields. Ingesters and offline tests share
+this shape so a fixture, a live fetcher, or the Parquet store are interchangeable.
 
 :class:`FixtureSource` serves pre-baked series from memory or a directory of
-``MarketDataBundle`` JSON files, so bundles can be built entirely offline.
+``MarketDataBundle`` JSON files, for entirely offline use.
 """
 
 from __future__ import annotations
@@ -30,8 +29,7 @@ from catalyst_contracts.market_data import FundingPoint, GasPoint, YieldPoint
 class MarketDataSource(Protocol):
     """Returns normalized series for a (venue/chain, symbol/asset) over a range.
 
-    Implementations return an empty list when they have no data for a request;
-    the planner turns that into a coverage warning per the missing-data policy.
+    Implementations return an empty list when they have no data for a request.
     """
 
     name: str
