@@ -2,8 +2,15 @@
 //!
 //! Exposes `POST /simulate` (compiled inputs in, simulation trace out) and
 //! `GET /health`. The HTTP boundary uses the shared contract types end to end.
-//! This service does **no** market-data fetching — the caller supplies a fully
-//! normalized `MarketDataBundle` in the request.
+//!
+//! Market data can be supplied two ways:
+//! - **inline** — a fully normalized `market_data` bundle in the request, or
+//! - **by reference** — a `market_data_ref` (Parquet store root + data
+//!   requirements) that the service reads directly via `catalyst-market-data-loader`,
+//!   so bulk candle/funding data never crosses the wire as JSON (issue #29).
+//!
+//! The service still does no *fetching* — the by-reference path reads a
+//! pre-ingested store (issue #30).
 
 use axum::{
     http::StatusCode,
@@ -15,16 +22,21 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use catalyst_contracts::{BacktestConfig, Graph, MarketDataBundle, SimulationPolicy};
+use catalyst_market_data_loader::{load_bundle, BundleRef};
 use catalyst_simulation_engine::{run, SimulationInput};
 
-/// Body of `POST /simulate`: the same pieces the engine consumes.
+/// Body of `POST /simulate`. Provide exactly one of `market_data` (inline) or
+/// `market_data_ref` (read from the Parquet store).
 #[derive(Debug, Deserialize)]
 pub struct SimulateRequest {
     pub graph: Graph,
     pub config: BacktestConfig,
     #[serde(default = "default_policy")]
     pub policy: SimulationPolicy,
-    pub market_data: MarketDataBundle,
+    #[serde(default)]
+    pub market_data: Option<MarketDataBundle>,
+    #[serde(default)]
+    pub market_data_ref: Option<BundleRef>,
 }
 
 fn default_policy() -> SimulationPolicy {
@@ -74,11 +86,41 @@ async fn simulate(Json(body): Json<serde_json::Value>) -> Response {
         Err(e) => return error(StatusCode::BAD_REQUEST, "invalid_request", e.to_string()),
     };
 
+    // Resolve market data: inline bundle, or load from the Parquet store by ref.
+    let market_data = match (request.market_data, &request.market_data_ref) {
+        (Some(bundle), None) => bundle,
+        (None, Some(reference)) => {
+            match load_bundle(
+                reference,
+                &request.config.start,
+                &request.config.end,
+                &request.config.interval,
+            ) {
+                Ok(bundle) => bundle,
+                Err(e) => return error(StatusCode::UNPROCESSABLE_ENTITY, "data_load_error", e.to_string()),
+            }
+        }
+        (Some(_), Some(_)) => {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "provide exactly one of market_data or market_data_ref, not both",
+            )
+        }
+        (None, None) => {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "missing market data: provide market_data or market_data_ref",
+            )
+        }
+    };
+
     let input = SimulationInput {
         graph: request.graph,
         config: request.config,
         policy: request.policy,
-        market_data: request.market_data,
+        market_data,
     };
 
     match run(&input) {
