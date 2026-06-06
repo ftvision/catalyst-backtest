@@ -2,6 +2,108 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas.catalyst.dev/backtest/backtest-result.schema.json",
   "title": "Backtest Result",
-  "description": "Placeholder schema for backtest results.",
-  "type": "object"
+  "description": "User-facing backtest result produced by packages/result-reporter from a simulation trace: headline summary, equity/drawdown curves, trade log, costs breakdown, the resolved assumptions, and data coverage notes.",
+  "type": "object",
+  "required": ["schema_version", "summary", "metadata"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "default": "catalyst.backtest.result.v1" },
+    "summary": {
+      "type": "object",
+      "required": ["starting_value_usd", "final_value_usd", "pnl_usd", "return_pct"],
+      "additionalProperties": false,
+      "properties": {
+        "starting_value_usd": { "$ref": "#/$defs/decimal" },
+        "final_value_usd": { "$ref": "#/$defs/decimal" },
+        "pnl_usd": { "$ref": "#/$defs/signedDecimal" },
+        "return_pct": { "$ref": "#/$defs/signedDecimal" },
+        "max_drawdown_pct": { "$ref": "#/$defs/signedDecimal" },
+        "trade_count": { "type": "integer", "minimum": 0 },
+        "rejected_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "equity_curve": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "required": ["ts", "equity_usd"],
+        "additionalProperties": false,
+        "properties": {
+          "ts": { "type": "string", "format": "date-time" },
+          "equity_usd": { "$ref": "#/$defs/decimal" }
+        }
+      }
+    },
+    "drawdown_curve": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "required": ["ts", "drawdown_pct"],
+        "additionalProperties": false,
+        "properties": {
+          "ts": { "type": "string", "format": "date-time" },
+          "drawdown_pct": { "$ref": "#/$defs/signedDecimal" }
+        }
+      }
+    },
+    "trades": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "required": ["ts", "node_id", "kind"],
+        "additionalProperties": false,
+        "properties": {
+          "ts": { "type": "string", "format": "date-time" },
+          "node_id": { "type": "string" },
+          "kind": { "type": "string", "description": "e.g. swap, perp_open, perp_close, yield_deposit, yield_withdraw." },
+          "venue": { "type": "string" },
+          "symbol": { "type": "string" },
+          "side": { "type": "string" },
+          "price": { "$ref": "#/$defs/decimal" },
+          "amount": { "$ref": "#/$defs/decimal" },
+          "value_usd": { "$ref": "#/$defs/decimal" },
+          "fee_usd": { "$ref": "#/$defs/decimal" },
+          "gas_usd": { "$ref": "#/$defs/decimal" },
+          "status": { "type": "string", "enum": ["executed", "rejected"] },
+          "reason": { "type": "string" }
+        }
+      }
+    },
+    "final_portfolio": { "$ref": "https://schemas.catalyst.dev/backtest/simulation-trace.schema.json#/$defs/portfolio" },
+    "costs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "total_fees_usd": { "$ref": "#/$defs/decimal" },
+        "total_gas_usd": { "$ref": "#/$defs/decimal" },
+        "total_funding_usd": { "$ref": "#/$defs/signedDecimal" },
+        "total_yield_usd": { "$ref": "#/$defs/signedDecimal" }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "required": ["policy"],
+      "additionalProperties": false,
+      "properties": {
+        "policy": { "$ref": "https://schemas.catalyst.dev/backtest/simulation-policy.schema.json" },
+        "interval": { "type": "string" },
+        "start": { "type": "string", "format": "date-time" },
+        "end": { "type": "string", "format": "date-time" },
+        "data_coverage": {
+          "type": "array",
+          "default": [],
+          "items": { "type": "object" },
+          "description": "Provider/coverage notes carried through from the market data bundle."
+        },
+        "warnings": { "type": "array", "default": [], "items": { "type": "string" } }
+      }
+    }
+  },
+  "$defs": {
+    "decimal": { "type": "string", "pattern": "^[0-9]+(\\.[0-9]+)?$" },
+    "signedDecimal": { "type": "string", "pattern": "^-?[0-9]+(\\.[0-9]+)?$" }
+  }
 }

@@ -2,6 +2,68 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas.catalyst.dev/backtest/backtest-request.schema.json",
   "title": "Backtest Request",
-  "description": "Placeholder schema for backtest requests.",
-  "type": "object"
+  "description": "User-facing request to run a backtest: a Catalyst graph, a policy selection, and run configuration (time range, interval, initial portfolio, execution overrides).",
+  "type": "object",
+  "required": ["graph", "config"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "default": "catalyst.backtest.request.v1"
+    },
+    "graph": {
+      "$ref": "https://schemas.catalyst.dev/backtest/graph.schema.json"
+    },
+    "policy": {
+      "type": "object",
+      "description": "Either a bare profile selector ({\"profile\": \"strict_v1\"}) or a fully resolved policy object matching simulation-policy.schema.json.",
+      "properties": {
+        "profile": {
+          "type": "string",
+          "enum": ["strict_v1", "conservative_v1", "research_v1"],
+          "default": "strict_v1"
+        }
+      }
+    },
+    "config": { "$ref": "#/$defs/config" }
+  },
+  "$defs": {
+    "decimal": {
+      "type": "string",
+      "pattern": "^[0-9]+(\\.[0-9]+)?$"
+    },
+    "config": {
+      "type": "object",
+      "required": ["start", "end", "interval", "initial_portfolio"],
+      "additionalProperties": false,
+      "properties": {
+        "start": { "type": "string", "format": "date-time" },
+        "end": { "type": "string", "format": "date-time" },
+        "interval": {
+          "type": "string",
+          "enum": ["1m", "5m", "15m", "1h", "4h", "1d"],
+          "description": "Bar granularity for the simulation."
+        },
+        "initial_portfolio": {
+          "type": "object",
+          "description": "Starting balances keyed by venue/chain, then by asset symbol, with decimal-string amounts.",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": { "$ref": "#/$defs/decimal" }
+          }
+        },
+        "execution": {
+          "type": "object",
+          "description": "Optional per-run overrides layered on top of the selected policy profile.",
+          "additionalProperties": false,
+          "properties": {
+            "signal_trigger": { "type": "string", "enum": ["level", "crossing", "crossing_with_cooldown", "once_per_backtest"] },
+            "slippage_bps": { "$ref": "#/$defs/decimal" },
+            "gas_model": { "type": "string", "enum": ["none", "fixed_usd", "fixed_native", "historical_fee_history", "historical"] },
+            "action_cooldown": { "type": ["string", "null"] }
+          }
+        }
+      }
+    }
+  }
 }

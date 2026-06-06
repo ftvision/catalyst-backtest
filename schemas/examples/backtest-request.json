@@ -1,0 +1,39 @@
+{
+  "schema_version": "catalyst.backtest.request.v1",
+  "graph": {
+    "schema_version": "catalyst.graph.definition.v1",
+    "nodes": [
+      {
+        "id": "eth-below-1800",
+        "kind": "signal",
+        "subtype": "price_threshold",
+        "config": { "symbol": "ETH", "operator": "<", "threshold": "1800" },
+        "enabled": true
+      },
+      {
+        "id": "buy-eth-on-base",
+        "kind": "action",
+        "subtype": "swap",
+        "config": { "from_asset": "USDC", "to_asset": "ETH", "amount": "100", "chain": "base" },
+        "enabled": true
+      }
+    ],
+    "edges": [{ "from": "eth-below-1800", "to": "buy-eth-on-base" }]
+  },
+  "policy": { "profile": "strict_v1" },
+  "config": {
+    "start": "2024-01-01T00:00:00Z",
+    "end": "2024-06-01T00:00:00Z",
+    "interval": "1h",
+    "initial_portfolio": {
+      "base": { "USDC": "1000" },
+      "hyperliquid": { "USDC": "1000" }
+    },
+    "execution": {
+      "signal_trigger": "crossing",
+      "slippage_bps": "10",
+      "gas_model": "historical",
+      "action_cooldown": "1h"
+    }
+  }
+}

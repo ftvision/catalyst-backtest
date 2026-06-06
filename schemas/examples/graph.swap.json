@@ -1,0 +1,20 @@
+{
+  "schema_version": "catalyst.graph.definition.v1",
+  "variables": {},
+  "settings": {},
+  "nodes": [
+    {
+      "id": "buy-eth-on-base",
+      "kind": "action",
+      "subtype": "swap",
+      "config": {
+        "from_asset": "USDC",
+        "to_asset": "ETH",
+        "amount": "100",
+        "chain": "base"
+      },
+      "enabled": true
+    }
+  ],
+  "edges": []
+}

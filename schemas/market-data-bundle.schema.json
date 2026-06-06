@@ -2,6 +2,154 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas.catalyst.dev/backtest/market-data-bundle.schema.json",
   "title": "Market Data Bundle",
-  "description": "Placeholder schema for normalized market data bundles.",
-  "type": "object"
+  "description": "Normalized, simulation-ready market data produced by packages/market-data and consumed by the Rust simulation engine. The engine never fetches raw data; it only reads this bundle.",
+  "type": "object",
+  "required": ["schema_version", "interval", "start", "end"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "default": "catalyst.backtest.market_data_bundle.v1" },
+    "interval": { "type": "string", "enum": ["1m", "5m", "15m", "1h", "4h", "1d"] },
+    "start": { "type": "string", "format": "date-time" },
+    "end": { "type": "string", "format": "date-time" },
+    "candles": {
+      "type": "array",
+      "default": [],
+      "items": { "$ref": "#/$defs/candleSeries" }
+    },
+    "funding": {
+      "type": "array",
+      "default": [],
+      "items": { "$ref": "#/$defs/fundingSeries" }
+    },
+    "gas": {
+      "type": "array",
+      "default": [],
+      "items": { "$ref": "#/$defs/gasSeries" }
+    },
+    "yields": {
+      "type": "array",
+      "default": [],
+      "items": { "$ref": "#/$defs/yieldSeries" }
+    },
+    "providers": {
+      "type": "array",
+      "default": [],
+      "description": "Provenance for each data source used to build this bundle.",
+      "items": { "$ref": "#/$defs/provider" }
+    },
+    "warnings": {
+      "type": "array",
+      "default": [],
+      "items": { "type": "string" }
+    }
+  },
+  "$defs": {
+    "decimal": { "type": "string", "pattern": "^-?[0-9]+(\\.[0-9]+)?$" },
+    "candleSeries": {
+      "type": "object",
+      "required": ["venue", "symbol", "points"],
+      "additionalProperties": false,
+      "properties": {
+        "venue": { "type": "string", "description": "e.g. hyperliquid or base." },
+        "symbol": { "type": "string" },
+        "quote": { "type": "string", "default": "USD" },
+        "points": { "type": "array", "items": { "$ref": "#/$defs/candle" } }
+      }
+    },
+    "candle": {
+      "type": "object",
+      "required": ["ts", "open", "high", "low", "close"],
+      "additionalProperties": false,
+      "properties": {
+        "ts": { "type": "string", "format": "date-time" },
+        "open": { "$ref": "#/$defs/decimal" },
+        "high": { "$ref": "#/$defs/decimal" },
+        "low": { "$ref": "#/$defs/decimal" },
+        "close": { "$ref": "#/$defs/decimal" },
+        "volume": { "$ref": "#/$defs/decimal" }
+      }
+    },
+    "fundingSeries": {
+      "type": "object",
+      "required": ["venue", "symbol", "points"],
+      "additionalProperties": false,
+      "properties": {
+        "venue": { "type": "string" },
+        "symbol": { "type": "string" },
+        "points": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["ts", "rate"],
+            "additionalProperties": false,
+            "properties": {
+              "ts": { "type": "string", "format": "date-time" },
+              "rate": { "$ref": "#/$defs/decimal" }
+            }
+          }
+        }
+      }
+    },
+    "gasSeries": {
+      "type": "object",
+      "required": ["chain", "points"],
+      "additionalProperties": false,
+      "properties": {
+        "chain": { "type": "string" },
+        "points": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["ts", "gas_usd"],
+            "additionalProperties": false,
+            "properties": {
+              "ts": { "type": "string", "format": "date-time" },
+              "gas_usd": { "$ref": "#/$defs/decimal" }
+            }
+          }
+        }
+      }
+    },
+    "yieldSeries": {
+      "type": "object",
+      "required": ["protocol", "asset", "chain", "points"],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": { "type": "string" },
+        "pool": { "type": "string" },
+        "asset": { "type": "string" },
+        "chain": { "type": "string" },
+        "points": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["ts", "apr"],
+            "additionalProperties": false,
+            "properties": {
+              "ts": { "type": "string", "format": "date-time" },
+              "apr": { "$ref": "#/$defs/decimal" }
+            }
+          }
+        }
+      }
+    },
+    "provider": {
+      "type": "object",
+      "required": ["name", "kind"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "description": "e.g. hyperliquid, defillama, aave, fixture." },
+        "kind": { "type": "string", "enum": ["candles", "funding", "gas", "yields"] },
+        "coverage": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "start": { "type": "string", "format": "date-time" },
+            "end": { "type": "string", "format": "date-time" },
+            "complete": { "type": "boolean" }
+          }
+        }
+      }
+    }
+  }
 }
