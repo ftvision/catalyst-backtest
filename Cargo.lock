@@ -106,6 +106,13 @@ dependencies = [
 [[package]]
 name = "catalyst-execution-models"
 version = "0.1.0"
+dependencies = [
+ "catalyst-contracts",
+ "catalyst-portfolio-ledger",
+ "catalyst-simulation-policies",
+ "rust_decimal",
+ "serde",
+]
 
 [[package]]
 name = "catalyst-portfolio-ledger"
