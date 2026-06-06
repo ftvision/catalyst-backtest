@@ -70,7 +70,9 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
         parse_ts(&input.config.end).ok_or_else(|| EngineError::Config("bad end timestamp".into()))?;
 
     let index = BundleIndex::build(&input.market_data);
-    let exec_graph = ExecGraph::from_graph(&input.graph);
+    let compiled = catalyst_graph_compiler::compile(&input.graph)
+        .map_err(|e| EngineError::Config(format!("graph did not compile: {e}")))?;
+    let exec_graph = ExecGraph::from_compiled(&compiled);
 
     let allow_negative = policy.insufficient_balance == InsufficientBalance::AllowNegative;
     let mut ledger = initial_ledger(&input.config, allow_negative);
