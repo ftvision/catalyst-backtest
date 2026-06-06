@@ -40,7 +40,8 @@ pub struct Node {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Edge {
-    #[serde(rename = "from")]
+    // `from` is a valid Rust identifier (not a keyword), so it serializes as
+    // "from" with no rename needed — unlike `Event.type`/`SimulationPolicy.yield`.
     pub from: String,
     pub to: String,
 }
