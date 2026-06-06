@@ -30,6 +30,11 @@ dependencies = [
 [[package]]
 name = "catalyst-simulation-policies"
 version = "0.1.0"
+dependencies = [
+ "catalyst-contracts",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "catalyst-simulation-service"
