@@ -1,42 +1,14 @@
 # catalyst-market-data
 
-Fetches, normalizes, and caches the historical data a compiled graph needs, and
-emits a `catalyst_contracts.MarketDataBundle` for the simulation engine. The
-engine never fetches raw data — it only reads the bundle this package produces.
+The **ingestion** side of Catalyst. Per
+[ADR 0001](../../docs/adr/0001-language-boundary.md) the deterministic run path is
+Rust; this package fetches historical data from external sources and writes it to
+the **Parquet store** that the Rust service reads (`catalyst-market-data-loader`).
+Python no longer assembles bundles for the engine — it only fills the store.
 
-## Pipeline
-
-```python
-from catalyst_graph_compiler import compile_graph
-from catalyst_market_data import build_bundle, FixtureSource
-
-compiled = compile_graph(raw_graph)
-bundle = build_bundle(
-    compiled,
-    start=start, end=end, interval="1h",
-    source=FixtureSource.from_file("eth_2h.json"),  # offline
-)
-```
-
-`build_bundle` reads `compiled.data_requirements` and asks the source for exactly
-those candle / funding / gas / yield series, then records provider metadata,
-per-series coverage, and warnings.
-
-## Sources
-
-A `MarketDataSource` returns normalized series for the four data kinds. Provided
-implementations:
-
-| Source | Role |
-| --- | --- |
-| `FixtureSource` | Fully offline; serves a pre-baked bundle (used by tests and deterministic runs). |
-| `HyperliquidSource` | Real Hyperliquid `info` API candles + funding; HTTP is **injected** via a `Transport`. |
-| `CallableGasSource` / `CallableYieldSource` | Thin abstractions normalizing an injected fetch callable (Base RPC gas, Aave subgraph yields). |
-| `CompositeSource` | Routes each kind to a dedicated source (HL candles/funding, EVM gas, Aave yields). |
-| `ParquetSource` | Reads the **historical Parquet store** for deep history (see below). |
-
-Network access is always injected. The default transport (`NetworkDisabledTransport`)
-refuses to make calls, so fixture-backed runs are guaranteed offline.
+Network access is always **injected**. The default transport
+(`NetworkDisabledTransport`) refuses to make calls, so fetchers run entirely
+offline against fixtures / fake transports in tests.
 
 ## Historical store (deep history)
 
@@ -53,9 +25,12 @@ store = ParquetStore("data/market-data")
 ingest_binance(store, venue="hyperliquid", symbol="ETH", binance_symbol="ETHUSDT",
                interval="1h", start=start, end=end, transport=httpx_transport())
 
-# Read them back as a MarketDataSource:
+# Read them back (e.g. for analysis):
 src = ParquetSource("data/market-data", start, end, "1h")
+candles = src.candles("hyperliquid", "ETH")
 ```
+
+The Rust service reads the same store directly at run time (issue #29).
 
 ### Ingesters / CLI
 
@@ -84,30 +59,29 @@ python -m catalyst_market_data.cli ingest-gas \
   --start 2024-01-01T00:00:00Z --end 2024-02-01T00:00:00Z
 ```
 
-`ParquetSource` plugs into `build_bundle` like any other source — the engine is
-unchanged. The Rust loader (issue #29) reads the same store directly.
-
 > **Gas caveat:** free historical Base gas isn't available (`eth_feeHistory` is
 > recent-only; archival is Dune/BigQuery). `ingest-gas` offers a *real recent*
 > RPC mode and a *flat-estimate* backfill for historical windows. Treat backtest
 > gas as an approximation.
 
-## Missing-data handling
+## Fetch sources
 
-Explicit and policy-compatible — the planner never silently drops a required
-series:
+Ingesters fetch through small source/transport abstractions that normalize to the
+`catalyst_contracts` series types before writing the store:
 
-- `missing="warn"` (default): empty required series → warning + `incomplete`
-  coverage flag.
-- `missing="fail"`: empty required series → `MissingDataError`.
-
-The simulation policy's `data.missing_required` selects which to use.
+| Source | Role |
+| --- | --- |
+| `HyperliquidSource` | Real Hyperliquid `info` API candles + funding; HTTP is **injected** via a `Transport`. |
+| `CallableGasSource` / `CallableYieldSource` | Normalize an injected fetch callable (Base RPC gas, Aave yields). |
+| `CompositeSource` | Routes each kind to a dedicated source. |
+| `FixtureSource` | Fully offline; serves a pre-baked bundle (used by tests). |
+| `ParquetSource` | Reads the historical Parquet store back as normalized series. |
 
 ## Cache
 
 `BundleCache` reads/writes `MarketDataBundle` JSON under a cache root
 (`data/market-data/` by default), keyed by `bundle_key(...)` — a stable hash of
-range + interval + requirements.
+range + interval + requirements. Useful for local analysis workflows.
 
 ## Tests
 
@@ -115,6 +89,6 @@ range + interval + requirements.
 uv run pytest packages/market-data
 ```
 
-All tests are network-free: bundle assembly per graph family, missing-data
-behavior, Hyperliquid request building/parsing via a fake transport, composite
-routing, and cache round-trips.
+All tests are network-free: Parquet store round-trips + window/partition reads,
+the Binance/Aave/gas ingesters via fake transports, Hyperliquid request
+building/parsing, composite routing, source lookups, and cache round-trips.

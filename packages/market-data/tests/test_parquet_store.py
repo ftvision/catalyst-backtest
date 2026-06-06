@@ -8,11 +8,9 @@ import pytest
 
 from catalyst_contracts import Candle
 from catalyst_contracts.market_data import FundingPoint, GasPoint, YieldPoint
-from catalyst_graph_compiler import compile_graph
 from catalyst_market_data import (
     ParquetSource,
     ParquetStore,
-    build_bundle,
     fetch_klines,
     ingest_binance,
 )
@@ -85,42 +83,6 @@ def test_coverage(tmp_path) -> None:
     store.write_candles("base", "ETH", "1h", [candle(1, 0, "2000"), candle(3, 5, "2100")])
     cov = store.coverage(store._candle_dir("base", "ETH", "1h"))
     assert cov == (dt(1, 0), dt(3, 5))
-
-
-# --- integrates with the planner like any other source ---
-
-
-def test_build_bundle_from_parquet_source(tmp_path) -> None:
-    store = ParquetStore(tmp_path)
-    store.write_candles("base", "ETH", "1h", [candle(1, 0, "2000"), candle(1, 1, "2010")])
-    store.write_gas("base", [GasPoint(ts=dt(1, 0), gas_usd="0.02")])
-    graph = {
-        "nodes": [
-            {
-                "id": "buy",
-                "kind": "action",
-                "subtype": "swap",
-                "config": {
-                    "from_asset": "USDC",
-                    "to_asset": "ETH",
-                    "amount": "100",
-                    "chain": "base",
-                },
-            }
-        ],
-        "edges": [],
-    }
-    bundle = build_bundle(
-        compile_graph(graph),
-        start=dt(1, 0),
-        end=dt(1, 2),
-        interval="1h",
-        source=ParquetSource(tmp_path, dt(1, 0), dt(1, 2), "1h"),
-    )
-    assert {(s.venue, s.symbol) for s in bundle.candles} == {("base", "ETH")}
-    assert bundle.candles[0].points
-    assert bundle.warnings == []
-    assert all(p.name == "parquet-store" for p in bundle.providers)
 
 
 # --- Binance ingester (offline via fake transport) ---

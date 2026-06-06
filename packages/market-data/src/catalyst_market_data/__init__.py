@@ -1,11 +1,14 @@
 """Market data package for Catalyst backtesting.
 
-Fetches, normalizes, and caches the historical data a compiled graph requires,
-emitting a ``catalyst_contracts.MarketDataBundle`` the simulation engine reads.
+Per [ADR 0001] this package is the **ingestion** side of the system: it fetches
+historical data from external sources (Binance, DefiLlama, EVM gas, Hyperliquid)
+and writes it to the Parquet store. The Rust service reads that store directly
+(`catalyst-market-data-loader`); the run path no longer touches Python.
 
-The engine never fetches raw data; it only consumes the normalized bundle this
-package produces. Network access is injected (see :mod:`live`), so bundles can be
-built entirely offline from fixtures.
+Network access is injected (see :mod:`live`), so fetchers run entirely offline
+against fixtures/fake transports in tests.
+
+[ADR 0001]: ../../../docs/adr/0001-language-boundary.md
 """
 
 from __future__ import annotations
@@ -29,15 +32,12 @@ from .evm_gas import (
     ingest_recent_gas,
 )
 from .parquet_store import ParquetSource, ParquetStore
-from .planner import MissingDataError, build_bundle
 from .sources import FixtureSource, MarketDataSource
 
 __version__ = "0.1.0"
 
 __all__ = [
     "__version__",
-    "build_bundle",
-    "MissingDataError",
     "MarketDataSource",
     "FixtureSource",
     "HyperliquidSource",

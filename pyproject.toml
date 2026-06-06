@@ -13,11 +13,7 @@ dev = [
   "referencing>=0.34",
   "httpx>=0.27",
   "catalyst-contracts",
-  "catalyst-graph-compiler",
   "catalyst-market-data",
-  "catalyst-result-reporter",
-  "catalyst-backtest-worker",
-  "catalyst-backtest-api",
 ]
 
 [tool.uv.workspace]
@@ -27,11 +23,7 @@ members = [
 
 [tool.uv.sources]
 catalyst-contracts = { workspace = true }
-catalyst-graph-compiler = { workspace = true }
 catalyst-market-data = { workspace = true }
-catalyst-result-reporter = { workspace = true }
-catalyst-backtest-worker = { workspace = true }
-catalyst-backtest-api = { workspace = true }
 
 [tool.ruff]
 line-length = 100

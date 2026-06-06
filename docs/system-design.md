@@ -24,7 +24,7 @@ Out of scope for the first version:
 - order-book level execution
 - runtime language switching
 
-## Language boundary (ADR 0001 — target architecture)
+## Language boundary (ADR 0001)
 
 The deterministic **service/run path is Rust**; **Python is a client + data
 plumbing only**. See [adr/0001-language-boundary.md](adr/0001-language-boundary.md).
@@ -59,11 +59,12 @@ flowchart LR
 
 This resolves the duplication in #28 and the JSON-bundle boundary in #29.
 
-> **Current vs target.** The sections below describe the system as a Python
-> orchestrator (`backtest-api`/`backtest-worker`) calling a Rust simulation
-> service. That is the **current, transitional** layout; the run path is being
-> moved to Rust per ADR 0001 (migration tracked in #43). Treat the Python
-> orchestration/compiler/reporter boxes as transitional.
+> **Migration complete (#43).** The run path now lives entirely in Rust. The
+> Python run-path packages (`graph-compiler`, `result-reporter`, `backtest-worker`,
+> `backtest-api`) have been retired; their behavior is provided by the
+> `crates/graph-compiler`, `crates/result-reporter`, and `crates/simulation-service`
+> crates. Python keeps only `contracts` (data shapes) and `market-data`
+> (ingestion). The descriptions below reflect that end state.
 
 ## Repository Shape
 
@@ -79,19 +80,18 @@ catalyst-backtest/
 
   crates/
     contracts/
+    graph-compiler/
     simulation-policies/
     portfolio-ledger/
     execution-models/
+    market-data-loader/
     simulation-engine/
+    result-reporter/
     simulation-service/
 
   packages/
     contracts/
-    graph-compiler/
     market-data/
-    backtest-worker/
-    backtest-api/
-    result-reporter/
 
   apps/
     web/
@@ -111,27 +111,24 @@ suffixes are needed because the folder tells us the implementation language.
 
 ```mermaid
 flowchart LR
-  Client["Client<br/>Catalyst app, CLI, or web UI"] --> API["packages/backtest-api<br/>Python FastAPI"]
+  Client["Client<br/>Catalyst app, CLI, or web UI"] -->|HTTP| SimSvc["crates/simulation-service<br/>Rust Axum (async job queue)"]
+  Ingest["packages/market-data<br/>Python ingestion"] -->|writes| Store["Parquet market-data store"]
 
-  API --> Compiler["packages/graph-compiler<br/>Python"]
-  Compiler --> Planner["packages/market-data<br/>Data planner + fetcher"]
-  Planner --> Cache["Market data cache<br/>Parquet / DuckDB"]
-
-  API --> Worker["packages/backtest-worker<br/>Python"]
-  Worker --> Cache
-  Worker -->|HTTP POST /simulate| SimSvc["crates/simulation-service<br/>Rust Axum"]
-
+  SimSvc --> Compiler["crates/graph-compiler"]
+  SimSvc --> Loader["crates/market-data-loader<br/>(object_store)"]
+  Loader -->|reads| Store
   SimSvc --> Engine["crates/simulation-engine"]
   Engine --> Policy["crates/simulation-policies"]
   Engine --> Ledger["crates/portfolio-ledger"]
   Engine --> Exec["crates/execution-models"]
-
-  SimSvc --> Worker
-  Worker --> Reporter["packages/result-reporter<br/>Python"]
-  Reporter --> Store["Result store<br/>JSON / Parquet / Postgres later"]
-  Store --> API
-  API --> Client
+  SimSvc --> Reporter["crates/result-reporter"]
+  SimSvc --> Runs["In-memory run index<br/>(submit → poll → fetch)"]
 ```
+
+A backtest is submitted to the service, which enqueues it; a bounded worker pool
+compiles the graph, loads market data from the Parquet store, runs the engine,
+and summarizes — all in-process, no internal HTTP hop. Clients poll status and
+fetch the result when it's ready.
 
 ## Package Responsibilities
 
@@ -172,9 +169,10 @@ Likely tools:
 - `serde_json`
 - `schemars`, if Rust should emit schemas later
 
-### `packages/graph-compiler`
+### `crates/graph-compiler`
 
-Validates and normalizes Catalyst graphs.
+Validates and normalizes Catalyst graphs. The simulation engine and service
+consume it directly (resolving the duplication in #28).
 
 Responsibilities:
 
@@ -184,7 +182,7 @@ Responsibilities:
 - identify initial actions
 - identify signal-driven actions
 - normalize action configs into typed internal operations
-- produce data requirements for the market-data package
+- produce data requirements for the market-data loader
 
 Open semantic decisions:
 
@@ -193,65 +191,40 @@ Open semantic decisions:
 - how action-to-action edges should delay or sequence actions
 - how to handle multiple incoming edges
 
-### `packages/market-data`
+### `packages/market-data` (Python — ingestion)
 
-Fetches and caches data needed to run the graph.
-
-Responsibilities:
-
-- inspect compiled graph data requirements
-- fetch Hyperliquid candles/funding/metadata
-- fetch EVM token prices
-- fetch EVM gas data
-- fetch Aave/Base yield rates
-- normalize data into a simulation-friendly bundle
-- cache fetched data locally
-
-Initial data sources:
-
-- Hyperliquid official API for spot/perp candles and funding
-- DefiLlama for fallback token prices and yield data
-- Aave subgraphs for reserve/yield rates
-- Base/EVM RPC for gas/block data
-- DEX subgraphs later for pool-level swap execution
-
-### `packages/backtest-worker`
-
-Coordinates a backtest run.
+Fetches historical data from external sources and writes it to the Parquet store.
+It does **not** run graphs or assemble bundles for the engine (that's the loader's
+job); it only fills the durable store.
 
 Responsibilities:
 
-- receive validated request from API
-- call graph compiler
-- call market-data planner/fetcher
-- call Rust simulation service over HTTP
-- persist raw simulation trace
-- call result reporter
-- persist final result artifacts
+- fetch candles (Binance klines reference), funding (Hyperliquid), gas (EVM RPC),
+  and yields (DefiLlama/Aave)
+- normalize to the `catalyst_contracts` series types
+- write partitioned Parquet to the historical store (incremental, merge-by-ts)
+
+Data sources:
+
+- Binance klines for deep, free, keyless candle history
+- Hyperliquid official API for recent spot/perp candles and funding
+- DefiLlama for Aave yield history
+- Base/EVM RPC (`eth_feeHistory`) for recent gas, with flat-estimate backfill
+
+### `crates/market-data-loader`
+
+Reads the Parquet store for the run path (#29). Given a compiled graph's data
+requirements and a window, it loads exactly the required series via `object_store`
+(local / `s3://` / `gs://`) and returns a `MarketDataBundle` for the engine. The
+engine never fetches raw data.
 
 ### `crates/simulation-service`
 
-HTTP wrapper around the Rust simulation engine.
-
-First endpoint:
-
-```http
-POST /simulate
-```
-
-Input:
-
-- compiled graph
-- backtest config
-- normalized market data bundle
-- initial portfolio
-
-Output:
-
-- simulation trace
-- final portfolio
-- event list
-- error/warning list
+The user-facing HTTP API and orchestrator (Axum). Backtests are **asynchronous**:
+submit enqueues a job; a bounded worker pool compiles → loads data → runs the
+engine → summarizes in-process (CPU work on `spawn_blocking`); clients poll status
+and fetch the result. A low-level `POST /simulate` (inputs in, raw trace out) is
+also exposed for direct engine access. See the [service README](../crates/simulation-service/README.md).
 
 ### `crates/simulation-engine`
 
@@ -319,9 +292,9 @@ Initial models:
 - EVM swap with price + fee + slippage + gas approximation
 - Aave-style yield deposit/withdraw with rate accrual
 
-### `packages/result-reporter`
+### `crates/result-reporter`
 
-Turns raw trace into user-facing results.
+Turns raw trace into user-facing results (called in-process by the service).
 
 Responsibilities:
 
@@ -336,28 +309,29 @@ Responsibilities:
 
 ## Request Flow
 
+All in one Rust service; ingestion (Python) runs out-of-band, writing the store.
+
 ```mermaid
 sequenceDiagram
   participant C as Client
-  participant A as Backtest API
-  participant G as Graph Compiler
-  participant D as Market Data
-  participant W as Worker
-  participant S as Rust Simulation Service
-  participant R as Result Reporter
+  participant S as simulation-service (Axum)
+  participant Q as Job queue + worker pool
+  participant G as graph-compiler
+  participant L as market-data-loader
+  participant E as simulation-engine
+  participant R as result-reporter
 
-  C->>A: POST /backtests
-  A->>G: validate + compile graph
-  G-->>A: compiled graph + data requirements
-  A->>W: enqueue run
-  W->>D: fetch normalized market data
-  D-->>W: market data bundle
-  W->>S: POST /simulate
-  S-->>W: simulation trace
-  W->>R: summarize trace
-  R-->>W: backtest result
-  W-->>A: persist result
-  C->>A: GET /backtests/{id}
+  C->>S: POST /backtests
+  S->>Q: enqueue job
+  S-->>C: 202 {id, status: "queued"}
+  Q->>G: compile graph
+  Q->>L: load required series (Parquet store)
+  Q->>E: run (spawn_blocking)
+  E-->>Q: simulation trace
+  Q->>R: summarize trace
+  R-->>Q: backtest result (stored)
+  C->>S: GET /backtests/{id} (poll → succeeded)
+  C->>S: GET /backtests/{id}/result
 ```
 
 ## First API Shape
