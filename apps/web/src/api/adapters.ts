@@ -196,6 +196,18 @@ export function marketReplayWithMarketData(
     close: numberValue(point.close),
     volume: numberValue(point.volume),
   }));
+  const replay = candles.map((_, index) => {
+    const existing = current.replay[index] ?? current.replay.at(-1) ?? {
+      equity: 0,
+      drawdown: 0,
+      gas: 0,
+      funding: 0,
+    };
+    return {
+      ...existing,
+      label: `T${String(index + 1).padStart(2, "0")}`,
+    };
+  });
 
   return {
     ...current,
@@ -203,6 +215,7 @@ export function marketReplayWithMarketData(
     venue: candleSeries.venue,
     period: `${shortDate(marketData.start)} - ${shortDate(marketData.end)}`,
     candles,
+    replay,
     evidence: [
       ["Data source", marketData.providers?.[0]?.name ? String(marketData.providers[0].name) : "market-data window"],
       ["Candle series", `${candleSeries.venue} ${candleSeries.symbol}`],

@@ -142,6 +142,7 @@ export function MarketReplayChart({
     });
 
     if (!compact) {
+      const replayWindow = replay.slice(0, candles.length);
       const equitySeries = chart.addSeries(
         LineSeries,
         {
@@ -158,10 +159,10 @@ export function MarketReplayChart({
         1,
       );
       equitySeries.setData(
-        replay.map((point, index) => ({
-          time: candles[index].time,
+        replayWindow.map((point, index) => ({
+          time: candles[index]?.time,
           value: point.equity,
-        })),
+        })).filter((point): point is { time: UTCTimestamp; value: number } => point.time !== undefined),
       );
 
       const drawdownSeries = chart.addSeries(
@@ -179,11 +180,11 @@ export function MarketReplayChart({
         2,
       );
       drawdownSeries.setData(
-        replay.map((point, index) => ({
-          time: candles[index].time,
+        replayWindow.map((point, index) => ({
+          time: candles[index]?.time,
           value: point.drawdown,
           color: "#8b5cf680",
-        })),
+        })).filter((point): point is { time: UTCTimestamp; value: number; color: string } => point.time !== undefined),
       );
 
     }
