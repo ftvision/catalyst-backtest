@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActionIcon,
   Badge,
@@ -156,7 +156,7 @@ function compatibleMarketItem(graph: CatalystGraph, catalog: MarketDataCatalogIt
 }
 
 export function App() {
-  const [activeRoute, setActiveRoute] = useState<RouteId>("replay");
+  const [activeRoute, setActiveRoute] = useState<RouteId>("setup");
   const [selectedEventId, setSelectedEventId] = useState(marketReplay.selectedEventId);
   const [apiStatus, setApiStatus] = useState<ApiStatus>("checking");
   const [apiMessage, setApiMessage] = useState(`Checking ${catalystApi.baseUrl}`);
@@ -189,6 +189,7 @@ export function App() {
     historyItems: [],
   });
   const clipboard = useClipboard({ timeout: 900 });
+  const hydrationSeq = useRef(0);
 
   const selectedEvent = useMemo(
     () => workbench.marketReplay.events.find((event) => event.id === selectedEventId),
@@ -237,26 +238,15 @@ export function App() {
     profiles?: Array<{ id: string; label?: string }>;
     marketDataId?: string;
   }) {
+    const sequence = hydrationSeq.current + 1;
+    hydrationSeq.current = sequence;
     const sourceLabel = input.sourceMode === "store" ? "Parquet store" : "Inline fallback";
     const [profiles, preview] = await Promise.all([
       input.profiles ? Promise.resolve({ items: input.profiles }) : catalystApi.listPolicyProfiles(),
       catalystApi.previewGraph(input.graph, { profile: input.policyProfile }),
     ]);
-    const coverage = await catalystApi.checkCoverage({
-      graph: input.graph,
-      start: input.config.start,
-      end: input.config.end,
-      interval: input.config.interval,
-      ...(input.sourceMode === "inline" ? { market_data: input.marketData } : {}),
-    }).catch<CoverageResponse>((error) => ({
-      coverage: [],
-      warnings: [errorMessage(error)],
-    }));
-    const coverageWithMarketWarnings: CoverageResponse = {
-      ...coverage,
-      warnings: mergeWarnings(coverage.warnings, input.marketData.warnings),
-    };
     const history = await catalystApi.listBacktests(preview.graph_hash);
+    if (sequence !== hydrationSeq.current) return;
 
     setDataSourceMode(input.sourceMode);
     setActiveGraph(input.graph);
@@ -283,7 +273,6 @@ export function App() {
         config: input.config,
         policyProfile: input.policyProfile,
         dataSourceLabel: sourceLabel,
-        coverage: coverageWithMarketWarnings,
         preview,
         profiles: profiles.items,
       }),
@@ -291,7 +280,41 @@ export function App() {
       historyItems: history.items,
     }));
     setApiStatus("healthy");
-    setApiMessage(`Connected to ${catalystApi.baseUrl} / ${sourceLabel}`);
+    setApiMessage(`Connected to ${catalystApi.baseUrl} / ${sourceLabel}; checking coverage`);
+
+    const coverageRequest = {
+      graph: input.graph,
+      start: input.config.start,
+      end: input.config.end,
+      interval: input.config.interval,
+      ...(input.sourceMode === "inline" ? { market_data: input.marketData } : {}),
+    };
+    void catalystApi
+      .checkCoverage(coverageRequest)
+      .then((coverage) => {
+        if (sequence !== hydrationSeq.current) return;
+        const coverageWithMarketWarnings: CoverageResponse = {
+          ...coverage,
+          warnings: mergeWarnings(coverage.warnings, input.marketData.warnings),
+        };
+        setWorkbench((current) => ({
+          ...current,
+          setup: setupFromService({
+            graph: input.graph,
+            config: input.config,
+            policyProfile: input.policyProfile,
+            dataSourceLabel: sourceLabel,
+            coverage: coverageWithMarketWarnings,
+            preview,
+            profiles: profiles.items,
+          }),
+        }));
+        setApiMessage(`Connected to ${catalystApi.baseUrl} / ${sourceLabel}`);
+      })
+      .catch((error) => {
+        if (sequence !== hydrationSeq.current) return;
+        setApiMessage(`Coverage check delayed: ${errorMessage(error)}`);
+      });
   }
 
   async function hydrateWithMarketItem(input: {
@@ -306,16 +329,10 @@ export function App() {
   }) {
     const config = configFromMarketItem(input.baseConfig, input.marketItem);
     if (input.marketItem || input.sourceMode === "store") {
-      const marketData = await catalystApi.loadMarketDataWindow({
-        graph: input.graph,
-        start: config.start,
-        end: config.end,
-        interval: config.interval,
-      }).catch((error) => emptyMarketData(config, [errorMessage(error)]));
       await hydrateWorkbench({
         graph: input.graph,
         config,
-        marketData,
+        marketData: emptyMarketData(config),
         policyProfile: input.policyProfile,
         strategyId: input.strategyId,
         strategyTitle: input.strategyTitle,

@@ -75,6 +75,7 @@ export interface MarketDataCatalogItem {
   interval?: string;
   start?: string | null;
   end?: string | null;
+  missing_date_ranges?: Array<{ start: string; end: string }>;
   files?: number;
   points?: number;
 }

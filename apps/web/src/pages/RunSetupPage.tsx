@@ -297,16 +297,22 @@ export function RunSetupPage({
             </SimpleGrid>
           </SetupModule>
 
-          <SetupModule title="Recent runs" subtitle="Short history for this graph. Full history lives in Simulation History." status={runHistory.length ? "success" : "warning"}>
-            <DataTable
-              columns={["Run", "Policy", "Range", "Return"]}
-              rows={runHistory.slice(0, 5).map((run) => [
-                <span className="mono">{run.id}</span>,
-                run.policy,
-                run.range,
-                run.returnUsd,
-              ])}
-            />
+          <SetupModule title="Recent runs" subtitle="Short history for this graph. Full history lives in Simulation History.">
+            {runHistory.length ? (
+              <DataTable
+                columns={["Run", "Policy", "Range", "Return"]}
+                rows={runHistory.slice(0, 5).map((run) => [
+                  <span className="mono">{run.id}</span>,
+                  run.policy,
+                  run.range,
+                  run.returnUsd,
+                ])}
+              />
+            ) : (
+              <Text size="sm" c="dimmed">
+                No recent runs yet.
+              </Text>
+            )}
           </SetupModule>
         </Stack>
 

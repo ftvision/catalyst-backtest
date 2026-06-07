@@ -75,8 +75,8 @@ export const graph: GraphSummary = {
 
 export const setup: SetupData = {
   runId: "run_2026_06_06_18_24",
-  start: "2024-01-01T00:00",
-  end: "2024-06-01T00:00",
+  start: "2026-01-01T00:00",
+  end: "2026-06-01T00:00",
   interval: "1h",
   policy: "strict_v1",
   portfolio: [
@@ -88,7 +88,7 @@ export const setup: SetupData = {
     { kind: "Candles", source: "ETH / USDC on Base", interval: "1h", coverage: 98.3, status: "success" },
     { kind: "Funding", source: "Hyperliquid ETH", interval: "8h", coverage: 94.1, status: "success" },
     { kind: "Gas", source: "Base eth_feeHistory", interval: "1h", coverage: 63.2, status: "warning" },
-    { kind: "Yield", source: "Aave LST stETH", interval: "1d", coverage: 78.6, status: "warning" },
+    { kind: "Yields", source: "Aave LST stETH", interval: "1d", coverage: 78.6, status: "warning" },
   ],
   assumptions: [
     ["Policy profile", "Strict v1"],
@@ -248,8 +248,4 @@ export const audit: AuditData = {
   ],
 };
 
-export const runHistory = [
-  { id: "b2d8a7f1", status: "success", policy: "Strict v1", range: "2024-01-01 - 2024-06-01", interval: "1h", duration: "18m 42s", returnUsd: "+$9,371.92" },
-  { id: "8c1e9d44", status: "warning", policy: "Conservative v1", range: "2024-01-01 - 2024-05-10", interval: "1h", duration: "16m 11s", returnUsd: "+$6,124.11" },
-  { id: "3a7f0b22", status: "danger", policy: "Strict v1", range: "2024-01-01 - 2024-05-08", interval: "1h", duration: "3m 07s", returnUsd: "-" },
-];
+export const runHistory: Array<Record<string, string>> = [];
