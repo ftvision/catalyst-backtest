@@ -1,0 +1,16 @@
+# Buy the dip in an uptrend - price > SMA(50) AND price < SMA(10) (g23).
+# Verified against the deployed service.
+#
+#   catalyst-bt preview packages/client/examples/trend-filter-dip.toml
+#   catalyst-bt run     packages/client/examples/trend-filter-dip.toml
+
+graph = "../../../strategies/graphs/g23_trend_filter_dip.json"
+policy = "strict_v1"
+
+[config]
+start = "2026-01-01T00:00:00Z"
+end = "2026-06-01T00:00:00Z"
+interval = "1h"
+
+[config.initial_portfolio.base]
+USDC = "10000"
