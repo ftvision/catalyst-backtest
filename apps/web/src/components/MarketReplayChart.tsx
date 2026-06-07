@@ -34,6 +34,9 @@ const paneStretch = {
   drawdown: 13,
 };
 
+const compactLeadBars = 4;
+const compactTrailingBars = 24;
+
 function formatChartTime(time: UTCTimestamp) {
   const date = new Date(Number(time) * 1000);
   const hour = date.getUTCHours();
@@ -190,7 +193,19 @@ export function MarketReplayChart({
     }
     applyPaneLayout();
 
-    chart.timeScale().fitContent();
+    const selectedEvent = events.find((event) => event.id === selectedEventId);
+    const selectedCandleIndex = selectedEvent
+      ? candles.findIndex((candle) => candle.time >= selectedEvent.time)
+      : -1;
+
+    if (compact && selectedCandleIndex >= 0) {
+      chart.timeScale().setVisibleLogicalRange({
+        from: selectedCandleIndex - compactLeadBars,
+        to: selectedCandleIndex + compactTrailingBars,
+      });
+    } else {
+      chart.timeScale().fitContent();
+    }
 
     let disposed = false;
     const updateEventRails = () => {
@@ -199,6 +214,7 @@ export function MarketReplayChart({
       const nextRails = events.flatMap((event) => {
         const coordinate = chart.timeScale().timeToCoordinate(event.time);
         if (coordinate === null) return [];
+        if (coordinate < 0 || coordinate > container.clientWidth) return [];
 
         return [
           {
