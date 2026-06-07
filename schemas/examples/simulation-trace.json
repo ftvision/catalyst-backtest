@@ -4,7 +4,7 @@
     "schema_version": "catalyst.backtest.policy.v1",
     "profile": "strict_v1",
     "balance": { "insufficient_balance": "reject" },
-    "fills": { "partial_fills": "none", "price_selection": "close", "slippage": { "model": "fixed_bps", "bps": "10" }, "fees": { "model": "fixed_bps", "bps": "5" } },
+    "fills": { "partial_fills": "none", "price_selection": "next_open", "slippage": { "model": "fixed_bps", "bps": "10" }, "fees": { "model": "fixed_bps", "bps": "5" } },
     "gas": { "model": "historical_fee_history", "fallback": { "model": "fixed_usd", "amount": "0.25" } },
     "signals": { "trigger": "crossing", "repeat": "on_each_signal_fire", "cooldown": null },
     "ordering": { "same_tick": "topological_order" },

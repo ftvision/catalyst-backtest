@@ -4,7 +4,7 @@
   "balance": { "insufficient_balance": "reject" },
   "fills": {
     "partial_fills": "none",
-    "price_selection": "close",
+    "price_selection": "next_open",
     "slippage": { "model": "fixed_bps", "bps": "10" },
     "fees": { "model": "fixed_bps", "bps": "5" }
   },

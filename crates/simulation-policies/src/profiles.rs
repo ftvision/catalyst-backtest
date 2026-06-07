@@ -4,14 +4,15 @@ use crate::*;
 
 const SCHEMA_VERSION: &str = "catalyst.backtest.policy.v1";
 
-/// Deterministic correctness; good for early testing.
+/// Deterministic correctness; good for early testing. Fills at the next bar's
+/// open (`next_open`) so the default profile has no intra-bar look-ahead.
 pub fn strict_v1() -> ResolvedPolicy {
     ResolvedPolicy {
         schema_version: SCHEMA_VERSION.to_string(),
         profile: Profile::StrictV1,
         insufficient_balance: InsufficientBalance::Reject,
         partial_fills: PartialFills::None,
-        price_selection: PriceSelection::Close,
+        price_selection: PriceSelection::NextOpen,
         slippage_model: SlippageModel::FixedBps,
         slippage_bps: "10".to_string(),
         fee_model: FeeModel::FixedBps,

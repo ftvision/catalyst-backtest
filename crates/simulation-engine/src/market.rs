@@ -102,6 +102,15 @@ impl BundleIndex {
         self.candles.get(&(venue.to_string(), symbol.to_string())).and_then(|m| m.get(&ts).copied())
     }
 
+    /// The first bar strictly after `ts` for a (venue, symbol), if any.
+    pub fn bar_after(&self, venue: &str, symbol: &str, ts: i64) -> Option<Bar> {
+        self.candles
+            .get(&(venue.to_string(), symbol.to_string()))?
+            .range((ts + 1)..)
+            .next()
+            .map(|(_, b)| *b)
+    }
+
     /// Price for a symbol on any venue at `ts` (exact, else last known <= ts).
     pub fn price_any(&self, symbol: &str, ts: i64) -> Option<Decimal> {
         let m = self.by_symbol.get(symbol)?;
@@ -132,6 +141,9 @@ pub struct TickContext<'a> {
 impl MarketContext for TickContext<'_> {
     fn bar(&self, venue: &str, symbol: &str) -> Option<Bar> {
         self.index.bar_at(venue, symbol, self.ts)
+    }
+    fn next_bar(&self, venue: &str, symbol: &str) -> Option<Bar> {
+        self.index.bar_after(venue, symbol, self.ts)
     }
     fn gas_usd(&self, chain: &str) -> Option<Decimal> {
         self.index.gas_at(chain, self.ts)

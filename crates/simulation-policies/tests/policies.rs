@@ -30,7 +30,7 @@ fn strict_profile_defaults() {
     let p = strict_v1();
     assert_eq!(p.insufficient_balance, InsufficientBalance::Reject);
     assert_eq!(p.partial_fills, PartialFills::None);
-    assert_eq!(p.price_selection, PriceSelection::Close);
+    assert_eq!(p.price_selection, PriceSelection::NextOpen);
     assert_eq!(p.signal_trigger, SignalTrigger::Crossing);
     assert_eq!(p.missing_required, MissingRequired::Fail);
 }
@@ -77,7 +77,7 @@ fn resolved_policy_round_trips_through_json() {
     assert_eq!(p, back);
     // enums serialize to the schema's snake_case strings
     assert!(json.contains("\"reject\""));
-    assert!(json.contains("\"close\""));
+    assert!(json.contains("\"next_open\""));
 }
 
 #[test]

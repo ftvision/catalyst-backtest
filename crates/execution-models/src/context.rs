@@ -26,6 +26,13 @@ pub trait MarketContext {
     /// Current OHLC bar for a tradeable symbol on a venue.
     fn bar(&self, venue: &str, symbol: &str) -> Option<Bar>;
 
+    /// The *next* bar after the current tick (None on the final bar). Used for
+    /// honest `next_open` fills — an order decided on this bar fills at the next
+    /// bar's open, avoiding the look-ahead of filling at this bar's close.
+    fn next_bar(&self, _venue: &str, _symbol: &str) -> Option<Bar> {
+        None
+    }
+
     /// Gas cost in USD for a single on-chain action on `chain` (None if unknown).
     fn gas_usd(&self, chain: &str) -> Option<Decimal>;
 }
