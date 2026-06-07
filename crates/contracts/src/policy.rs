@@ -62,6 +62,9 @@ pub struct SignalPolicy {
     pub repeat: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cooldown: Option<String>,
+    /// Maximum number of fires when `repeat = "max_count"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_count: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]

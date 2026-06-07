@@ -135,6 +135,7 @@ fn crossing_with_cooldown_requires_cooldown() {
         trigger: Some("crossing_with_cooldown".to_string()),
         repeat: None,
         cooldown: None,
+        max_count: None,
     });
     assert!(matches!(resolve_policy(&c), Err(PolicyError::Invalid(_))));
 
@@ -144,6 +145,7 @@ fn crossing_with_cooldown_requires_cooldown() {
         trigger: Some("crossing_with_cooldown".to_string()),
         repeat: None,
         cooldown: Some("1h".to_string()),
+        max_count: None,
     });
     let resolved = resolve_policy(&ok).unwrap();
     assert_eq!(resolved.signal_trigger, SignalTrigger::CrossingWithCooldown);

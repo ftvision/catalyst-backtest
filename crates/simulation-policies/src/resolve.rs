@@ -103,6 +103,9 @@ pub fn resolve_policy(contract: &ContractPolicy) -> Result<ResolvedPolicy, Polic
         if signals.cooldown.is_some() {
             p.cooldown = signals.cooldown.clone();
         }
+        if signals.max_count.is_some() {
+            p.repeat_max_count = signals.max_count;
+        }
     }
     if let Some(ordering) = &contract.ordering {
         if let Some(v) = &ordering.same_tick {
@@ -182,6 +185,11 @@ pub fn validate(p: &ResolvedPolicy) -> Result<(), PolicyError> {
     if p.repeat == Repeat::WithCooldown && p.cooldown.is_none() {
         return Err(PolicyError::Invalid(
             "repeat=with_cooldown requires signals.cooldown".to_string(),
+        ));
+    }
+    if p.repeat == Repeat::MaxCount && p.repeat_max_count.is_none() {
+        return Err(PolicyError::Invalid(
+            "repeat=max_count requires signals.max_count".to_string(),
         ));
     }
 

@@ -122,3 +122,140 @@ fn disabled_node_excluded_with_warning() {
     assert_eq!(c.actions.len(), 1);
     assert!(c.warnings.iter().any(|w| w.contains("disabled")));
 }
+
+// --- ADR 0002: generalized threshold sources drive data requirements ---
+
+#[test]
+fn funding_threshold_source_requires_funding() {
+    let g = graph(&serde_json::json!({
+        "nodes": [
+            {"id": "rich", "kind": "signal", "subtype": "threshold",
+             "config": {"source": {"kind": "funding", "venue": "hyperliquid", "symbol": "ETH"},
+                        "operator": ">=", "reference": {"const": "0.0001"}}},
+            {"id": "short", "kind": "action", "subtype": "perp_order",
+             "config": {"symbol": "ETH", "side": "short", "size_usd": "500", "chain": "hyperliquid"}}
+        ],
+        "edges": [{"from": "rich", "to": "short"}]
+    }));
+    let c = compile(&g).unwrap();
+    assert!(c
+        .data_requirements
+        .funding
+        .iter()
+        .any(|f| f.venue == "hyperliquid" && f.symbol == "ETH"));
+    assert_eq!(c.signals.len(), 1);
+    assert_eq!(c.signals[0].subtype, "threshold");
+}
+
+#[test]
+fn yield_threshold_source_requires_yields() {
+    let g = graph(&serde_json::json!({
+        "nodes": [
+            {"id": "apr", "kind": "signal", "subtype": "threshold",
+             "config": {"source": {"kind": "yield", "protocol": "aave", "asset": "USDC",
+                                   "chain": "base", "pool": "usdc"},
+                        "operator": ">=", "reference": {"const": "0.05"}}},
+            {"id": "dep", "kind": "action", "subtype": "yield_deposit",
+             "config": {"chain": "base", "protocol": "aave", "pool": "usdc",
+                        "asset": "USDC", "amount": "100"}}
+        ],
+        "edges": [{"from": "apr", "to": "dep"}]
+    }));
+    let c = compile(&g).unwrap();
+    assert!(c.data_requirements.yields.iter().any(|y| y.protocol == "aave"
+        && y.asset == "USDC"
+        && y.chain == "base"
+        && y.pool.as_deref() == Some("usdc")));
+}
+
+#[test]
+fn price_threshold_sugar_still_requires_candles() {
+    let g = graph(&serde_json::json!({
+        "nodes": [
+            {"id": "below", "kind": "signal", "subtype": "price_threshold",
+             "config": {"symbol": "ETH", "operator": "<", "threshold": "1800"}},
+            {"id": "buy", "kind": "action", "subtype": "swap",
+             "config": {"from_asset": "USDC", "to_asset": "ETH", "amount": "10", "chain": "hyperliquid"}}
+        ],
+        "edges": [{"from": "below", "to": "buy"}]
+    }));
+    let c = compile(&g).unwrap();
+    assert!(c.data_requirements.candles.iter().any(|cd| cd.symbol == "ETH"));
+    // sugar normalizes to the same subtype label it was authored with
+    assert_eq!(c.signals[0].subtype, "price_threshold");
+}
+
+// --- ADR 0002 step 4: combinator signals ---
+
+fn leaf_node(id: &str, op: &str, threshold: &str) -> serde_json::Value {
+    serde_json::json!({"id": id, "kind": "signal", "subtype": "threshold",
+        "config": {"source": {"kind": "price", "symbol": "ETH"},
+                   "operator": op, "reference": {"const": threshold}}})
+}
+
+#[test]
+fn combinator_records_inputs_in_topological_order() {
+    let g = graph(&serde_json::json!({
+        "nodes": [
+            {"id": "band", "kind": "signal", "subtype": "all", "config": {}},
+            leaf_node("hi", "<", "2000"),
+            leaf_node("lo", ">", "1000"),
+            {"id": "buy", "kind": "action", "subtype": "swap",
+             "config": {"from_asset": "USDC", "to_asset": "ETH", "amount": "10", "chain": "base"}}
+        ],
+        "edges": [
+            {"from": "hi", "to": "band"},
+            {"from": "lo", "to": "band"},
+            {"from": "band", "to": "buy"}
+        ]
+    }));
+    let c = compile(&g).unwrap();
+    let band = c.signals.iter().find(|s| s.id == "band").unwrap();
+    assert_eq!(band.subtype, "all");
+    let mut inputs = band.inputs.clone();
+    inputs.sort();
+    assert_eq!(inputs, vec!["hi".to_string(), "lo".to_string()]);
+    assert!(band.targets.contains(&"buy".to_string()));
+    // leaves do not carry the combinator as an action target
+    let hi = c.signals.iter().find(|s| s.id == "hi").unwrap();
+    assert!(hi.targets.is_empty());
+    // topological order: inputs precede the combinator that reads them
+    let pos = |id: &str| c.signals.iter().position(|s| s.id == id).unwrap();
+    assert!(pos("hi") < pos("band"));
+    assert!(pos("lo") < pos("band"));
+}
+
+#[test]
+fn not_with_two_inputs_is_rejected() {
+    let g = graph(&serde_json::json!({
+        "nodes": [
+            leaf_node("a", "<", "2000"),
+            leaf_node("b", ">", "1000"),
+            {"id": "n", "kind": "signal", "subtype": "not", "config": {}},
+            {"id": "buy", "kind": "action", "subtype": "swap",
+             "config": {"from_asset": "USDC", "to_asset": "ETH", "amount": "10", "chain": "base"}}
+        ],
+        "edges": [
+            {"from": "a", "to": "n"},
+            {"from": "b", "to": "n"},
+            {"from": "n", "to": "buy"}
+        ]
+    }));
+    assert!(compile(&g).is_err());
+}
+
+#[test]
+fn combinator_cycle_is_rejected() {
+    let g = graph(&serde_json::json!({
+        "nodes": [
+            {"id": "x", "kind": "signal", "subtype": "all", "config": {}},
+            {"id": "y", "kind": "signal", "subtype": "all", "config": {}}
+        ],
+        "edges": [
+            {"from": "x", "to": "y"},
+            {"from": "y", "to": "x"}
+        ]
+    }));
+    let err = compile(&g).unwrap_err();
+    assert!(err.to_string().contains("cycle"));
+}

@@ -1,0 +1,51 @@
+{
+  "schema_version": "catalyst.graph.definition.v1",
+  "nodes": [
+    {
+      "id": "eth-dip",
+      "kind": "signal",
+      "subtype": "threshold",
+      "config": {
+        "source": { "kind": "price", "symbol": "ETH", "venue": "hyperliquid" },
+        "operator": "<",
+        "reference": { "const": "1800" }
+      },
+      "enabled": true
+    },
+    {
+      "id": "funding-not-rich",
+      "kind": "signal",
+      "subtype": "threshold",
+      "config": {
+        "source": { "kind": "funding", "venue": "hyperliquid", "symbol": "ETH" },
+        "operator": "<",
+        "reference": { "const": "0.0002" }
+      },
+      "enabled": true
+    },
+    {
+      "id": "dip-and-cheap-funding",
+      "kind": "signal",
+      "subtype": "all",
+      "config": {},
+      "enabled": true
+    },
+    {
+      "id": "buy-eth",
+      "kind": "action",
+      "subtype": "swap",
+      "config": {
+        "from_asset": "USDC",
+        "to_asset": "ETH",
+        "amount": "100",
+        "chain": "hyperliquid"
+      },
+      "enabled": true
+    }
+  ],
+  "edges": [
+    { "from": "eth-dip", "to": "dip-and-cheap-funding" },
+    { "from": "funding-not-rich", "to": "dip-and-cheap-funding" },
+    { "from": "dip-and-cheap-funding", "to": "buy-eth" }
+  ]
+}

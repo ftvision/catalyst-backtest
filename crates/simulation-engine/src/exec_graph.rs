@@ -7,15 +7,30 @@
 use std::collections::HashMap;
 
 use rust_decimal::Decimal;
+use serde_json::Value;
 
+use catalyst_contracts::graph::{PriceThresholdConfig, Reference, Source, ThresholdConfig};
 use catalyst_graph_compiler::{CompiledGraph, TriggerType};
+
+#[derive(Debug, Clone)]
+pub enum CombinatorOp {
+    All,
+    Any,
+    Not,
+}
+
+#[derive(Debug, Clone)]
+pub enum SignalDef {
+    /// Leaf: compare a market-data source against a reference.
+    Threshold { source: Source, operator: String, reference: Reference },
+    /// Boolean combinator over upstream signals (by id).
+    Combinator { op: CombinatorOp, inputs: Vec<String> },
+}
 
 #[derive(Debug, Clone)]
 pub struct Signal {
     pub id: String,
-    pub symbol: String,
-    pub operator: String,
-    pub threshold: Decimal,
+    pub def: SignalDef,
     pub targets: Vec<String>,
 }
 
@@ -65,25 +80,50 @@ impl ExecGraph {
         }
 
         for signal in &compiled.signals {
-            let cfg = &signal.config;
-            let symbol = cfg.get("symbol").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let operator = cfg.get("operator").and_then(|v| v.as_str()).unwrap_or("<").to_string();
-            let threshold = cfg
-                .get("threshold")
-                .and_then(|v| v.as_str())
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(Decimal::ZERO);
-            g.signals.push(Signal {
-                id: signal.id.clone(),
-                symbol,
-                operator,
-                threshold,
-                targets: signal.targets.clone(),
-            });
+            let def = match signal.subtype.as_str() {
+                "all" => SignalDef::Combinator {
+                    op: CombinatorOp::All,
+                    inputs: signal.inputs.clone(),
+                },
+                "any" => SignalDef::Combinator {
+                    op: CombinatorOp::Any,
+                    inputs: signal.inputs.clone(),
+                },
+                "not" => SignalDef::Combinator {
+                    op: CombinatorOp::Not,
+                    inputs: signal.inputs.clone(),
+                },
+                _ => {
+                    let (source, operator, reference) = parse_signal_config(&signal.config);
+                    SignalDef::Threshold { source, operator, reference }
+                }
+            };
+            g.signals.push(Signal { id: signal.id.clone(), def, targets: signal.targets.clone() });
         }
 
         g
     }
+}
+
+/// Normalize a compiled signal's raw config into (source, operator, reference).
+/// Accepts both the generalized `threshold` shape and the `price_threshold`
+/// sugar (the compiler leaves the original config on `CompiledSignal`).
+fn parse_signal_config(cfg: &Value) -> (Source, String, Reference) {
+    if let Ok(t) = serde_json::from_value::<ThresholdConfig>(cfg.clone()) {
+        return (t.source, t.operator, t.reference);
+    }
+    if let Ok(p) = serde_json::from_value::<PriceThresholdConfig>(cfg.clone()) {
+        return (
+            Source::Price { symbol: p.symbol, venue: None },
+            p.operator,
+            Reference::Const { value: p.threshold },
+        );
+    }
+    (
+        Source::Price { symbol: String::new(), venue: None },
+        "<".to_string(),
+        Reference::Const { value: "0".to_string() },
+    )
 }
 
 /// Evaluate a price-threshold condition.

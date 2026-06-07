@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use rust_decimal::Decimal;
 use serde_json::{json, Value};
 
-use catalyst_contracts::graph::{PerpOrderConfig, SwapConfig};
+use catalyst_contracts::graph::{PerpOrderConfig, Reference, Source, SwapConfig};
 use catalyst_contracts::trace::{Event, Portfolio, SimulationTrace, Snapshot};
 use catalyst_contracts::{BacktestConfig, Graph, MarketDataBundle, SimulationPolicy};
 use catalyst_execution_models::{
@@ -15,10 +15,11 @@ use catalyst_execution_models::{
 };
 use catalyst_portfolio_ledger::{Ledger, PerpPosition, PerpSide, YieldPosition};
 use catalyst_simulation_policies::{
-    resolve_policy, Funding, InsufficientBalance, LiquidationCheck, ResolvedPolicy, SignalTrigger,
+    resolve_policy, Funding, InsufficientBalance, LiquidationCheck, Repeat, ResolvedPolicy,
+    SignalTrigger,
 };
 
-use crate::exec_graph::{eval_threshold, ActionNode, ExecGraph};
+use crate::exec_graph::{eval_threshold, ActionNode, CombinatorOp, ExecGraph, Signal, SignalDef};
 use crate::market::{format_ts, parse_ts, BundleIndex, TickContext};
 
 const YEAR_SECONDS: i64 = 31_536_000;
@@ -153,6 +154,9 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
     // Resting limit orders awaiting a touch, plus a monotonic id counter.
     let mut resting: Vec<RestingOrder> = Vec::new();
     let mut order_seq: u64 = 0;
+    let mut signal_last_fired: HashMap<String, i64> = HashMap::new();
+    let mut signal_fire_count: HashMap<String, u32> = HashMap::new();
+    let variables = parse_variables(&input.graph.variables);
 
     let mut ticks = index.ticks(start, end);
     if ticks.is_empty() {
@@ -200,6 +204,9 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
             &mut events,
             &mut signal_state,
             &mut signals_ever_fired,
+            &mut signal_last_fired,
+            &mut signal_fire_count,
+            &variables,
             &mut warnings,
             &mut resting,
             &mut order_seq,
@@ -263,50 +270,220 @@ fn evaluate_signals(
     events: &mut Vec<Event>,
     signal_state: &mut HashMap<String, bool>,
     ever_fired: &mut HashSet<String>,
+    last_fired: &mut HashMap<String, i64>,
+    fire_count: &mut HashMap<String, u32>,
+    variables: &HashMap<String, Decimal>,
     warnings: &mut Vec<String>,
     resting: &mut Vec<RestingOrder>,
     order_seq: &mut u64,
 ) {
+    // Phase 1: compute every signal's boolean condition this tick. Signals are
+    // in topological order (compiler-emitted), so a combinator's inputs are
+    // already resolved. `None` = a leaf had no data this tick.
+    let mut conditions: HashMap<&str, Option<bool>> = HashMap::new();
+    let mut leaf_values: HashMap<&str, (Decimal, Decimal)> = HashMap::new();
     for signal in &exec_graph.signals {
-        let price = match index.price_any(&signal.symbol, ts) {
-            Some(p) => p,
-            None => {
-                warnings.push(format!("no price for signal symbol {} at {ts_iso}", signal.symbol));
-                continue;
+        let cond = match &signal.def {
+            SignalDef::Threshold { source, operator, reference } => {
+                match (
+                    source_value(source, index, ts),
+                    reference_value(reference, index, ts, variables),
+                ) {
+                    (Some(lhs), Some(rhs)) => {
+                        leaf_values.insert(signal.id.as_str(), (lhs, rhs));
+                        Some(eval_threshold(lhs, operator, rhs))
+                    }
+                    _ => {
+                        warnings.push(format!("no data for signal {:?} at {ts_iso}", signal.id));
+                        None
+                    }
+                }
+            }
+            SignalDef::Combinator { op, inputs } => {
+                let read = |id: &str| conditions.get(id).copied().flatten().unwrap_or(false);
+                let result = match op {
+                    CombinatorOp::All => inputs.iter().all(|i| read(i)),
+                    CombinatorOp::Any => inputs.iter().any(|i| read(i)),
+                    CombinatorOp::Not => !inputs.first().map(|i| read(i)).unwrap_or(false),
+                };
+                Some(result)
             }
         };
-        let condition = eval_threshold(price, &signal.operator, signal.threshold);
-        let previous = signal_state.get(&signal.id).copied().unwrap_or(false);
+        conditions.insert(signal.id.as_str(), cond);
+    }
 
-        let fired = match policy.signal_trigger {
-            SignalTrigger::Level => condition,
-            SignalTrigger::OncePerBacktest => condition && !ever_fired.contains(&signal.id),
-            SignalTrigger::Crossing | SignalTrigger::CrossingWithCooldown => condition && !previous,
+    // Phase 2: apply firing semantics to signals that drive actions.
+    for signal in &exec_graph.signals {
+        if signal.targets.is_empty() {
+            continue;
+        }
+        // A leaf with no data this tick: skip without disturbing crossing state.
+        let condition = match conditions.get(signal.id.as_str()).copied().flatten() {
+            Some(c) => c,
+            None => continue,
         };
+        let previous = signal_state.get(&signal.id).copied().unwrap_or(false);
         signal_state.insert(signal.id.clone(), condition);
 
-        if fired {
-            ever_fired.insert(signal.id.clone());
-            events.push(Event {
-                ts: ts_iso.to_string(),
-                event_type: "signal_fired".into(),
-                node_id: Some(signal.id.clone()),
-                reason: None,
-                detail: Some(json!({
-                    "symbol": signal.symbol,
-                    "operator": signal.operator,
-                    "threshold": signal.threshold.normalize().to_string(),
-                    "price": price.normalize().to_string(),
-                })),
-            });
-            for target in &signal.targets {
-                run_action_chain(
-                    target, exec_graph, ledger, ctx, policy, ts_iso, tick_index, events, resting,
-                    order_seq,
-                );
+        // 1. Trigger edge: when does the condition "fire" at all?
+        let edge = match policy.signal_trigger {
+            SignalTrigger::Level | SignalTrigger::OncePerBacktest => condition,
+            SignalTrigger::Crossing | SignalTrigger::CrossingWithCooldown => condition && !previous,
+        };
+        if !edge {
+            continue;
+        }
+
+        // 2. once_per_backtest: only the first fire, ever.
+        if policy.signal_trigger == SignalTrigger::OncePerBacktest
+            && ever_fired.contains(&signal.id)
+        {
+            continue;
+        }
+
+        // 3. Repeat gate.
+        let count = fire_count.get(&signal.id).copied().unwrap_or(0);
+        let repeat_ok = match policy.repeat {
+            Repeat::Never => count == 0,
+            Repeat::OnEachSignalFire | Repeat::WithCooldown => true,
+            Repeat::MaxCount => policy.repeat_max_count.map_or(count == 0, |m| count < m),
+        };
+        if !repeat_ok {
+            continue;
+        }
+
+        // 4. Cooldown gate (crossing_with_cooldown trigger or with_cooldown repeat).
+        let needs_cooldown = policy.signal_trigger == SignalTrigger::CrossingWithCooldown
+            || policy.repeat == Repeat::WithCooldown;
+        if needs_cooldown {
+            if let (Some(cd), Some(&last)) = (
+                policy.cooldown.as_deref().and_then(parse_duration_secs),
+                last_fired.get(&signal.id),
+            ) {
+                if ts - last < cd {
+                    continue;
+                }
+            }
+        }
+
+        // Fire.
+        ever_fired.insert(signal.id.clone());
+        *fire_count.entry(signal.id.clone()).or_insert(0) += 1;
+        last_fired.insert(signal.id.clone(), ts);
+        events.push(Event {
+            ts: ts_iso.to_string(),
+            event_type: "signal_fired".into(),
+            node_id: Some(signal.id.clone()),
+            reason: None,
+            detail: Some(signal_detail(signal, &leaf_values, condition)),
+        });
+        for target in &signal.targets {
+            run_action_chain(
+                target, exec_graph, ledger, ctx, policy, ts_iso, tick_index, events, resting,
+                order_seq,
+            );
+        }
+    }
+}
+
+/// The per-tick scalar a [`Source`] observes, from the indexed market data.
+fn source_value(source: &Source, index: &BundleIndex, ts: i64) -> Option<Decimal> {
+    match source {
+        Source::Price { symbol, venue } => match venue {
+            Some(v) => index.bar_at(v, symbol, ts).map(|b| b.close),
+            None => index.price_any(symbol, ts),
+        },
+        Source::Funding { venue, symbol } => index.funding_at(venue, symbol, ts),
+        Source::Yield { protocol, asset, chain, pool } => {
+            let key = (protocol.clone(), asset.clone(), chain.clone(), pool.clone());
+            index.apr_at(&key, ts)
+        }
+        Source::Gas { chain } => index.gas_at(chain, ts),
+    }
+}
+
+/// The right-hand side of a signal comparison.
+fn reference_value(
+    reference: &Reference,
+    index: &BundleIndex,
+    ts: i64,
+    variables: &HashMap<String, Decimal>,
+) -> Option<Decimal> {
+    match reference {
+        Reference::Const { value } => value.parse::<Decimal>().ok(),
+        Reference::Source { source } => source_value(source, index, ts),
+        Reference::Var { var } => variables.get(var).copied(),
+    }
+}
+
+/// Parse a duration like `30s`, `15m`, `1h`, `2d` into seconds.
+fn parse_duration_secs(s: &str) -> Option<i64> {
+    let s = s.trim();
+    let (num, unit) = s.split_at(s.len().checked_sub(1)?);
+    let n: i64 = num.parse().ok()?;
+    let mult = match unit {
+        "s" => 1,
+        "m" => 60,
+        "h" => 3600,
+        "d" => 86_400,
+        _ => return None,
+    };
+    Some(n * mult)
+}
+
+/// Parse `Graph.variables` (a JSON object of name -> decimal-ish value) into a
+/// lookup the engine can resolve `Reference::Var` against.
+fn parse_variables(value: &serde_json::Value) -> HashMap<String, Decimal> {
+    let mut out = HashMap::new();
+    if let Some(obj) = value.as_object() {
+        for (k, v) in obj {
+            let parsed = match v {
+                serde_json::Value::String(s) => s.parse::<Decimal>().ok(),
+                serde_json::Value::Number(n) => n.to_string().parse::<Decimal>().ok(),
+                _ => None,
+            };
+            if let Some(d) = parsed {
+                out.insert(k.clone(), d);
             }
         }
     }
+    out
+}
+
+/// Build the `signal_fired` event detail. Threshold (leaf) signals keep the
+/// legacy `symbol`/`price` keys for price sources and also report the generic
+/// `source`/`value`; combinators report their op, inputs, and result.
+fn signal_detail(
+    signal: &Signal,
+    leaf_values: &HashMap<&str, (Decimal, Decimal)>,
+    condition: bool,
+) -> serde_json::Value {
+    let mut d = serde_json::Map::new();
+    match &signal.def {
+        SignalDef::Threshold { source, operator, .. } => {
+            let (lhs, rhs) =
+                leaf_values.get(signal.id.as_str()).copied().unwrap_or((Decimal::ZERO, Decimal::ZERO));
+            d.insert("operator".into(), json!(operator));
+            d.insert("value".into(), json!(lhs.normalize().to_string()));
+            d.insert("threshold".into(), json!(rhs.normalize().to_string()));
+            d.insert("source".into(), serde_json::to_value(source).unwrap_or(serde_json::Value::Null));
+            if let Source::Price { symbol, .. } = source {
+                d.insert("symbol".into(), json!(symbol));
+                d.insert("price".into(), json!(lhs.normalize().to_string()));
+            }
+        }
+        SignalDef::Combinator { op, inputs } => {
+            let op_str = match op {
+                CombinatorOp::All => "all",
+                CombinatorOp::Any => "any",
+                CombinatorOp::Not => "not",
+            };
+            d.insert("op".into(), json!(op_str));
+            d.insert("inputs".into(), json!(inputs));
+            d.insert("result".into(), json!(condition));
+        }
+    }
+    serde_json::Value::Object(d)
 }
 
 #[allow(clippy::too_many_arguments)]
