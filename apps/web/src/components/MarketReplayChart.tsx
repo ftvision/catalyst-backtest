@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   AreaSeries,
   BaselineSeries,
@@ -57,6 +57,15 @@ const granularitySeconds = {
 };
 
 type ChartGranularity = keyof typeof granularitySeconds;
+
+interface ReplayChartCache {
+  candlesByGranularity: Record<ChartGranularity, CandlePoint[]>;
+  hourlyReplay: ReplayPoint[];
+  replayByGranularity: Record<ChartGranularity, ReplayPoint[]>;
+  fullRangeSeconds: number;
+}
+
+const replayChartCache = new WeakMap<CandlePoint[], WeakMap<ReplayPoint[], ReplayChartCache>>();
 
 function bucketStart(time: UTCTimestamp, granularity: ChartGranularity): UTCTimestamp {
   const bucketSeconds = granularitySeconds[granularity];
@@ -124,6 +133,41 @@ function aggregateReplay(replay: ReplayPoint[], granularity: ChartGranularity) {
   return Array.from(buckets.values());
 }
 
+function buildReplayChartCache(candles: CandlePoint[], replay: ReplayPoint[]): ReplayChartCache {
+  const candlesByGranularity: Record<ChartGranularity, CandlePoint[]> = {
+    "1h": candles,
+    "4h": aggregateCandles(candles, "4h"),
+    "1d": aggregateCandles(candles, "1d"),
+  };
+  const hourlyReplay = alignReplayToCandles(replay, candles);
+  const replayByGranularity: Record<ChartGranularity, ReplayPoint[]> = {
+    "1h": hourlyReplay,
+    "4h": aggregateReplay(hourlyReplay, "4h"),
+    "1d": aggregateReplay(hourlyReplay, "1d"),
+  };
+  return {
+    candlesByGranularity,
+    hourlyReplay,
+    replayByGranularity,
+    fullRangeSeconds: Number(candles.at(-1)?.time ?? 0) - Number(candles[0]?.time ?? 0),
+  };
+}
+
+function getReplayChartCache(candles: CandlePoint[], replay: ReplayPoint[]) {
+  let replayCache = replayChartCache.get(candles);
+  if (!replayCache) {
+    replayCache = new WeakMap<ReplayPoint[], ReplayChartCache>();
+    replayChartCache.set(candles, replayCache);
+  }
+
+  const cached = replayCache.get(replay);
+  if (cached) return cached;
+
+  const nextCache = buildReplayChartCache(candles, replay);
+  replayCache.set(replay, nextCache);
+  return nextCache;
+}
+
 function formatChartTime(time: UTCTimestamp) {
   const date = new Date(Number(time) * 1000);
   const hour = date.getUTCHours();
@@ -157,28 +201,18 @@ export function MarketReplayChart({
   const [eventRails, setEventRails] = useState<EventRail[]>([]);
   const [displayedGranularity, setDisplayedGranularity] = useState<ChartGranularity>("1h");
   const eventsAligned = isEventWindowAligned(candles, events);
+  const chartData = useMemo(() => getReplayChartCache(candles, replay), [candles, replay]);
 
   useEffect(() => {
     if (!containerRef.current) return;
 
     const container = containerRef.current;
-    const candlesByGranularity: Record<ChartGranularity, CandlePoint[]> = {
-      "1h": candles,
-      "4h": aggregateCandles(candles, "4h"),
-      "1d": aggregateCandles(candles, "1d"),
-    };
-    const hourlyReplay = alignReplayToCandles(replay, candles);
-    const replayByGranularity: Record<ChartGranularity, ReplayPoint[]> = {
-      "1h": hourlyReplay,
-      "4h": aggregateReplay(hourlyReplay, "4h"),
-      "1d": aggregateReplay(hourlyReplay, "1d"),
-    };
+    const { candlesByGranularity, fullRangeSeconds, hourlyReplay, replayByGranularity } = chartData;
     const shouldUseAdaptiveGranularity =
       !compact &&
       candles.length >= adaptiveGranularityMinCandles &&
       candles.length > candlesByGranularity["4h"].length &&
-      Number(candles.at(-1)?.time ?? 0) - Number(candles[0]?.time ?? 0) > mediumGranularityThresholdSeconds;
-    const fullRangeSeconds = Number(candles.at(-1)?.time ?? 0) - Number(candles[0]?.time ?? 0);
+      fullRangeSeconds > mediumGranularityThresholdSeconds;
     let activeGranularity: ChartGranularity = shouldUseAdaptiveGranularity ? granularityForRange(fullRangeSeconds) : "1h";
     let applyingGranularity = false;
 
@@ -435,7 +469,7 @@ export function MarketReplayChart({
       resizeObserver.disconnect();
       chart.remove();
     };
-  }, [candles, compact, events, eventsAligned, replay, selectedEventId]);
+  }, [candles, chartData, compact, events, eventsAligned, selectedEventId]);
 
   return (
     <div className={compact ? "chart-shell compact" : "chart-shell"}>

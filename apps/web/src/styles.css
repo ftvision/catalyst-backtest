@@ -214,6 +214,22 @@ select {
   align-items: start;
 }
 
+.run-details-shell {
+  min-width: 0;
+}
+
+.run-details-header {
+  border: 1px solid var(--cb-border);
+  border-radius: 6px;
+  background: oklch(0.99 0.005 235);
+  box-shadow: var(--cb-shadow);
+  padding: 12px;
+}
+
+.run-details-header .mantine-SegmentedControl-root {
+  min-width: min(100%, 430px);
+}
+
 .setup-grid {
   display: grid;
   grid-template-columns: minmax(0, 420px) minmax(0, 1fr);
@@ -976,6 +992,14 @@ select {
 
   .topbar-actions {
     justify-content: flex-start;
+  }
+
+  .run-details-header {
+    align-items: stretch;
+  }
+
+  .run-details-header .mantine-SegmentedControl-root {
+    width: 100%;
   }
 
   .topbar-run-context {

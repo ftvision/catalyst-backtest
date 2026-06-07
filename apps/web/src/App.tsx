@@ -2,10 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActionIcon,
   Badge,
-  Button,
   Divider,
   Group,
   NavLink,
+  SegmentedControl,
   Stack,
   Text,
   Title,
@@ -13,15 +13,12 @@ import {
 } from "@mantine/core";
 import { useClipboard } from "@mantine/hooks";
 import {
-  Activity,
-  CandlestickChart,
   Clipboard,
   Database,
   Download,
   FileChartColumn,
   Gauge,
   History,
-  Play,
 } from "lucide-react";
 import {
   auditFromApi,
@@ -65,15 +62,20 @@ import {
 } from "./storage/runCache";
 import type { AuditData, GraphSummary, MarketReplayData, ResultData, SetupData } from "./types";
 
-type RouteId = "setup" | "data" | "replay" | "lens" | "result" | "history";
+type RouteId = "setup" | "data" | "history" | "details";
+type DetailTabId = "result" | "replay" | "lens";
 
 const routes: Array<{ id: RouteId; label: string; icon: React.ReactNode }> = [
   { id: "setup", label: "Run Setup", icon: <Gauge size={14} /> },
   { id: "data", label: "Market Data", icon: <Database size={14} /> },
-  { id: "replay", label: "Market Replay", icon: <CandlestickChart size={14} /> },
-  { id: "lens", label: "Event Lens", icon: <Activity size={14} /> },
-  { id: "result", label: "Result Review", icon: <FileChartColumn size={14} /> },
   { id: "history", label: "History", icon: <History size={14} /> },
+  { id: "details", label: "Run Details", icon: <FileChartColumn size={14} /> },
+];
+
+const detailTabs: Array<{ value: DetailTabId; label: string }> = [
+  { value: "result", label: "Result Review" },
+  { value: "replay", label: "Market Replay" },
+  { value: "lens", label: "Event Lens" },
 ];
 
 type ApiStatus = "checking" | "healthy" | "offline" | "running" | "failed";
@@ -306,6 +308,12 @@ function compatibleMarketItem(graph: CatalystGraph, catalog: MarketDataCatalogIt
 
 export function App() {
   const [activeRoute, setActiveRoute] = useState<RouteId>(() => initialRouteFromStorage());
+  const [activeDetailTab, setActiveDetailTab] = useState<DetailTabId>("result");
+  const [visitedDetailTabs, setVisitedDetailTabs] = useState<Record<DetailTabId, boolean>>({
+    result: true,
+    replay: false,
+    lens: false,
+  });
   const [selectedEventId, setSelectedEventId] = useState(marketReplay.selectedEventId);
   const [apiStatus, setApiStatus] = useState<ApiStatus>("checking");
   const [apiMessage, setApiMessage] = useState(`Checking ${catalystApi.baseUrl}`);
@@ -337,6 +345,13 @@ export function App() {
     runHistory,
     historyItems: [],
   });
+
+  useEffect(() => {
+    if (activeRoute !== "details") return;
+    setVisitedDetailTabs((current) =>
+      current[activeDetailTab] ? current : { ...current, [activeDetailTab]: true },
+    );
+  }, [activeDetailTab, activeRoute]);
   const clipboard = useClipboard({ timeout: 900 });
   const hydrationSeq = useRef(0);
 
@@ -1000,7 +1015,7 @@ export function App() {
       setApiMessage(`Backtest ${created.id} completed / ${dataSourceLabel}`);
       setLastRunId(created.id);
       void saveCachedRunDetail(cachedDetail).catch(() => undefined);
-      setActiveRoute("result");
+      openRunDetails("result");
     } catch (error) {
       setRunStatus("failed");
       setApiStatus("failed");
@@ -1019,6 +1034,29 @@ export function App() {
           ? "Running"
           : "Run backtest";
   const isRunning = strategyLoading || runStatus === "submitting" || runStatus === "queued" || runStatus === "running";
+
+  function openRunDetails(tab: DetailTabId = "result") {
+    setActiveDetailTab(tab);
+    setActiveRoute("details");
+  }
+
+  async function openHistoryRunDetail(runId: string | undefined, tab: DetailTabId) {
+    if (runId && runId !== workbench.setup.runId) {
+      await loadRunDetail(runId);
+    }
+    openRunDetails(tab);
+  }
+
+  const renderedDetailTabs = {
+    result: visitedDetailTabs.result || activeDetailTab === "result",
+    replay: visitedDetailTabs.replay || activeDetailTab === "replay",
+    lens: visitedDetailTabs.lens || activeDetailTab === "lens",
+  };
+  const isMockRun =
+    workbench.setup.runId === setup.runId ||
+    (workbench.setup.runId === "service_demo" &&
+      workbench.result.status === result.status &&
+      workbench.result.createdAt === result.createdAt);
 
   return (
     <div className="app-shell">
@@ -1100,11 +1138,6 @@ export function App() {
                   <Download size={16} />
                 </ActionIcon>
               </Tooltip>
-              {activeRoute !== "setup" ? (
-                <Button leftSection={<Play size={14} />} onClick={runBacktest} loading={isRunning}>
-                  {runLabel}
-                </Button>
-              ) : null}
             </Group>
           </div>
         </header>
@@ -1146,43 +1179,76 @@ export function App() {
               graph={workbench.graph}
             />
           ) : null}
-          {activeRoute === "replay" ? (
-            <MarketReplayPage
-              graph={workbench.graph}
-              setup={workbench.setup}
-              result={workbench.result}
-              replay={workbench.marketReplay}
-              selectedEventId={selectedEventId}
-              onSelectEvent={setSelectedEventId}
-              onInspectEvent={() => setActiveRoute("lens")}
-            />
-          ) : null}
-          {activeRoute === "lens" ? (
-            <EventLensPage
-              audit={workbench.audit}
-              replay={workbench.marketReplay}
-              setup={workbench.setup}
-              selectedEventId={selectedEventId}
-              selectedReplayEvent={selectedEvent}
-              onSelectEvent={setSelectedEventId}
-            />
-          ) : null}
-          {activeRoute === "result" ? (
-            <ResultReviewPage graph={workbench.graph} setup={workbench.setup} result={workbench.result} />
-          ) : null}
           {activeRoute === "history" ? (
             <SimulationHistoryPage
               items={workbench.historyItems}
               fallbackRows={workbench.runHistory}
-              graph={workbench.graph}
-              setup={workbench.setup}
-              result={workbench.result}
-              replay={workbench.marketReplay.replay}
               selectedRunId={workbench.setup.runId}
               onSelectRun={(id) => void loadRunDetail(id)}
-              onOpenResult={() => setActiveRoute("result")}
-              onReplayEvents={() => setActiveRoute("replay")}
+              onOpenResult={(id) => void openHistoryRunDetail(id, "result")}
+              onReplayEvents={(id) => void openHistoryRunDetail(id, "replay")}
             />
+          ) : null}
+          {activeRoute === "details" ? (
+            <Stack gap="md" className="run-details-shell">
+              <Group className="run-details-header" justify="space-between" align="flex-start" gap="md">
+                <Stack gap={2}>
+                  <Text size="xs" c="dimmed">
+                    Run details
+                  </Text>
+                  <Group gap="xs">
+                    <Text fw={750} className="mono">
+                      {workbench.setup.runId}
+                    </Text>
+                    {isMockRun ? (
+                      <Badge variant="light" color="red" radius="sm">
+                        MOCK run
+                      </Badge>
+                    ) : null}
+                    <Badge variant="light" color={workbench.result.status === "succeeded" ? "teal" : "gray"} radius="sm">
+                      {workbench.result.status}
+                    </Badge>
+                  </Group>
+                </Stack>
+                <SegmentedControl
+                  value={activeDetailTab}
+                  onChange={(value) => setActiveDetailTab(value as DetailTabId)}
+                  data={detailTabs}
+                  aria-label="Run detail view"
+                />
+              </Group>
+
+              {renderedDetailTabs.result ? (
+                <div hidden={activeDetailTab !== "result"}>
+                  <ResultReviewPage graph={workbench.graph} setup={workbench.setup} result={workbench.result} />
+                </div>
+              ) : null}
+              {renderedDetailTabs.replay ? (
+                <div hidden={activeDetailTab !== "replay"}>
+                  <MarketReplayPage
+                    graph={workbench.graph}
+                    setup={workbench.setup}
+                    result={workbench.result}
+                    replay={workbench.marketReplay}
+                    selectedEventId={selectedEventId}
+                    onSelectEvent={setSelectedEventId}
+                    onInspectEvent={() => openRunDetails("lens")}
+                  />
+                </div>
+              ) : null}
+              {renderedDetailTabs.lens ? (
+                <div hidden={activeDetailTab !== "lens"}>
+                  <EventLensPage
+                    audit={workbench.audit}
+                    replay={workbench.marketReplay}
+                    setup={workbench.setup}
+                    selectedEventId={selectedEventId}
+                    selectedReplayEvent={selectedEvent}
+                    onSelectEvent={setSelectedEventId}
+                  />
+                </div>
+              ) : null}
+            </Stack>
           ) : null}
         </main>
       </div>
