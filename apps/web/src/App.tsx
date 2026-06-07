@@ -39,6 +39,7 @@ import {
   type BacktestListItem,
   type BacktestStatus,
   type CatalystGraph,
+  type CoverageResponse,
   type MarketDataCatalogItem,
   type MarketDataBundle,
   type StrategyListItem,
@@ -102,6 +103,23 @@ function errorMessage(error: unknown): string {
   return "Unknown service error";
 }
 
+function emptyMarketData(config: BacktestConfig, warnings: string[] = []): MarketDataBundle {
+  return {
+    schema_version: "catalyst.market_data.bundle.v1",
+    interval: config.interval,
+    start: config.start,
+    end: config.end,
+    candles: [],
+    gas: [],
+    funding: [],
+    warnings,
+  };
+}
+
+function mergeWarnings(...groups: Array<string[] | undefined>) {
+  return Array.from(new Set(groups.flatMap((group) => group ?? [])));
+}
+
 function stringConfig(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
@@ -154,6 +172,7 @@ export function App() {
   const [activeGraph, setActiveGraph] = useState<CatalystGraph>(demoGraph);
   const [activeConfig, setActiveConfig] = useState<BacktestConfig>(demoConfig);
   const [activeMarketData, setActiveMarketData] = useState<MarketDataBundle>(demoMarketData);
+  const [resolvedVariables, setResolvedVariables] = useState<Record<string, unknown>>({});
   const [activeSelection, setActiveSelection] = useState<ActiveSelection>({
     strategyId: "g_inline_service_demo",
     strategyTitle: "ETH service backtest",
@@ -219,23 +238,31 @@ export function App() {
     marketDataId?: string;
   }) {
     const sourceLabel = input.sourceMode === "store" ? "Parquet store" : "Inline fallback";
-    const [profiles, preview, coverage] = await Promise.all([
+    const [profiles, preview] = await Promise.all([
       input.profiles ? Promise.resolve({ items: input.profiles }) : catalystApi.listPolicyProfiles(),
       catalystApi.previewGraph(input.graph, { profile: input.policyProfile }),
-      catalystApi.checkCoverage({
-        graph: input.graph,
-        start: input.config.start,
-        end: input.config.end,
-        interval: input.config.interval,
-        ...(input.sourceMode === "inline" ? { market_data: input.marketData } : {}),
-      }),
     ]);
+    const coverage = await catalystApi.checkCoverage({
+      graph: input.graph,
+      start: input.config.start,
+      end: input.config.end,
+      interval: input.config.interval,
+      ...(input.sourceMode === "inline" ? { market_data: input.marketData } : {}),
+    }).catch<CoverageResponse>((error) => ({
+      coverage: [],
+      warnings: [errorMessage(error)],
+    }));
+    const coverageWithMarketWarnings: CoverageResponse = {
+      ...coverage,
+      warnings: mergeWarnings(coverage.warnings, input.marketData.warnings),
+    };
     const history = await catalystApi.listBacktests(preview.graph_hash);
 
     setDataSourceMode(input.sourceMode);
     setActiveGraph(input.graph);
     setActiveConfig(input.config);
     setActiveMarketData(input.marketData);
+    setResolvedVariables(preview.resolved_variables ?? {});
     setSelectedMarketDataId(input.marketDataId);
     setActiveSelection({
       strategyId: input.strategyId,
@@ -256,7 +283,7 @@ export function App() {
         config: input.config,
         policyProfile: input.policyProfile,
         dataSourceLabel: sourceLabel,
-        coverage,
+        coverage: coverageWithMarketWarnings,
         preview,
         profiles: profiles.items,
       }),
@@ -284,7 +311,7 @@ export function App() {
         start: config.start,
         end: config.end,
         interval: config.interval,
-      });
+      }).catch((error) => emptyMarketData(config, [errorMessage(error)]));
       await hydrateWorkbench({
         graph: input.graph,
         config,
@@ -339,6 +366,31 @@ export function App() {
       setSelectedEventId((current) => {
         const stillExists = workbench.marketReplay.events.some((event) => event.id === current);
         return stillExists ? current : marketReplay.selectedEventId;
+      });
+    } catch (error) {
+      setApiStatus("failed");
+      setApiMessage(errorMessage(error));
+    } finally {
+      setStrategyLoading(false);
+    }
+  }
+
+  async function applyVariables(next: Record<string, string>) {
+    try {
+      setStrategyLoading(true);
+      setApiStatus("checking");
+      setApiMessage("Applying parameters");
+      await hydrateWorkbench({
+        graph: { ...activeGraph, variables: next },
+        config: activeConfig,
+        marketData: activeMarketData,
+        policyProfile: workbench.setup.policy,
+        strategyId: activeSelection.strategyId,
+        strategyTitle: activeSelection.strategyTitle,
+        scenarioId: activeSelection.scenarioId,
+        scenarioTitle: activeSelection.scenarioTitle,
+        sourceMode: dataSourceMode,
+        marketDataId: selectedMarketDataId,
       });
     } catch (error) {
       setApiStatus("failed");
@@ -676,6 +728,10 @@ export function App() {
               policyProfiles={policyProfiles}
               onConfigChange={updateRunConfig}
               onPolicyChange={(profile) => void loadPolicySelection(profile)}
+              variables={activeGraph.variables ?? {}}
+              resolvedVariables={resolvedVariables}
+              onVariablesChange={(vars) => void applyVariables(vars)}
+              variablesBusy={strategyLoading}
             />
           ) : null}
           {activeRoute === "data" ? (

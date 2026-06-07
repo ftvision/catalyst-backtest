@@ -8,6 +8,7 @@ import type { BacktestConfig, MarketDataCatalogItem, StrategyListItem } from "..
 import { DataTable } from "../components/DataTable";
 import { GraphTopologyPreview } from "../components/GraphTopologyPreview";
 import { MarketDataSelector } from "../components/MarketDataSelector";
+import { ParametersPanel } from "../components/ParametersPanel";
 import { RunReadinessRail } from "../components/RunReadinessRail";
 import { SectionHeader } from "../components/SectionHeader";
 import { SetupModule } from "../components/SetupModule";
@@ -47,6 +48,10 @@ export function RunSetupPage({
   policyProfiles = [],
   onConfigChange,
   onPolicyChange,
+  variables = {},
+  resolvedVariables,
+  onVariablesChange,
+  variablesBusy = false,
 }: {
   graph: GraphSummary;
   setup: SetupData;
@@ -66,6 +71,10 @@ export function RunSetupPage({
   policyProfiles?: Array<{ id: string; label?: string }>;
   onConfigChange?: (patch: Partial<Pick<BacktestConfig, "start" | "end" | "interval">>) => void;
   onPolicyChange?: (profile: string) => void;
+  variables?: Record<string, string | number | boolean>;
+  resolvedVariables?: Record<string, unknown>;
+  onVariablesChange?: (vars: Record<string, string>) => void;
+  variablesBusy?: boolean;
 }) {
   const [selectedNodeId, setSelectedNodeId] = useState(graph.nodes[0]?.id);
 
@@ -102,9 +111,10 @@ export function RunSetupPage({
     : setup.coverage.some((item) => item.status === "warning") || activeMarketWarnings.length
       ? "warning"
       : "success";
+  const graphStatus = graph.status === "validated" ? "success" : "danger";
   const steps: SetupStep[] = useMemo(
     () => [
-      { id: "graph", label: "Graph", detail: `${graph.nodeCount} nodes / ${graph.hash}`, status: graph.status === "validated" ? "success" : "warning" },
+      { id: "graph", label: "Graph", detail: `${graph.nodeCount} nodes / ${graph.hash}`, status: graphStatus },
       {
         id: "market-data",
         label: "Market data",
@@ -114,7 +124,7 @@ export function RunSetupPage({
       { id: "portfolio", label: "Portfolio", detail: `${setup.portfolio.length} balances`, status: setup.portfolio.length ? "success" : "danger" },
       { id: "configuration", label: "Configuration", detail: setup.policy, status: setup.policy ? "success" : "danger" },
     ],
-    [coverageStatus, graph.hash, graph.nodeCount, graph.status, hasMarketData, setup.interval, setup.policy, setup.portfolio.length, setup.start],
+    [coverageStatus, graph.hash, graph.nodeCount, graphStatus, hasMarketData, setup.interval, setup.policy, setup.portfolio.length, setup.start],
   );
   const startValue = isoToPickerValue(setup.start);
   const endValue = isoToPickerValue(setup.end);
@@ -130,7 +140,7 @@ export function RunSetupPage({
 
       <div className="setup-preflight-grid">
         <Stack gap="md">
-          <SetupModule title="Graph" subtitle="Read-only strategy topology." status={graph.status === "validated" ? "success" : "warning"}>
+          <SetupModule title="Graph" subtitle="Read-only strategy topology." status={graphStatus}>
             <Group justify="space-between" align="flex-start">
               <Stack gap={2}>
                 <Title order={2}>{graph.name}</Title>
@@ -175,6 +185,21 @@ export function RunSetupPage({
               onSelectNode={setSelectedNodeId}
             />
           </SetupModule>
+
+          {onVariablesChange && Object.keys(variables).length > 0 ? (
+            <SetupModule
+              title="Parameters"
+              subtitle="Tune this strategy's variables before running."
+              status={graphStatus}
+            >
+              <ParametersPanel
+                variables={variables}
+                resolved={resolvedVariables}
+                onApply={onVariablesChange}
+                busy={variablesBusy}
+              />
+            </SetupModule>
+          ) : null}
 
           <SetupModule title="Market data" subtitle="Choose the local Parquet replay window before running." status={hasMarketData ? coverageStatus : "danger"}>
             <MarketDataSelector
