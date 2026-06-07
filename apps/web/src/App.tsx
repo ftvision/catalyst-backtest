@@ -1052,6 +1052,11 @@ export function App() {
     replay: visitedDetailTabs.replay || activeDetailTab === "replay",
     lens: visitedDetailTabs.lens || activeDetailTab === "lens",
   };
+  const isMockRun =
+    workbench.setup.runId === setup.runId ||
+    (workbench.setup.runId === "service_demo" &&
+      workbench.result.status === result.status &&
+      workbench.result.createdAt === result.createdAt);
 
   return (
     <div className="app-shell">
@@ -1195,6 +1200,11 @@ export function App() {
                     <Text fw={750} className="mono">
                       {workbench.setup.runId}
                     </Text>
+                    {isMockRun ? (
+                      <Badge variant="light" color="red" radius="sm">
+                        MOCK run
+                      </Badge>
+                    ) : null}
                     <Badge variant="light" color={workbench.result.status === "succeeded" ? "teal" : "gray"} radius="sm">
                       {workbench.result.status}
                     </Badge>
