@@ -81,7 +81,7 @@ export const EventLensDetail: Story = {
 export const ResultReview: Story = {
   render: () => (
     <StoryCanvas>
-      <ResultReviewPage graph={graph} setup={setup} result={result} />
+      <ResultReviewPage graph={graph} setup={setup} result={result} replay={marketReplay} />
     </StoryCanvas>
   ),
 };

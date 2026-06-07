@@ -5,7 +5,7 @@ import { EquityDrawdownChart } from "../components/EquityDrawdownChart";
 import { MetricStrip } from "../components/MetricStrip";
 import { SectionHeader } from "../components/SectionHeader";
 import { StatusBadge } from "../components/StatusBadge";
-import type { GraphSummary, ResultData, SetupData } from "../types";
+import type { GraphSummary, MarketReplayData, ResultData, SetupData } from "../types";
 import type { UTCTimestamp } from "lightweight-charts";
 
 function shortDate(value: string) {
@@ -13,22 +13,74 @@ function shortDate(value: string) {
   return Number.isNaN(date.getTime()) ? value : date.toISOString().slice(0, 10);
 }
 
-function initialPortfolioByVenue(portfolio: SetupData["portfolio"]) {
-  const grouped = new Map<string, SetupData["portfolio"]>();
-  portfolio.forEach((row) => {
+function numberValue(value: string) {
+  const parsed = Number(value.replace(/,/g, ""));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function compactNumber(value: number, maximumFractionDigits = 4): string {
+  return new Intl.NumberFormat("en-US", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits,
+  }).format(value);
+}
+
+function money(value: number) {
+  return `$${compactNumber(value, 2)}`;
+}
+
+function initialPrice(asset: string, replay: MarketReplayData) {
+  if (asset.toUpperCase().includes("USD")) return 1;
+  const baseSymbol = replay.symbol.split("/")[0]?.trim().toUpperCase();
+  const normalizedAsset = asset.toUpperCase();
+  if (
+    baseSymbol &&
+    (normalizedAsset === baseSymbol || normalizedAsset === `${baseSymbol}-PERP`)
+  ) {
+    return replay.candles[0]?.close;
+  }
+  return undefined;
+}
+
+function initialPortfolioByVenue(portfolio: SetupData["portfolio"], replay: MarketReplayData) {
+  const rows = portfolio.map((row) => {
+    const amount = numberValue(row.amount);
+    const price = initialPrice(row.asset, replay);
+    const value = price === undefined ? undefined : amount * price;
+    return { ...row, price, value };
+  });
+  const totalKnownValue = rows.reduce((sum, row) => sum + (row.value ?? 0), 0);
+  const grouped = new Map<string, typeof rows>();
+  rows.forEach((row) => {
     grouped.set(row.venue, [...(grouped.get(row.venue) ?? []), row]);
   });
-  return Array.from(grouped.entries()).map(([venue, assets]) => ({ venue, assets }));
+  return Array.from(grouped.entries()).map(([venue, assets]) => ({
+    venue,
+    total: assets.some((asset) => asset.value !== undefined)
+      ? money(assets.reduce((sum, asset) => sum + (asset.value ?? 0), 0))
+      : "-",
+    assets: assets.map((asset) => ({
+      ...asset,
+      priceLabel: asset.price === undefined ? "-" : money(asset.price),
+      valueLabel: asset.value === undefined ? "-" : money(asset.value),
+      weightLabel:
+        asset.value === undefined || totalKnownValue <= 0
+          ? "-"
+          : `${compactNumber((asset.value / totalKnownValue) * 100, 2)}%`,
+    })),
+  }));
 }
 
 export function ResultReviewPage({
   graph,
   setup,
   result,
+  replay,
 }: {
   graph: GraphSummary;
   setup: SetupData;
   result: ResultData;
+  replay: MarketReplayData;
 }) {
   const trend = result.trend ?? result.equity.map((value, index) => ({
     time: (Date.UTC(2024, 0, 1, index, 0, 0) / 1000) as UTCTimestamp,
@@ -36,7 +88,7 @@ export function ResultReviewPage({
     equity: value,
     drawdown: result.drawdown[index],
   }));
-  const initialPortfolio = initialPortfolioByVenue(setup.portfolio);
+  const initialPortfolio = initialPortfolioByVenue(setup.portfolio, replay);
 
   return (
     <Stack gap="md">
@@ -87,12 +139,18 @@ export function ResultReviewPage({
             </Group>
             {initialPortfolio.map((venue) => (
               <Stack key={venue.venue} gap="xs">
-                <Text fw={650}>{venue.venue}</Text>
+                <Group justify="space-between">
+                  <Text fw={650}>{venue.venue}</Text>
+                  <Text className="mono">{venue.total}</Text>
+                </Group>
                 <DataTable
-                  columns={["Asset", "Starting balance"]}
+                  columns={["Asset", "Starting balance", "Price", "Value", "Weight"]}
                   rows={venue.assets.map((asset) => [
                     asset.asset,
                     <span className="mono">{asset.amount}</span>,
+                    asset.priceLabel,
+                    asset.valueLabel,
+                    asset.weightLabel,
                   ])}
                 />
               </Stack>
