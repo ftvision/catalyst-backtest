@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, NoReturn, Optional
 
 import typer
 
@@ -46,7 +46,7 @@ def _overrides(
     return {"start": start, "end": end, "interval": interval, "policy": policy, "graph": graph}
 
 
-def _fail(exc: ApiError) -> None:
+def _fail(exc: ApiError) -> NoReturn:
     console.print(f"[red]error[/red] [{exc.status_code} {exc.code}] {exc.message}")
     if exc.extra:
         console.print(exc.extra)
@@ -113,7 +113,7 @@ def run(
 
     if out is not None or raw:
         _emit(result, out)
-    if out is None:
+    if out is None and not raw:
         render_summary(result)
 
 
