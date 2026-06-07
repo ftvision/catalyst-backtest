@@ -49,7 +49,8 @@ pub fn execute_perp(
             PerpSide::Short => Direction::Sell,
         }
     };
-    execute_perp_at(ledger, policy, cfg, fill_price(&bar, dir, policy))
+    let next = ctx.next_bar(venue, &cfg.symbol);
+    execute_perp_at(ledger, policy, cfg, fill_price(&bar, next.as_ref(), dir, policy))
 }
 
 /// Execute a perp order at an explicit fill `price` (used by both the market path

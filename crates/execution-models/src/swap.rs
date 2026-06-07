@@ -42,7 +42,8 @@ pub fn execute_swap(
         Some(b) => b,
         None => return Execution::rejected(format!("no price for {base} on {venue}")),
     };
-    swap_at(ledger, ctx, policy, cfg, dir, base, fill_price(&bar, dir, policy))
+    let next = ctx.next_bar(venue, base);
+    swap_at(ledger, ctx, policy, cfg, dir, base, fill_price(&bar, next.as_ref(), dir, policy))
 }
 
 /// Execute a swap at an explicit fill `price` (used by the engine's resting

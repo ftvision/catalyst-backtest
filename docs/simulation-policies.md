@@ -194,11 +194,11 @@ order_book
 amm_pool_state
 ```
 
-MVP default can be:
-
-```text
-close
-```
+The default is **`next_open`** (no intra-bar look-ahead): an order decided on a
+bar fills at the *next* bar's open, since that bar's close isn't knowable when the
+decision is made. `next_open` falls back to the current close only on the final
+bar, where no next open exists. `strict_v1` uses `next_open`; `research_v1` uses
+the more optimistic `close`.
 
 Conservative profile can use:
 
@@ -466,7 +466,7 @@ use liquidity index / aToken accounting
   },
   "fills": {
     "partial_fills": "none",
-    "price_selection": "close",
+    "price_selection": "next_open",
     "slippage": {
       "model": "fixed_bps",
       "bps": "10"

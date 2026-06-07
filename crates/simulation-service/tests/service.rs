@@ -243,7 +243,7 @@ async fn policy_profiles_lists_three() {
             && ids.contains(&"research_v1")
     );
     let strict = items.iter().find(|p| p["id"] == "strict_v1").unwrap();
-    assert_eq!(strict["resolved_policy"]["price_selection"], "close");
+    assert_eq!(strict["resolved_policy"]["price_selection"], "next_open");
 }
 
 #[tokio::test]

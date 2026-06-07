@@ -23,11 +23,20 @@ pub enum Direction {
     Sell,
 }
 
-/// Pick the reference price from a bar per the policy's price-selection rule.
-/// `next_open` is approximated by `close` when only the current bar is known.
-pub fn reference_price(bar: &Bar, dir: Direction, policy: &ResolvedPolicy) -> Decimal {
+/// Pick the reference price per the policy's price-selection rule.
+///
+/// `next_open` uses the *next* bar's open (no look-ahead at the current close);
+/// it falls back to the current close only when there is no next bar (the final
+/// bar of the run), which is the one case where a next open cannot exist.
+pub fn reference_price(
+    bar: &Bar,
+    next: Option<&Bar>,
+    dir: Direction,
+    policy: &ResolvedPolicy,
+) -> Decimal {
     match policy.price_selection {
-        PriceSelection::Close | PriceSelection::NextOpen => bar.close,
+        PriceSelection::Close => bar.close,
+        PriceSelection::NextOpen => next.map(|b| b.open).unwrap_or(bar.close),
         PriceSelection::Open => bar.open,
         PriceSelection::Mid => (bar.high + bar.low) / Decimal::TWO,
         PriceSelection::WorseSideOhlc => match dir {
@@ -50,9 +59,14 @@ pub fn apply_slippage(price: Decimal, dir: Direction, policy: &ResolvedPolicy) -
     }
 }
 
-/// The fill price: reference price adjusted for slippage.
-pub fn fill_price(bar: &Bar, dir: Direction, policy: &ResolvedPolicy) -> Decimal {
-    apply_slippage(reference_price(bar, dir, policy), dir, policy)
+/// The fill price: reference price (current + optional next bar) plus slippage.
+pub fn fill_price(
+    bar: &Bar,
+    next: Option<&Bar>,
+    dir: Direction,
+    policy: &ResolvedPolicy,
+) -> Decimal {
+    apply_slippage(reference_price(bar, next, dir, policy), dir, policy)
 }
 
 /// Trading fee in USD on a notional.

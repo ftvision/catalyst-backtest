@@ -16,9 +16,11 @@ global state directly, and **a rejection leaves the ledger unchanged**.
 
 ## How pricing works (policy-driven)
 
-- **Fill price** = reference price (`close`/`open`/`mid`/`worse_side_ohlc`, per
-  `price_selection`) adjusted by **slippage** adverse to the trader (buys higher,
-  sells lower).
+- **Fill price** = reference price (`close`/`open`/`mid`/`next_open`/
+  `worse_side_ohlc`, per `price_selection`) adjusted by **slippage** adverse to
+  the trader (buys higher, sells lower). `next_open` (the `strict_v1` default)
+  uses the *next* bar's open to avoid intra-bar look-ahead, falling back to the
+  current close only on the final bar.
 - **Fees** = `fee_bps` × notional (USD).
 - **Gas** = 0 on Hyperliquid; otherwise `historical` gas from the market context
   with the policy's fixed fallback, or a fixed amount.
