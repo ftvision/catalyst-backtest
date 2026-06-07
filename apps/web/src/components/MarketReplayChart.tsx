@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import {
+  AreaSeries,
+  BaselineSeries,
   CandlestickSeries,
   ColorType,
   HistogramSeries,
-  LineSeries,
   createChart,
   type IChartApi,
   type IRange,
@@ -35,6 +36,13 @@ const paneStretch = {
   equity: 29,
   drawdown: 13,
 };
+
+const equityColor = "#2768ce";
+const equityFillTop = "rgba(39, 104, 206, 0.18)";
+const equityFillBottom = "rgba(39, 104, 206, 0.00)";
+const drawdownColor = "#d64a45";
+const drawdownFillTop = "rgba(214, 74, 69, 0.00)";
+const drawdownFillBottom = "rgba(214, 74, 69, 0.32)";
 
 const compactLeadBars = 4;
 const compactTrailingBars = 24;
@@ -189,6 +197,11 @@ export function MarketReplayChart({
       layout: {
         background: { type: ColorType.Solid, color: "#fbfcfd" },
         textColor: "#6b7280",
+        panes: {
+          enableResize: true,
+          separatorColor: "#d4dae3",
+          separatorHoverColor: "rgba(39, 104, 206, 0.08)",
+        },
       },
       grid: {
         vertLines: { color: "#e4e8ee" },
@@ -208,8 +221,8 @@ export function MarketReplayChart({
         tickMarkFormatter: (time: UTCTimestamp) => formatChartTime(time),
       },
       crosshair: {
-        vertLine: { color: "#2768ce", labelBackgroundColor: "#2768ce" },
-        horzLine: { color: "#2768ce", labelBackgroundColor: "#2768ce" },
+        vertLine: { color: equityColor, labelBackgroundColor: equityColor },
+        horzLine: { color: equityColor, labelBackgroundColor: equityColor },
       },
     });
 
@@ -256,14 +269,17 @@ export function MarketReplayChart({
 
     if (!compact) {
       const equitySeries = chart.addSeries(
-        LineSeries,
+        AreaSeries,
         {
-          color: "#2768ce",
+          lineColor: equityColor,
           lineWidth: 2,
+          topColor: equityFillTop,
+          bottomColor: equityFillBottom,
           priceFormat: {
             type: "custom",
             formatter: formatNumber,
           },
+          priceLineColor: equityColor,
           title: "Equity (USDC)",
           priceLineVisible: true,
           lastValueVisible: true,
@@ -272,14 +288,21 @@ export function MarketReplayChart({
       );
 
       const drawdownSeries = chart.addSeries(
-        HistogramSeries,
+        BaselineSeries,
         {
-          color: "#8b5cf6",
-          base: 0,
+          baseValue: { type: "price", price: 0 },
+          topLineColor: drawdownColor,
+          topFillColor1: drawdownFillTop,
+          topFillColor2: drawdownFillTop,
+          bottomLineColor: drawdownColor,
+          bottomFillColor1: drawdownFillTop,
+          bottomFillColor2: drawdownFillBottom,
+          lineWidth: 1,
           priceFormat: {
             type: "custom",
             formatter: formatPercent,
           },
+          priceLineColor: drawdownColor,
           priceLineVisible: true,
           title: "Drawdown (%)",
         },
@@ -297,8 +320,7 @@ export function MarketReplayChart({
           replayWindow.map((point) => ({
             time: point.time,
             value: point.drawdown,
-            color: "#8b5cf680",
-          })).filter((point): point is { time: UTCTimestamp; value: number; color: string } => point.time !== undefined),
+          })).filter((point): point is { time: UTCTimestamp; value: number } => point.time !== undefined),
         );
       };
 
