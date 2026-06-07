@@ -428,6 +428,7 @@ function eventsFromApi(events: BacktestEvent[], marketData: MarketDataBundle): M
       node: event.node_id ?? "-",
       status,
       price: price ? money(price) : "-",
+      observedPrice: price || undefined,
       impact: event.reason ?? (valueUsd ? money(valueUsd) : "-"),
       side: stringField(detail.side),
       orderType: stringField(detail.kind),

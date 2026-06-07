@@ -100,6 +100,7 @@ export interface MarketEvent {
   node: string;
   status: EventStatus;
   price: string;
+  observedPrice?: number;
   impact: string;
   side?: string;
   orderType?: string;
