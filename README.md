@@ -39,11 +39,11 @@ by round-trip fixtures).
 | **Rust** (`crates/`) | contracts, compile, policy, execution, ledger, engine, Parquet loader, reporter, orchestration, HTTP API |
 | **Python** (`packages/`) | data-source adapters + ingestion (write the store); the CLI client + analysis/notebooks (client of the Rust API) |
 
-> The current code still has parts of the run path in Python (compiler, reporter,
-> worker, API); these are being moved to Rust per
-> [ADR 0001](docs/adr/0001-language-boundary.md) (tracked migration). Until then,
-> [docs/system-design.md](docs/system-design.md) describes both the current
-> (transitional) layout and the target.
+> The run path is **entirely Rust** — the migration tracked by
+> [ADR 0001](docs/adr/0001-language-boundary.md) (#43) is complete. Python is now
+> only data ingestion, the CLI client, and the shared contract models.
+> [docs/system-design.md](docs/system-design.md) describes the architecture in
+> depth.
 
 ## Local setup
 
