@@ -6,6 +6,8 @@ history limits, and how it reaches the deployed server. For the *conceptual*
 picture of where data *can* come from, see
 [market-data-primer.md](market-data-primer.md); for the 1h-vs-4h interval
 tradeoff and per-source reach, see [market-data-intervals.md](market-data-intervals.md).
+For *how* each series is constructed (and how to validate its quality against an
+independent reference), see [market-data-construction.md](market-data-construction.md).
 
 The simulation engine never fetches raw data. The flow is always:
 

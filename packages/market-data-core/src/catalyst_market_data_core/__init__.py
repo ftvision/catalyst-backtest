@@ -12,6 +12,11 @@ from __future__ import annotations
 from .quality import CandleQualityReport, filter_candle_outliers
 from .store import ParquetSource, ParquetStore
 from .transport import Transport, http_transport, network_disabled
+from .validation import (
+    ValidationReport,
+    check_ohlc_invariants,
+    compare_to_reference,
+)
 
 __version__ = "0.1.0"
 
@@ -24,4 +29,7 @@ __all__ = [
     "network_disabled",
     "filter_candle_outliers",
     "CandleQualityReport",
+    "check_ohlc_invariants",
+    "compare_to_reference",
+    "ValidationReport",
 ]
