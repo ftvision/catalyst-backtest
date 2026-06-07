@@ -52,7 +52,11 @@
             "perp_order",
             "yield_deposit",
             "yield_withdraw",
-            "price_threshold"
+            "price_threshold",
+            "threshold",
+            "all",
+            "any",
+            "not"
           ]
         },
         "config": { "type": "object" },
@@ -78,6 +82,10 @@
         {
           "if": { "properties": { "subtype": { "const": "price_threshold" } } },
           "then": { "properties": { "config": { "$ref": "#/$defs/priceThresholdConfig" } } }
+        },
+        {
+          "if": { "properties": { "subtype": { "const": "threshold" } } },
+          "then": { "properties": { "config": { "$ref": "#/$defs/thresholdConfig" } } }
         }
       ]
     },
@@ -150,6 +158,84 @@
         "symbol": { "type": "string" },
         "operator": { "type": "string", "enum": ["<", "<=", ">", ">=", "==", "!="] },
         "threshold": { "$ref": "#/$defs/decimal" }
+      }
+    },
+    "operator": { "type": "string", "enum": ["<", "<=", ">", ">=", "==", "!="] },
+    "source": {
+      "type": "object",
+      "description": "The scalar a signal observes. Each kind maps to one market-data series.",
+      "required": ["kind"],
+      "oneOf": [
+        {
+          "properties": {
+            "kind": { "const": "price" },
+            "symbol": { "type": "string" },
+            "venue": { "type": "string" }
+          },
+          "required": ["kind", "symbol"],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "kind": { "const": "funding" },
+            "venue": { "type": "string" },
+            "symbol": { "type": "string" }
+          },
+          "required": ["kind", "venue", "symbol"],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "kind": { "const": "yield" },
+            "protocol": { "type": "string" },
+            "asset": { "type": "string" },
+            "chain": { "type": "string" },
+            "pool": { "type": "string" }
+          },
+          "required": ["kind", "protocol", "asset", "chain"],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "kind": { "const": "gas" },
+            "chain": { "type": "string" }
+          },
+          "required": ["kind", "chain"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "reference": {
+      "description": "The right-hand side of a signal comparison: a constant, another source, or a graph variable.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["const"],
+          "additionalProperties": false,
+          "properties": { "const": { "$ref": "#/$defs/decimal" } }
+        },
+        {
+          "type": "object",
+          "required": ["source"],
+          "additionalProperties": false,
+          "properties": { "source": { "$ref": "#/$defs/source" } }
+        },
+        {
+          "type": "object",
+          "required": ["var"],
+          "additionalProperties": false,
+          "properties": { "var": { "type": "string" } }
+        }
+      ]
+    },
+    "thresholdConfig": {
+      "type": "object",
+      "required": ["source", "operator", "reference"],
+      "additionalProperties": false,
+      "properties": {
+        "source": { "$ref": "#/$defs/source" },
+        "operator": { "$ref": "#/$defs/operator" },
+        "reference": { "$ref": "#/$defs/reference" }
       }
     }
   }

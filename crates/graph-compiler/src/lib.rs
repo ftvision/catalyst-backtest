@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use catalyst_contracts::graph::{
-    Graph, Node, NodeKind, NodeSubtype, PerpOrderConfig, PriceThresholdConfig, SwapConfig,
-    YieldConfig,
+    Graph, Node, NodeKind, NodeSubtype, PerpOrderConfig, PriceThresholdConfig, Reference, Source,
+    SwapConfig, ThresholdConfig, YieldConfig,
 };
 
 /// Assets treated as cash/quote (no price feed needed to value them in USD).
@@ -34,6 +34,10 @@ fn subtype_str(s: &NodeSubtype) -> String {
         NodeSubtype::YieldDeposit => "yield_deposit",
         NodeSubtype::YieldWithdraw => "yield_withdraw",
         NodeSubtype::PriceThreshold => "price_threshold",
+        NodeSubtype::Threshold => "threshold",
+        NodeSubtype::All => "all",
+        NodeSubtype::Any => "any",
+        NodeSubtype::Not => "not",
     }
     .to_string()
 }
@@ -93,7 +97,11 @@ pub struct CompiledSignal {
     pub id: String,
     pub subtype: String,
     pub config: Value,
+    /// Downstream action ids this signal triggers.
     pub targets: Vec<String>,
+    /// Upstream signal ids feeding a combinator (empty for leaf signals).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inputs: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -142,7 +150,16 @@ enum Typed {
     Swap(SwapConfig),
     Perp(PerpOrderConfig),
     Yield(YieldConfig),
-    Threshold(PriceThresholdConfig),
+    /// Both `price_threshold` (sugar) and `threshold` normalize to this.
+    Threshold(ThresholdConfig),
+    /// `all` / `any` / `not` — inputs come from signal -> signal edges, not config.
+    Combinator,
+}
+
+/// True for combinator signal subtypes (the only ones that accept incoming
+/// signal edges).
+fn is_combinator(subtype: &NodeSubtype) -> bool {
+    matches!(subtype, NodeSubtype::All | NodeSubtype::Any | NodeSubtype::Not)
 }
 
 fn validate_node(node: &Node) -> Result<Typed, CompileError> {
@@ -160,10 +177,23 @@ fn validate_node(node: &Node) -> Result<Typed, CompileError> {
         (NodeKind::Action, NodeSubtype::YieldDeposit | NodeSubtype::YieldWithdraw) => {
             serde_json::from_value(node.config.clone()).map(Typed::Yield).map_err(|e| bad(e, "yield"))
         }
+        // `price_threshold` is sugar: desugar to a price Source + const Reference.
         (NodeKind::Signal, NodeSubtype::PriceThreshold) => {
-            serde_json::from_value(node.config.clone())
-                .map(Typed::Threshold)
+            serde_json::from_value::<PriceThresholdConfig>(node.config.clone())
+                .map(|p| {
+                    Typed::Threshold(ThresholdConfig {
+                        source: Source::Price { symbol: p.symbol, venue: None },
+                        operator: p.operator,
+                        reference: Reference::Const { value: p.threshold },
+                    })
+                })
                 .map_err(|e| bad(e, "price_threshold"))
+        }
+        (NodeKind::Signal, NodeSubtype::Threshold) => serde_json::from_value(node.config.clone())
+            .map(Typed::Threshold)
+            .map_err(|e| bad(e, "threshold")),
+        (NodeKind::Signal, NodeSubtype::All | NodeSubtype::Any | NodeSubtype::Not) => {
+            Ok(Typed::Combinator)
         }
         (NodeKind::Action, other) => {
             Err(CompileError::new(format!("unsupported action subtype {}", subtype_str(other)), id()))
@@ -192,11 +222,13 @@ pub fn compile(graph: &Graph) -> Result<CompiledGraph, CompileError> {
 
     let all_ids: HashSet<&str> = graph.nodes.iter().map(|n| n.id.as_str()).collect();
     let mut kind_of: HashMap<&str, &NodeKind> = HashMap::new();
+    let mut subtype_of: HashMap<&str, &NodeSubtype> = HashMap::new();
     let mut enabled: HashSet<&str> = HashSet::new();
     for node in &graph.nodes {
         if node.enabled {
             enabled.insert(node.id.as_str());
             kind_of.insert(node.id.as_str(), &node.kind);
+            subtype_of.insert(node.id.as_str(), &node.subtype);
         } else {
             warnings.push(format!("node {:?} is disabled and was excluded", node.id));
         }
@@ -231,11 +263,23 @@ pub fn compile(graph: &Graph) -> Result<CompiledGraph, CompileError> {
             continue;
         }
         if matches!(kind_of.get(edge.to.as_str()), Some(NodeKind::Signal)) {
-            warnings.push(format!(
-                "edge {:?} -> {:?} targets a signal; signals are evaluated by their own threshold, \
-                 so this edge has no effect",
-                edge.from, edge.to
-            ));
+            let to_combinator = subtype_of.get(edge.to.as_str()).is_some_and(|s| is_combinator(s));
+            let from_signal = matches!(kind_of.get(edge.from.as_str()), Some(NodeKind::Signal));
+            if to_combinator && from_signal {
+                // signal -> combinator: a real input edge, kept.
+                edges.push((edge.from.as_str(), edge.to.as_str()));
+            } else if to_combinator {
+                warnings.push(format!(
+                    "edge {:?} -> {:?} feeds a combinator from a non-signal node; dropped",
+                    edge.from, edge.to
+                ));
+            } else {
+                warnings.push(format!(
+                    "edge {:?} -> {:?} targets a signal; signals are evaluated by their own \
+                     threshold, so this edge has no effect",
+                    edge.from, edge.to
+                ));
+            }
             continue;
         }
         edges.push((edge.from.as_str(), edge.to.as_str()));
@@ -274,24 +318,62 @@ pub fn compile(graph: &Graph) -> Result<CompiledGraph, CompileError> {
         });
     }
 
-    // Signals with targets.
+    // Signals: action targets (outgoing -> action) and combinator inputs
+    // (incoming <- signal).
     let mut signals = Vec::new();
     for node in &graph.nodes {
         if !enabled.contains(node.id.as_str()) || !matches!(node.kind, NodeKind::Signal) {
             continue;
         }
-        let targets: Vec<String> =
-            edges.iter().filter(|(from, _)| *from == node.id).map(|(_, to)| to.to_string()).collect();
-        if targets.is_empty() {
-            warnings.push(format!("signal {:?} has no downstream actions", node.id));
+        let targets: Vec<String> = edges
+            .iter()
+            .filter(|(from, to)| {
+                *from == node.id && matches!(kind_of.get(to), Some(NodeKind::Action))
+            })
+            .map(|(_, to)| to.to_string())
+            .collect();
+        let inputs: Vec<String> = edges
+            .iter()
+            .filter(|(from, to)| {
+                *to == node.id && matches!(kind_of.get(from), Some(NodeKind::Signal))
+            })
+            .map(|(from, _)| from.to_string())
+            .collect();
+
+        let has_outgoing = edges.iter().any(|(from, _)| *from == node.id);
+        if !has_outgoing {
+            warnings.push(format!("signal {:?} has no downstream nodes", node.id));
         }
+
+        // Combinator arity checks.
+        match node.subtype {
+            NodeSubtype::Not if inputs.len() != 1 => {
+                return Err(CompileError::new(
+                    format!("`not` signal must have exactly one input, got {}", inputs.len()),
+                    Some(node.id.clone()),
+                ));
+            }
+            NodeSubtype::All | NodeSubtype::Any if inputs.is_empty() => {
+                return Err(CompileError::new(
+                    "combinator signal must have at least one input",
+                    Some(node.id.clone()),
+                ));
+            }
+            _ => {}
+        }
+
         signals.push(CompiledSignal {
             id: node.id.clone(),
             subtype: subtype_str(&node.subtype),
             config: node.config.clone(),
             targets,
+            inputs,
         });
     }
+
+    // Combinators read their inputs' conditions, so emit signals in topological
+    // order (inputs before dependents); reject cycles.
+    signals = topo_order_signals(signals)?;
 
     let data_requirements = data_requirements(&graph.nodes, &enabled, &typed, &symbol_venues);
 
@@ -302,6 +384,50 @@ pub fn compile(graph: &Graph) -> Result<CompiledGraph, CompileError> {
         data_requirements,
         warnings,
     })
+}
+
+/// Order signals so every combinator comes after the signals it reads. Returns
+/// a `CompileError` if the signal -> signal edges contain a cycle.
+fn topo_order_signals(signals: Vec<CompiledSignal>) -> Result<Vec<CompiledSignal>, CompileError> {
+    use std::collections::VecDeque;
+
+    let ids: HashSet<&str> = signals.iter().map(|s| s.id.as_str()).collect();
+    // in-degree = number of inputs that are signals in this set.
+    let mut indegree: HashMap<&str, usize> = signals.iter().map(|s| (s.id.as_str(), 0)).collect();
+    let mut dependents: HashMap<&str, Vec<&str>> = HashMap::new();
+    for s in &signals {
+        for input in &s.inputs {
+            if ids.contains(input.as_str()) {
+                *indegree.get_mut(s.id.as_str()).unwrap() += 1;
+                dependents.entry(input.as_str()).or_default().push(s.id.as_str());
+            }
+        }
+    }
+
+    // Kahn's algorithm, preserving original order among ready nodes.
+    let mut queue: VecDeque<&str> =
+        signals.iter().map(|s| s.id.as_str()).filter(|id| indegree[id] == 0).collect();
+    let mut order: Vec<String> = Vec::with_capacity(signals.len());
+    while let Some(id) = queue.pop_front() {
+        order.push(id.to_string());
+        if let Some(deps) = dependents.get(id) {
+            for &dep in deps {
+                let d = indegree.get_mut(dep).unwrap();
+                *d -= 1;
+                if *d == 0 {
+                    queue.push_back(dep);
+                }
+            }
+        }
+    }
+
+    if order.len() != signals.len() {
+        return Err(CompileError::new("signal combinator edges form a cycle", None));
+    }
+
+    let mut by_id: HashMap<String, CompiledSignal> =
+        signals.into_iter().map(|s| (s.id.clone(), s)).collect();
+    Ok(order.into_iter().filter_map(|id| by_id.remove(&id)).collect())
 }
 
 fn symbol_venue_map(typed: &HashMap<&str, Typed>) -> HashMap<String, String> {
@@ -381,10 +507,27 @@ fn data_requirements(
                 }
             }
             Some(Typed::Threshold(t)) => {
-                let venue =
-                    symbol_venues.get(&t.symbol).cloned().unwrap_or_else(|| DEFAULT_PRICE_VENUE.into());
-                add_candle(&venue, &t.symbol);
+                add_threshold_source(
+                    &t.source,
+                    &mut add_candle,
+                    &mut funding,
+                    &mut gas,
+                    &mut yields,
+                    symbol_venues,
+                );
+                if let Reference::Source { source } = &t.reference {
+                    add_threshold_source(
+                        source,
+                        &mut add_candle,
+                        &mut funding,
+                        &mut gas,
+                        &mut yields,
+                        symbol_venues,
+                    );
+                }
             }
+            // Combinators read other signals, not market data.
+            Some(Typed::Combinator) => {}
             None => {}
         }
     }
@@ -394,5 +537,47 @@ fn data_requirements(
         funding: funding.into_values().collect(),
         gas: gas.into_values().collect(),
         yields: yields.into_values().collect(),
+    }
+}
+
+/// Add the market-data requirement a threshold [`Source`] needs. `add_candle`
+/// is threaded in (rather than `&mut candles`) so it shares the price-venue
+/// resolution used by the rest of `data_requirements`.
+fn add_threshold_source(
+    source: &Source,
+    add_candle: &mut impl FnMut(&str, &str),
+    funding: &mut BTreeMap<(String, String), FundingReq>,
+    gas: &mut BTreeMap<String, GasReq>,
+    yields: &mut BTreeMap<(String, String, String, Option<String>), YieldReq>,
+    symbol_venues: &HashMap<String, String>,
+) {
+    match source {
+        Source::Price { symbol, venue } => {
+            let v = venue
+                .clone()
+                .or_else(|| symbol_venues.get(symbol).cloned())
+                .unwrap_or_else(|| DEFAULT_PRICE_VENUE.to_string());
+            add_candle(&v, symbol);
+        }
+        Source::Funding { venue, symbol } => {
+            funding.insert(
+                (venue.clone(), symbol.clone()),
+                FundingReq { venue: venue.clone(), symbol: symbol.clone() },
+            );
+        }
+        Source::Yield { protocol, asset, chain, pool } => {
+            yields.insert(
+                (protocol.clone(), asset.clone(), chain.clone(), pool.clone()),
+                YieldReq {
+                    protocol: protocol.clone(),
+                    asset: asset.clone(),
+                    chain: chain.clone(),
+                    pool: pool.clone(),
+                },
+            );
+        }
+        Source::Gas { chain } => {
+            gas.insert(chain.clone(), GasReq { chain: chain.clone() });
+        }
     }
 }

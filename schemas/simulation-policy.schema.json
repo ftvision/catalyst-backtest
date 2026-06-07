@@ -86,6 +86,11 @@
         "cooldown": {
           "type": ["string", "null"],
           "description": "Cooldown duration (e.g. 1h) or null for no cooldown."
+        },
+        "max_count": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Maximum number of fires when repeat = max_count."
         }
       }
     },

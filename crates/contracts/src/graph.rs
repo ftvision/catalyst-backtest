@@ -20,6 +20,14 @@ pub enum NodeSubtype {
     YieldDeposit,
     YieldWithdraw,
     PriceThreshold,
+    /// Generalized signal: compare any [`Source`] against a [`Reference`].
+    /// `price_threshold` is the price-only sugar for this.
+    Threshold,
+    /// Boolean combinator signals. Their inputs are the upstream signals with an
+    /// edge into them (signal -> signal edges, allowed only for these subtypes).
+    All,
+    Any,
+    Not,
 }
 
 fn default_true() -> bool {
@@ -137,4 +145,57 @@ pub struct PriceThresholdConfig {
     pub symbol: String,
     pub operator: String,
     pub threshold: Decimal,
+}
+
+/// The scalar a signal observes each tick. Each variant maps 1:1 onto a
+/// market-data kind, so a `Source` drives both data-requirement extraction
+/// (in the compiler) and the per-tick value read (in the engine). Adding a new
+/// data kind is one arm here, not a new node subtype.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Source {
+    /// Spot/mark price of a symbol. `venue` pins the candle series; when omitted
+    /// the compiler resolves it from the graph (unambiguous venue) or a default.
+    Price {
+        symbol: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        venue: Option<String>,
+    },
+    /// Perp funding rate at a venue.
+    Funding { venue: String, symbol: String },
+    /// Protocol yield (APR) for an asset/chain/pool.
+    Yield {
+        protocol: String,
+        asset: String,
+        chain: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pool: Option<String>,
+    },
+    /// Per-chain gas cost in USD.
+    Gas { chain: String },
+}
+
+/// The right-hand side of a signal comparison.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Reference {
+    /// A constant threshold, e.g. `{ "const": "1800" }`.
+    Const {
+        #[serde(rename = "const")]
+        value: Decimal,
+    },
+    /// Another source, e.g. price vs a moving average or funding vs zero:
+    /// `{ "source": { "kind": "funding", ... } }`.
+    Source { source: Source },
+    /// A graph variable, e.g. `{ "var": "entry_price" }`. Resolved from
+    /// `Graph.variables` (see issue #49 for full variable substitution).
+    Var { var: String },
+}
+
+/// Generalized threshold signal config (`subtype: "threshold"`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ThresholdConfig {
+    pub source: Source,
+    pub operator: String,
+    pub reference: Reference,
 }

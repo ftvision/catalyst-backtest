@@ -133,6 +133,8 @@ pub struct ResolvedPolicy {
     pub signal_trigger: SignalTrigger,
     pub repeat: Repeat,
     pub cooldown: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repeat_max_count: Option<u32>,
     pub same_tick: SameTick,
     pub missing_required: MissingRequired,
     pub missing_optional: MissingOptional,

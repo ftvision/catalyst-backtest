@@ -22,6 +22,7 @@ pub fn strict_v1() -> ResolvedPolicy {
         signal_trigger: SignalTrigger::Crossing,
         repeat: Repeat::OnEachSignalFire,
         cooldown: None,
+        repeat_max_count: None,
         same_tick: SameTick::TopologicalOrder,
         missing_required: MissingRequired::Fail,
         missing_optional: MissingOptional::Warn,
