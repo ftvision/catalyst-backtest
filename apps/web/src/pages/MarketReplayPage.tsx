@@ -1,4 +1,4 @@
-import { Button, Group, Paper, SegmentedControl, SimpleGrid, Stack, Text } from "@mantine/core";
+import { Button, Group, Paper, SimpleGrid, Stack, Text } from "@mantine/core";
 import { ArrowRight, ScanLine } from "lucide-react";
 import { DataTable } from "../components/DataTable";
 import { MarketReplayChart } from "../components/MarketReplayChart";
@@ -32,20 +32,9 @@ export function MarketReplayPage({
         title="Market Replay"
         subtitle="Historical candles, equity, drawdown, gas, funding, and trace events in one overview."
         action={
-          <Group gap="xs">
-            <SegmentedControl
-              size="xs"
-              value="overview"
-              data={[
-                { label: "Overview", value: "overview" },
-                { label: "Events", value: "events" },
-                { label: "Coverage", value: "coverage" },
-              ]}
-            />
-            <Button variant="light" leftSection={<ScanLine size={14} />} onClick={onInspectEvent}>
-              Inspect in Event Lens
-            </Button>
-          </Group>
+          <Button variant="light" leftSection={<ScanLine size={14} />} onClick={onInspectEvent}>
+            Inspect in Event Lens
+          </Button>
         }
       />
 

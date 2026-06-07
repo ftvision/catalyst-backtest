@@ -62,6 +62,27 @@ export interface MarketDataBundle {
   warnings?: string[];
 }
 
+export interface MarketDataCatalogItem {
+  kind: string;
+  source: string;
+  venue?: string;
+  symbol?: string;
+  quote?: string;
+  chain?: string;
+  interval?: string;
+  start?: string | null;
+  end?: string | null;
+  files?: number;
+  points?: number;
+}
+
+export interface MarketDataCatalogResponse {
+  source: string;
+  root?: string;
+  items: MarketDataCatalogItem[];
+  warnings?: string[];
+}
+
 export interface BacktestRequest {
   graph: CatalystGraph;
   config: BacktestConfig;
@@ -279,6 +300,7 @@ export const catalystApi = {
   listStrategyScenarios: () => request<{ items: StrategyScenarioListItem[] }>("/strategy-scenarios"),
   getStrategyScenario: (id: string) =>
     request<StrategyScenarioDetail>(`/strategy-scenarios/${encodeURIComponent(id)}`),
+  listMarketDataCatalog: () => request<MarketDataCatalogResponse>("/market-data/catalog"),
   listBacktests: (graphHash?: string) =>
     request<{ items: BacktestListItem[] }>(
       `/backtests${graphHash ? `?graph_hash=${encodeURIComponent(graphHash)}` : ""}`,

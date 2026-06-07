@@ -13,6 +13,7 @@
 //! - `GET  /backtests/{id}` `/result` `/metadata` `/events` (paginated/filterable)
 //! - `POST /backtests/preview` — validate graph + summary + data requirements + resolved policy
 //! - `POST /market-data/coverage` — per-series coverage before a run
+//! - `GET  /market-data/catalog` — available configured-store series and spans
 //! - `POST /market-data/window` — normalized bundle for the requested window
 //! - `GET  /policy-profiles`
 //! - `GET  /strategies` `/strategies/{id}` — bundled strategy repository
@@ -58,6 +59,7 @@ pub fn app(state: AppState) -> Router {
         .route("/backtests/:id/metadata", get(handlers::get_metadata))
         .route("/backtests/:id/events", get(handlers::get_events))
         .route("/market-data/coverage", post(handlers::coverage))
+        .route("/market-data/catalog", get(handlers::market_data_catalog))
         .route("/market-data/window", post(handlers::market_data_window))
         .route("/policy-profiles", get(handlers::policy_profiles))
         .route("/strategies", get(handlers::list_strategies))

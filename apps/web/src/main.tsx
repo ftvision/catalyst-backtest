@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { MantineProvider } from "@mantine/core";
 import "@mantine/core/styles.css";
 import "@mantine/charts/styles.css";
+import "@mantine/dates/styles.css";
 import "./styles.css";
 import { App } from "./App";
 import { theme } from "./theme";

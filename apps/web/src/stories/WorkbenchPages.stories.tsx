@@ -69,7 +69,6 @@ export const EventLensDetail: Story = {
         <EventLensPage
           audit={audit}
           replay={marketReplay}
-          result={result}
           setup={setup}
           selectedEventId={selectedEventId}
           onSelectEvent={setSelectedEventId}

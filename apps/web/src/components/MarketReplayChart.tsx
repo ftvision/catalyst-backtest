@@ -46,6 +46,13 @@ function formatChartTime(time: UTCTimestamp) {
   return `${String(hour).padStart(2, "0")}:00`;
 }
 
+function isEventWindowAligned(candles: CandlePoint[], events: MarketEvent[]) {
+  if (!candles.length || !events.length) return true;
+  const firstCandle = candles[0].time;
+  const lastCandle = candles[candles.length - 1].time;
+  return events.some((event) => event.time >= firstCandle && event.time <= lastCandle);
+}
+
 export function MarketReplayChart({
   candles,
   replay,
@@ -61,6 +68,7 @@ export function MarketReplayChart({
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [eventRails, setEventRails] = useState<EventRail[]>([]);
+  const eventsAligned = isEventWindowAligned(candles, events);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -211,8 +219,14 @@ export function MarketReplayChart({
     const updateEventRails = () => {
       if (disposed) return;
 
-      const nextRails = events.flatMap((event) => {
-        const coordinate = chart.timeScale().timeToCoordinate(event.time);
+      const nextRails = events.flatMap((event, index) => {
+        const fallbackTime = candles.length
+          ? candles[Math.min(candles.length - 1, Math.round(((index + 1) / (events.length + 1)) * (candles.length - 1)))]?.time
+          : undefined;
+        const coordinateTime = eventsAligned ? event.time : fallbackTime;
+        if (coordinateTime === undefined) return [];
+
+        const coordinate = chart.timeScale().timeToCoordinate(coordinateTime);
         if (coordinate === null) return [];
         if (coordinate < 0 || coordinate > container.clientWidth) return [];
 
@@ -250,7 +264,7 @@ export function MarketReplayChart({
       resizeObserver.disconnect();
       chart.remove();
     };
-  }, [candles, compact, events, replay, selectedEventId]);
+  }, [candles, compact, events, eventsAligned, replay, selectedEventId]);
 
   return (
     <div className={compact ? "chart-shell compact" : "chart-shell"}>
