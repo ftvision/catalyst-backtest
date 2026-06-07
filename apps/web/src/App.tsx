@@ -154,6 +154,7 @@ export function App() {
   const [activeGraph, setActiveGraph] = useState<CatalystGraph>(demoGraph);
   const [activeConfig, setActiveConfig] = useState<BacktestConfig>(demoConfig);
   const [activeMarketData, setActiveMarketData] = useState<MarketDataBundle>(demoMarketData);
+  const [resolvedVariables, setResolvedVariables] = useState<Record<string, unknown>>({});
   const [activeSelection, setActiveSelection] = useState<ActiveSelection>({
     strategyId: "g_inline_service_demo",
     strategyTitle: "ETH service backtest",
@@ -236,6 +237,7 @@ export function App() {
     setActiveGraph(input.graph);
     setActiveConfig(input.config);
     setActiveMarketData(input.marketData);
+    setResolvedVariables(preview.resolved_variables ?? {});
     setSelectedMarketDataId(input.marketDataId);
     setActiveSelection({
       strategyId: input.strategyId,
@@ -339,6 +341,31 @@ export function App() {
       setSelectedEventId((current) => {
         const stillExists = workbench.marketReplay.events.some((event) => event.id === current);
         return stillExists ? current : marketReplay.selectedEventId;
+      });
+    } catch (error) {
+      setApiStatus("failed");
+      setApiMessage(errorMessage(error));
+    } finally {
+      setStrategyLoading(false);
+    }
+  }
+
+  async function applyVariables(next: Record<string, string>) {
+    try {
+      setStrategyLoading(true);
+      setApiStatus("checking");
+      setApiMessage("Applying parameters");
+      await hydrateWorkbench({
+        graph: { ...activeGraph, variables: next },
+        config: activeConfig,
+        marketData: activeMarketData,
+        policyProfile: workbench.setup.policy,
+        strategyId: activeSelection.strategyId,
+        strategyTitle: activeSelection.strategyTitle,
+        scenarioId: activeSelection.scenarioId,
+        scenarioTitle: activeSelection.scenarioTitle,
+        sourceMode: dataSourceMode,
+        marketDataId: selectedMarketDataId,
       });
     } catch (error) {
       setApiStatus("failed");
@@ -676,6 +703,10 @@ export function App() {
               policyProfiles={policyProfiles}
               onConfigChange={updateRunConfig}
               onPolicyChange={(profile) => void loadPolicySelection(profile)}
+              variables={activeGraph.variables ?? {}}
+              resolvedVariables={resolvedVariables}
+              onVariablesChange={(vars) => void applyVariables(vars)}
+              variablesBusy={strategyLoading}
             />
           ) : null}
           {activeRoute === "data" ? (

@@ -17,6 +17,9 @@ export interface CatalystGraphNode {
 
 export interface CatalystGraph {
   schema_version?: string;
+  /** Named scalar values substitutable into node configs ("$name" / {var}). */
+  variables?: Record<string, string | number | boolean>;
+  settings?: Record<string, JsonValue>;
   nodes: CatalystGraphNode[];
   edges: Array<Record<string, JsonValue>>;
 }
@@ -164,6 +167,7 @@ export interface GraphPreview {
     yields?: Array<Record<string, JsonValue>>;
   };
   resolved_policy?: Record<string, JsonValue>;
+  resolved_variables?: Record<string, JsonValue>;
   warnings?: string[];
 }
 

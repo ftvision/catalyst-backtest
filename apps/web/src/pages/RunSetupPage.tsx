@@ -8,6 +8,7 @@ import type { BacktestConfig, MarketDataCatalogItem, StrategyListItem } from "..
 import { DataTable } from "../components/DataTable";
 import { GraphTopologyPreview } from "../components/GraphTopologyPreview";
 import { MarketDataSelector } from "../components/MarketDataSelector";
+import { ParametersPanel } from "../components/ParametersPanel";
 import { RunReadinessRail } from "../components/RunReadinessRail";
 import { SectionHeader } from "../components/SectionHeader";
 import { SetupModule } from "../components/SetupModule";
@@ -47,6 +48,10 @@ export function RunSetupPage({
   policyProfiles = [],
   onConfigChange,
   onPolicyChange,
+  variables = {},
+  resolvedVariables,
+  onVariablesChange,
+  variablesBusy = false,
 }: {
   graph: GraphSummary;
   setup: SetupData;
@@ -66,6 +71,10 @@ export function RunSetupPage({
   policyProfiles?: Array<{ id: string; label?: string }>;
   onConfigChange?: (patch: Partial<Pick<BacktestConfig, "start" | "end" | "interval">>) => void;
   onPolicyChange?: (profile: string) => void;
+  variables?: Record<string, string | number | boolean>;
+  resolvedVariables?: Record<string, unknown>;
+  onVariablesChange?: (vars: Record<string, string>) => void;
+  variablesBusy?: boolean;
 }) {
   const [selectedNodeId, setSelectedNodeId] = useState(graph.nodes[0]?.id);
 
@@ -175,6 +184,21 @@ export function RunSetupPage({
               onSelectNode={setSelectedNodeId}
             />
           </SetupModule>
+
+          {onVariablesChange && Object.keys(variables).length > 0 ? (
+            <SetupModule
+              title="Parameters"
+              subtitle="Tune this strategy's variables before running."
+              status={graph.status === "validated" ? "success" : "warning"}
+            >
+              <ParametersPanel
+                variables={variables}
+                resolved={resolvedVariables}
+                onApply={onVariablesChange}
+                busy={variablesBusy}
+              />
+            </SetupModule>
+          ) : null}
 
           <SetupModule title="Market data" subtitle="Choose the local Parquet replay window before running." status={hasMarketData ? coverageStatus : "danger"}>
             <MarketDataSelector
