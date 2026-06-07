@@ -7,120 +7,120 @@
       "config": {
         "from_asset": "USDC",
         "to_asset": "ETH",
-        "amount": "250",
-        "chain": "hyperliquid"
+        "amount": "300",
+        "chain": "base"
       },
       "enabled": true
     },
     {
-      "id": "eth-below-1900",
+      "id": "eth-below-1850",
       "kind": "signal",
       "subtype": "price_threshold",
       "config": {
         "symbol": "ETH",
         "operator": "<",
-        "threshold": "1900"
+        "threshold": "1850"
       },
       "enabled": true
     },
     {
-      "id": "buy-eth-spot-100",
+      "id": "buy-eth-on-base-100",
       "kind": "action",
       "subtype": "swap",
       "config": {
         "from_asset": "USDC",
         "to_asset": "ETH",
         "amount": "100",
-        "chain": "hyperliquid"
+        "chain": "base"
       },
       "enabled": true
     },
     {
-      "id": "eth-below-1700",
+      "id": "eth-below-1650",
       "kind": "signal",
       "subtype": "price_threshold",
       "config": {
         "symbol": "ETH",
         "operator": "<",
-        "threshold": "1700"
+        "threshold": "1650"
       },
       "enabled": true
     },
     {
-      "id": "buy-eth-spot-150",
+      "id": "buy-eth-on-base-200",
       "kind": "action",
       "subtype": "swap",
       "config": {
         "from_asset": "USDC",
         "to_asset": "ETH",
-        "amount": "150",
-        "chain": "hyperliquid"
+        "amount": "200",
+        "chain": "base"
       },
       "enabled": true
     },
     {
-      "id": "eth-above-2200",
+      "id": "eth-above-2300",
       "kind": "signal",
       "subtype": "price_threshold",
       "config": {
         "symbol": "ETH",
         "operator": ">",
-        "threshold": "2200"
+        "threshold": "2300"
       },
       "enabled": true
     },
     {
-      "id": "sell-eth-spot-004",
+      "id": "sell-eth-on-base-005",
       "kind": "action",
       "subtype": "swap",
       "config": {
         "from_asset": "ETH",
         "to_asset": "USDC",
-        "amount": "0.04",
-        "chain": "hyperliquid"
+        "amount": "0.05",
+        "chain": "base"
       },
       "enabled": true
     },
     {
-      "id": "eth-above-2500",
+      "id": "eth-above-2600",
       "kind": "signal",
       "subtype": "price_threshold",
       "config": {
         "symbol": "ETH",
         "operator": ">",
-        "threshold": "2500"
+        "threshold": "2600"
       },
       "enabled": true
     },
     {
-      "id": "sell-eth-spot-006",
+      "id": "sell-eth-on-base-005-more",
       "kind": "action",
       "subtype": "swap",
       "config": {
         "from_asset": "ETH",
         "to_asset": "USDC",
-        "amount": "0.06",
-        "chain": "hyperliquid"
+        "amount": "0.05",
+        "chain": "base"
       },
       "enabled": true
     }
   ],
   "edges": [
     {
-      "from": "eth-below-1900",
-      "to": "buy-eth-spot-100"
+      "from": "eth-below-1850",
+      "to": "buy-eth-on-base-100"
     },
     {
-      "from": "eth-below-1700",
-      "to": "buy-eth-spot-150"
+      "from": "eth-below-1650",
+      "to": "buy-eth-on-base-200"
     },
     {
-      "from": "eth-above-2200",
-      "to": "sell-eth-spot-004"
+      "from": "eth-above-2300",
+      "to": "sell-eth-on-base-005"
     },
     {
-      "from": "eth-above-2500",
-      "to": "sell-eth-spot-006"
+      "from": "eth-above-2600",
+      "to": "sell-eth-on-base-005-more"
     }
   ],
   "schema_version": "catalyst.graph.definition.v1"

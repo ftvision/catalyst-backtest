@@ -62,11 +62,13 @@ fn strategy_catalog_contains_the_pasted_graphs() {
         .map(|strategy| strategy.source.as_str())
         .collect();
 
-    assert!(sources.contains("pasted_graph_1"));
-    assert!(sources.contains("pasted_graph_2"));
-    assert!(sources.contains("pasted_graph_3"));
-    assert!(sources.contains("pasted_graph_4"));
-    assert!(sources.contains("pasted_graph_5"));
+    for n in 1..=15 {
+        let source = format!("pasted_graph_{n}");
+        assert!(sources.contains(source.as_str()), "missing {source}");
+    }
+    assert!(sources.contains("direct_spot_action_swap"));
+    assert!(sources.contains("direct_spot_action_buy"));
+    assert!(sources.contains("direct_spot_action_sell"));
     assert!(
         catalog.scenarios.len() >= 3,
         "expected a few market scenarios"
@@ -80,6 +82,7 @@ fn catalog_strategies_run_against_catalog_scenarios() {
     assert!(!catalog.strategies.is_empty(), "strategy catalog is empty");
     assert!(!catalog.scenarios.is_empty(), "scenario catalog is empty");
 
+    let expected_runs = catalog.strategies.len() * catalog.scenarios.len();
     let mut runs = 0;
     for strategy in catalog.strategies {
         let graph: Graph = load_json(&root.join(&strategy.graph));
@@ -115,5 +118,5 @@ fn catalog_strategies_run_against_catalog_scenarios() {
         }
     }
 
-    assert_eq!(runs, 15, "expected five strategies across three scenarios");
+    assert_eq!(runs, expected_runs, "expected every catalog pair to run");
 }

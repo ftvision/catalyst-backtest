@@ -1,7 +1,8 @@
 {
+  "schema_version": "catalyst.graph.definition.v1",
   "nodes": [
     {
-      "id": "buy-eth-spot",
+      "id": "direct-spot-buy-eth",
       "kind": "action",
       "subtype": "swap",
       "config": {
@@ -13,6 +14,5 @@
       "enabled": true
     }
   ],
-  "edges": [],
-  "schema_version": "catalyst.graph.definition.v1"
+  "edges": []
 }

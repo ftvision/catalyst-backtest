@@ -1,5 +1,4 @@
 {
-  "schema_version": "catalyst.graph.definition.v1",
   "nodes": [
     {
       "id": "buy-eth-spot",
@@ -31,5 +30,6 @@
       "from": "buy-eth-spot",
       "to": "sell-eth-spot"
     }
-  ]
+  ],
+  "schema_version": "catalyst.graph.definition.v1"
 }

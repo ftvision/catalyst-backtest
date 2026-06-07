@@ -14,8 +14,27 @@
         "reduce_only": false
       },
       "enabled": true
+    },
+    {
+      "id": "close-eth-long",
+      "kind": "action",
+      "subtype": "perp_order",
+      "config": {
+        "symbol": "ETH",
+        "side": "short",
+        "size_usd": "500",
+        "chain": "hyperliquid",
+        "order_type": "market",
+        "reduce_only": true
+      },
+      "enabled": true
     }
   ],
-  "edges": [],
+  "edges": [
+    {
+      "from": "open-eth-long-5x",
+      "to": "close-eth-long"
+    }
+  ],
   "schema_version": "catalyst.graph.definition.v1"
 }

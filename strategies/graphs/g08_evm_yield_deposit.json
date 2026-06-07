@@ -1,0 +1,19 @@
+{
+  "nodes": [
+    {
+      "id": "deposit-usdc-into-aave",
+      "kind": "action",
+      "subtype": "yield_deposit",
+      "config": {
+        "chain": "base",
+        "protocol": "aave",
+        "pool": "usdc",
+        "asset": "USDC",
+        "amount": "250"
+      },
+      "enabled": true
+    }
+  ],
+  "edges": [],
+  "schema_version": "catalyst.graph.definition.v1"
+}
