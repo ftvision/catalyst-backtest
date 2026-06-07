@@ -31,6 +31,12 @@
       "default": [],
       "items": { "$ref": "#/$defs/yieldSeries" }
     },
+    "liquidity": {
+      "type": "array",
+      "default": [],
+      "description": "AMM pool reserves per (venue, symbol) for depth-aware price impact.",
+      "items": { "$ref": "#/$defs/liquiditySeries" }
+    },
     "providers": {
       "type": "array",
       "default": [],
@@ -128,6 +134,28 @@
             "properties": {
               "ts": { "type": "string", "format": "date-time" },
               "apr": { "$ref": "#/$defs/decimal" }
+            }
+          }
+        }
+      }
+    },
+    "liquiditySeries": {
+      "type": "object",
+      "required": ["venue", "symbol", "points"],
+      "additionalProperties": false,
+      "properties": {
+        "venue": { "type": "string" },
+        "symbol": { "type": "string" },
+        "points": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["ts", "reserve_base", "reserve_quote"],
+            "additionalProperties": false,
+            "properties": {
+              "ts": { "type": "string", "format": "date-time" },
+              "reserve_base": { "$ref": "#/$defs/decimal" },
+              "reserve_quote": { "$ref": "#/$defs/decimal" }
             }
           }
         }

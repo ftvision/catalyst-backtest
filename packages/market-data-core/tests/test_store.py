@@ -60,3 +60,16 @@ def test_provenance_manifest_round_trip(tmp_path) -> None:
     m = store.read_provenance()
     assert m["candles/hyperliquid/ETH"] == "native"
     assert m["candles/base/ETH"] == "reference"
+
+
+def test_liquidity_round_trip(tmp_path) -> None:
+    from catalyst_contracts.market_data import LiquidityPoint
+    store = ParquetStore(tmp_path)
+    n = store.write_liquidity(
+        "base", "ETH",
+        [LiquidityPoint(ts=dt(1, 0), reserve_base="100", reserve_quote="200000")],
+    )
+    assert n == 1
+    rows = store._read_window(store._liquidity_dir("base", "ETH"), dt(1, 0), dt(1, 2))
+    assert rows[0]["reserve_base"] == "100"
+    assert rows[0]["reserve_quote"] == "200000"

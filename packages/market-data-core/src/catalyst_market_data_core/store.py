@@ -28,13 +28,14 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from catalyst_contracts import Candle
-from catalyst_contracts.market_data import FundingPoint, GasPoint, YieldPoint
+from catalyst_contracts.market_data import FundingPoint, GasPoint, LiquidityPoint, YieldPoint
 
 # Column schemas per series (ts + decimal-string value columns).
 _CANDLE_COLS = ["ts", "open", "high", "low", "close", "volume"]
 _FUNDING_COLS = ["ts", "rate"]
 _GAS_COLS = ["ts", "gas_usd"]
 _YIELD_COLS = ["ts", "apr"]
+_LIQUIDITY_COLS = ["ts", "reserve_base", "reserve_quote"]
 
 
 def _date(ts: datetime) -> str:
@@ -93,6 +94,9 @@ class ParquetStore:
 
     def _gas_dir(self, chain: str) -> Path:
         return self.root / "gas" / f"chain={chain}"
+
+    def _liquidity_dir(self, venue: str, symbol: str) -> Path:
+        return self.root / "liquidity" / f"venue={venue}" / f"symbol={symbol}"
 
     def _yield_dir(self, protocol: str, asset: str, chain: str, pool: str | None) -> Path:
         return (
@@ -158,6 +162,14 @@ class ParquetStore:
     ) -> int:
         rows = [{"ts": p.ts, "apr": p.apr} for p in points]
         self._write_rows(self._yield_dir(protocol, asset, chain, pool), _YIELD_COLS, rows)
+        return len(rows)
+
+    def write_liquidity(self, venue: str, symbol: str, points: Iterable[LiquidityPoint]) -> int:
+        rows = [
+            {"ts": p.ts, "reserve_base": p.reserve_base, "reserve_quote": p.reserve_quote}
+            for p in points
+        ]
+        self._write_rows(self._liquidity_dir(venue, symbol), _LIQUIDITY_COLS, rows)
         return len(rows)
 
     # --- range read (partition-pruned by date, window-filtered by ts) ---

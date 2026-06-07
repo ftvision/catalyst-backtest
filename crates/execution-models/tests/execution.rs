@@ -10,7 +10,7 @@ use catalyst_execution_models::{
     MarketContext,
 };
 use catalyst_portfolio_ledger::Ledger;
-use catalyst_simulation_policies::{strict_v1, ResolvedPolicy};
+use catalyst_simulation_policies::{strict_v1, ResolvedPolicy, SlippageModel};
 use rust_decimal::Decimal;
 
 fn d(s: &str) -> Decimal {
@@ -20,11 +20,12 @@ fn d(s: &str) -> Decimal {
 struct FakeMarket {
     bars: BTreeMap<(String, String), Bar>,
     gas: BTreeMap<String, Decimal>,
+    reserves: BTreeMap<(String, String), (Decimal, Decimal)>,
 }
 
 impl FakeMarket {
     fn new() -> Self {
-        FakeMarket { bars: BTreeMap::new(), gas: BTreeMap::new() }
+        FakeMarket { bars: BTreeMap::new(), gas: BTreeMap::new(), reserves: BTreeMap::new() }
     }
     fn with_bar(mut self, venue: &str, symbol: &str, close: &str) -> Self {
         let c = d(close);
@@ -38,6 +39,10 @@ impl FakeMarket {
         self.gas.insert(chain.into(), d(usd));
         self
     }
+    fn with_reserves(mut self, venue: &str, symbol: &str, base: &str, quote: &str) -> Self {
+        self.reserves.insert((venue.into(), symbol.into()), (d(base), d(quote)));
+        self
+    }
 }
 
 impl MarketContext for FakeMarket {
@@ -46,6 +51,9 @@ impl MarketContext for FakeMarket {
     }
     fn gas_usd(&self, chain: &str) -> Option<Decimal> {
         self.gas.get(chain).copied()
+    }
+    fn pool_reserves(&self, venue: &str, symbol: &str) -> Option<(Decimal, Decimal)> {
+        self.reserves.get(&(venue.into(), symbol.into())).copied()
     }
 }
 
@@ -383,4 +391,50 @@ fn place_reduce_only_limit_requires_a_position_and_closes_it() {
         place_perp_limit(&l, &limit_perp(PerpSide::Short, true, Some("2200"))),
         LimitPlacement::Placed(p) if p.side == LimitSide::Sell
     ));
+}
+
+// --- depth-aware slippage / AMM price impact (#40) ---
+
+fn amm_policy() -> ResolvedPolicy {
+    ResolvedPolicy { slippage_model: SlippageModel::AmmPriceImpact, ..strict_v1() }
+}
+
+#[test]
+fn amm_buy_applies_price_impact_from_reserves() {
+    // small pool: 100 ETH / 200_000 USDC (mid ~2000). Buying 2000 USDC moves price:
+    // avg price = (rq + amount)/rb = (200000 + 2000)/100 = 2020, not the 2002 a
+    // fixed-10bps fill on a 2000 close would give.
+    let market = FakeMarket::new()
+        .with_bar("base", "ETH", "2000")
+        .with_reserves("base", "ETH", "100", "200000");
+    let mut l = ledger_with("base", "USDC", "5000");
+    let out = execute_swap(&mut l, &market, &amm_policy(), &swap("USDC", "ETH", "2000", "base"));
+    let fill = out.fill().expect("executed");
+    assert_eq!(fill.price, Some(d("2020")));
+    assert_eq!(fill.amount, Some(d("2000") / d("2020"))); // fewer tokens than fixed
+
+    // same trade under fixed_bps fills cheaper (no depth impact) -> more tokens
+    let fixed = execute_swap(&mut l.clone(), &market, &strict_v1(), &swap("USDC", "ETH", "2000", "base"));
+    assert_eq!(fixed.fill().unwrap().price, Some(d("2002")));
+}
+
+#[test]
+fn amm_sell_applies_price_impact_from_reserves() {
+    let market = FakeMarket::new()
+        .with_bar("base", "ETH", "2000")
+        .with_reserves("base", "ETH", "100", "200000");
+    let mut l = ledger_with("base", "ETH", "10");
+    let out = execute_swap(&mut l, &market, &amm_policy(), &swap("ETH", "USDC", "1", "base"));
+    // selling 1 ETH: avg price = rq/(rb+amount) = 200000/101 ≈ 1980.198 (impact down)
+    let price: f64 = out.fill().unwrap().price.unwrap().to_string().parse().unwrap();
+    assert!((1980.0..1981.0).contains(&price), "price was {price}");
+}
+
+#[test]
+fn amm_falls_back_to_reference_without_reserves() {
+    // amm policy but no pool reserves present -> behaves like the reference fill.
+    let market = FakeMarket::new().with_bar("base", "ETH", "2000");
+    let mut l = ledger_with("base", "USDC", "5000");
+    let out = execute_swap(&mut l, &market, &amm_policy(), &swap("USDC", "ETH", "100", "base"));
+    assert_eq!(out.fill().unwrap().price, Some(d("2000"))); // close, no slippage applied
 }

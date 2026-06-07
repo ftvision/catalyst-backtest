@@ -21,6 +21,10 @@ global state directly, and **a rejection leaves the ledger unchanged**.
   the trader (buys higher, sells lower). `next_open` (the `strict_v1` default)
   uses the *next* bar's open to avoid intra-bar look-ahead, falling back to the
   current close only on the final bar.
+- **Slippage** = `fixed_bps` by default; with `amm_price_impact` and a pool
+  `liquidity` series for the `(venue, symbol)`, swaps fill at the constant-product
+  average price (`x·y=k`) for the trade size — real depth-aware impact — falling
+  back to the reference price when no pool data is present.
 - **Fees** = `fee_bps` × notional (USD).
 - **Gas** = 0 on Hyperliquid; otherwise `historical` gas from the market context
   with the policy's fixed fallback, or a fixed amount.

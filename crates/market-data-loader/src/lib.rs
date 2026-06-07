@@ -37,8 +37,8 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use catalyst_contracts::market_data::{
-    Candle, CandleSeries, Coverage, FundingPoint, FundingSeries, GasPoint, GasSeries, Provider,
-    YieldPoint, YieldSeries,
+    Candle, CandleSeries, Coverage, FundingPoint, FundingSeries, GasPoint, GasSeries,
+    LiquidityPoint, LiquiditySeries, Provider, YieldPoint, YieldSeries,
 };
 use catalyst_contracts::MarketDataBundle;
 
@@ -478,6 +478,39 @@ pub async fn load_bundle(
         ));
     }
 
+    // liquidity (pool reserves) — best-effort per candle (venue, symbol), so the
+    // amm_price_impact policy can find depth where it's been ingested. Absence is
+    // silent (depth-aware fills are opt-in via policy).
+    let mut liquidity = Vec::new();
+    for r in &reqs.candles {
+        let prefix = child(
+            &base,
+            &[
+                "liquidity".to_string(),
+                format!("venue={}", r.venue),
+                format!("symbol={}", r.symbol),
+            ],
+        );
+        let rows =
+            read_window(&store, &prefix, &["reserve_base", "reserve_quote"], start_us, end_us)
+                .await?;
+        if rows.is_empty() {
+            continue;
+        }
+        liquidity.push(LiquiditySeries {
+            venue: req(&r.venue),
+            symbol: req(&r.symbol),
+            points: rows
+                .into_iter()
+                .map(|(t, v)| LiquidityPoint {
+                    ts: micros_to_iso(t),
+                    reserve_base: v[0].clone().unwrap_or_default(),
+                    reserve_quote: v[1].clone().unwrap_or_default(),
+                })
+                .collect(),
+        });
+    }
+
     Ok(MarketDataBundle {
         schema_version: "catalyst.backtest.market_data_bundle.v1".to_string(),
         interval: interval.to_string(),
@@ -487,6 +520,7 @@ pub async fn load_bundle(
         funding,
         gas,
         yields,
+        liquidity,
         providers,
         warnings,
     })

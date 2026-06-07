@@ -8,11 +8,22 @@ use rust_decimal::Decimal;
 
 use catalyst_contracts::graph::SwapConfig;
 use catalyst_portfolio_ledger::Ledger;
-use catalyst_simulation_policies::ResolvedPolicy;
+use catalyst_simulation_policies::{ResolvedPolicy, SlippageModel};
 
 use crate::context::MarketContext;
 use crate::outcome::{Execution, Fill};
 use crate::pricing::{fee_usd, fill_price, gas_usd, is_stable, parse, Direction};
+
+/// Constant-product (x·y=k) average execution price including price impact, given
+/// the trade `amount` and pool reserves. A buy spends `amount` quote and receives
+/// `rb·amount/(rq+amount)` base (avg price `(rq+amount)/rb`); a sell disposes
+/// `amount` base for `rq·amount/(rb+amount)` quote (avg price `rq/(rb+amount)`).
+fn amm_price(dir: Direction, amount: Decimal, reserve_base: Decimal, reserve_quote: Decimal) -> Decimal {
+    match dir {
+        Direction::Buy => (reserve_quote + amount) / reserve_base,
+        Direction::Sell => reserve_quote / (reserve_base + amount),
+    }
+}
 
 /// Resolve a swap's trade direction and the priced base asset.
 fn swap_direction(cfg: &SwapConfig) -> Result<(Direction, &str), String> {
@@ -87,6 +98,16 @@ fn swap_at(
     if amount.is_zero() {
         return Execution::rejected(format!("nothing to swap from {}", cfg.from_asset));
     }
+
+    // Depth-aware price impact (#40): when the policy selects `amm_price_impact`
+    // and pool reserves are available for this series, fill at the constant-product
+    // average price (size-dependent) instead of the fixed-bps reference price.
+    let price = match (policy.slippage_model, ctx.pool_reserves(venue, base)) {
+        (SlippageModel::AmmPriceImpact, Some((rb, rq))) if !rb.is_zero() && !rq.is_zero() => {
+            amm_price(dir, amount, rb, rq)
+        }
+        _ => price,
+    };
 
     let gas = gas_usd(venue, ctx, policy);
 

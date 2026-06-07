@@ -50,7 +50,11 @@ pub fn reference_price(
 pub fn apply_slippage(price: Decimal, dir: Direction, policy: &ResolvedPolicy) -> Decimal {
     let bps = match policy.slippage_model {
         SlippageModel::FixedBps => parse(&policy.slippage_bps),
-        SlippageModel::VolumeBased | SlippageModel::None => Decimal::ZERO,
+        // amm_price_impact is applied from pool reserves in the swap model, not as
+        // a flat bps here; volume_based isn't modeled yet.
+        SlippageModel::VolumeBased | SlippageModel::AmmPriceImpact | SlippageModel::None => {
+            Decimal::ZERO
+        }
     };
     let factor = bps / Decimal::from(BPS);
     match dir {
