@@ -1,0 +1,41 @@
+{
+  "schema_version": "catalyst.graph.definition.v1",
+  "nodes": [
+    {
+      "id": "fast-above-slow",
+      "kind": "signal",
+      "subtype": "threshold",
+      "config": {
+        "source": {
+          "kind": "derived",
+          "of": { "kind": "price", "symbol": "ETH", "venue": "base" },
+          "transform": "sma",
+          "window": 10
+        },
+        "operator": ">",
+        "reference": {
+          "source": {
+            "kind": "derived",
+            "of": { "kind": "price", "symbol": "ETH", "venue": "base" },
+            "transform": "sma",
+            "window": 50
+          }
+        }
+      },
+      "enabled": true
+    },
+    {
+      "id": "enter-trend",
+      "kind": "action",
+      "subtype": "swap",
+      "config": {
+        "from_asset": "USDC",
+        "to_asset": "ETH",
+        "amount": { "basis": "pct_portfolio", "value": "50" },
+        "chain": "base"
+      },
+      "enabled": true
+    }
+  ],
+  "edges": [{ "from": "fast-above-slow", "to": "enter-trend" }]
+}

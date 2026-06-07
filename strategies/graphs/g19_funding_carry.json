@@ -1,0 +1,45 @@
+{
+  "schema_version": "catalyst.graph.definition.v1",
+  "nodes": [
+    {
+      "id": "eth-funding-rich",
+      "kind": "signal",
+      "subtype": "threshold",
+      "config": {
+        "source": { "kind": "funding", "venue": "hyperliquid", "symbol": "ETH" },
+        "operator": ">=",
+        "reference": { "const": "0.0001" }
+      },
+      "enabled": true
+    },
+    {
+      "id": "long-spot-eth",
+      "kind": "action",
+      "subtype": "swap",
+      "config": {
+        "from_asset": "USDC",
+        "to_asset": "ETH",
+        "amount": { "basis": "pct_portfolio", "value": "25" },
+        "chain": "hyperliquid"
+      },
+      "enabled": true
+    },
+    {
+      "id": "short-eth-perp",
+      "kind": "action",
+      "subtype": "perp_order",
+      "config": {
+        "symbol": "ETH",
+        "side": "short",
+        "size_usd": { "basis": "pct_portfolio", "value": "25" },
+        "chain": "hyperliquid",
+        "order_type": "market"
+      },
+      "enabled": true
+    }
+  ],
+  "edges": [
+    { "from": "eth-funding-rich", "to": "long-spot-eth" },
+    { "from": "eth-funding-rich", "to": "short-eth-perp" }
+  ]
+}

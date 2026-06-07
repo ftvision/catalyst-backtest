@@ -1,0 +1,67 @@
+{
+  "schema_version": "catalyst.graph.definition.v1",
+  "nodes": [
+    {
+      "id": "strong-12h-momentum",
+      "kind": "signal",
+      "subtype": "threshold",
+      "config": {
+        "source": {
+          "kind": "derived",
+          "of": { "kind": "price", "symbol": "ETH", "venue": "base" },
+          "transform": "roc",
+          "window": 12
+        },
+        "operator": ">=",
+        "reference": { "const": "0.05" }
+      },
+      "enabled": true
+    },
+    {
+      "id": "ride-momentum",
+      "kind": "action",
+      "subtype": "swap",
+      "config": {
+        "from_asset": "USDC",
+        "to_asset": "ETH",
+        "amount": { "basis": "pct_portfolio", "value": "40" },
+        "chain": "base"
+      },
+      "enabled": true
+    },
+    {
+      "id": "lost-trend",
+      "kind": "signal",
+      "subtype": "threshold",
+      "config": {
+        "source": { "kind": "price", "symbol": "ETH", "venue": "base" },
+        "operator": "<",
+        "reference": {
+          "source": {
+            "kind": "derived",
+            "of": { "kind": "price", "symbol": "ETH", "venue": "base" },
+            "transform": "sma",
+            "window": 10
+          }
+        }
+      },
+      "enabled": true
+    },
+    {
+      "id": "exit-to-cash",
+      "kind": "action",
+      "subtype": "swap",
+      "config": {
+        "from_asset": "ETH",
+        "to_asset": "USDC",
+        "amount": { "basis": "pct_balance", "value": "100" },
+        "chain": "base"
+      },
+      "enabled": true
+    }
+  ],
+  "edges": [
+    { "from": "strong-12h-momentum", "to": "ride-momentum" },
+    { "from": "lost-trend", "to": "exit-to-cash" }
+  ]
+}

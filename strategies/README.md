@@ -29,6 +29,22 @@ service smoke testing:
 - `g17_direct_hl_spot_buy_eth`
 - `g18_direct_hl_spot_sell_eth`
 
+It also includes strategies built on the ADR-0002 surface (data-driven sources,
+derived indicators, composition, and relative sizing):
+
+- `g19_funding_carry` — funding-rate source fans out to a long-spot + short-perp basis trade
+- `g20_golden_cross` — SMA(10) vs SMA(50) crossover (derived source vs derived source)
+- `g21_donchian_breakout` — price vs rolling_high/rolling_low(20)
+- `g22_momentum_roc` — ROC(12) entry with an SMA(10) trend-break exit
+- `g23_trend_filter_dip` — `all` combinator: buy the dip only while in an uptrend
+- `g24_stop_loss` — entry plus a variable-referenced protective stop
+- `g25_yield_rotation` — yield (APR) source: deposit when high, withdraw when low
+- `g26_short_momentum` — short on negative ROC, cover on SMA reclaim
+
+Derived signals need warmup history (e.g. SMA(50) needs 50 bars), so they stay
+inert on the short synthetic scenarios here; their firing behavior is covered by
+unit tests. The catalog run still proves every graph compiles and executes.
+
 Run the catalog against the synthetic scenarios with:
 
 ```sh

@@ -108,6 +108,54 @@
       "title": "Direct action - Hyperliquid spot sell ETH",
       "graph": "graphs/g18_direct_hl_spot_sell_eth.json",
       "source": "direct_spot_action_sell"
+    },
+    {
+      "id": "g19_funding_carry",
+      "title": "Funding carry - long spot + short perp basis when funding is rich",
+      "graph": "graphs/g19_funding_carry.json",
+      "source": "adr0002_funding_carry"
+    },
+    {
+      "id": "g20_golden_cross",
+      "title": "Trend - buy when SMA(10) crosses above SMA(50)",
+      "graph": "graphs/g20_golden_cross.json",
+      "source": "adr0002_golden_cross"
+    },
+    {
+      "id": "g21_donchian_breakout",
+      "title": "Breakout - buy 20-bar highs, exit 20-bar lows",
+      "graph": "graphs/g21_donchian_breakout.json",
+      "source": "adr0002_donchian_breakout"
+    },
+    {
+      "id": "g22_momentum_roc",
+      "title": "Momentum - enter on 12-bar ROC, exit on SMA(10) break",
+      "graph": "graphs/g22_momentum_roc.json",
+      "source": "adr0002_momentum_roc"
+    },
+    {
+      "id": "g23_trend_filter_dip",
+      "title": "Buy the dip in an uptrend (price > SMA50 AND price < SMA10)",
+      "graph": "graphs/g23_trend_filter_dip.json",
+      "source": "adr0002_trend_filter_dip"
+    },
+    {
+      "id": "g24_stop_loss",
+      "title": "Entry with a variable-referenced protective stop",
+      "graph": "graphs/g24_stop_loss.json",
+      "source": "adr0002_stop_loss"
+    },
+    {
+      "id": "g25_yield_rotation",
+      "title": "Yield rotation - deposit when APR is high, withdraw when low",
+      "graph": "graphs/g25_yield_rotation.json",
+      "source": "adr0002_yield_rotation"
+    },
+    {
+      "id": "g26_short_momentum",
+      "title": "Short on downside momentum (ROC <= -0.05), cover on SMA reclaim",
+      "graph": "graphs/g26_short_momentum.json",
+      "source": "adr0002_short_momentum"
     }
   ],
   "scenarios": [
