@@ -92,3 +92,37 @@ def test_inline_graph_table(tmp_path: Path) -> None:
 def test_missing_graph_file_is_an_error(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
         load_run(_write_run(tmp_path, graph_ref="nope.json"))
+
+
+def test_edges_serialize_with_from_alias(tmp_path: Path) -> None:
+    # A graph with edges must serialize `from` (not the model field `from_`),
+    # or the service rejects it with "missing field `from`".
+    graph = {
+        "schema_version": "catalyst.graph.definition.v1",
+        "nodes": [
+            {"id": "sig", "kind": "signal", "subtype": "price_threshold",
+             "config": {"symbol": "ETH", "operator": "<", "threshold": "1800"}},
+            {"id": "buy", "kind": "action", "subtype": "swap",
+             "config": {"from_asset": "USDC", "to_asset": "ETH", "amount": "100", "chain": "base"}},
+        ],
+        "edges": [{"from": "sig", "to": "buy"}],
+    }
+    (tmp_path / "graph.json").write_text(json.dumps(graph))
+    run = tmp_path / "run.toml"
+    run.write_text(
+        """
+graph = "graph.json"
+policy = "strict_v1"
+[config]
+start = "2026-01-01T00:00:00Z"
+end = "2026-02-01T00:00:00Z"
+interval = "1h"
+[config.initial_portfolio.base]
+USDC = "1000"
+"""
+    )
+    spec = load_run(run)
+    edge = spec.body()["graph"]["edges"][0]
+    assert edge == {"from": "sig", "to": "buy"}, edge
+    # the `.graph` view used by preview/coverage must match
+    assert spec.graph["edges"][0] == {"from": "sig", "to": "buy"}
