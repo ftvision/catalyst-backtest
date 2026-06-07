@@ -15,16 +15,25 @@ function findCost(costs: CostItem[], label: string) {
   return costs.find((cost) => cost.label.toLowerCase() === label.toLowerCase());
 }
 
+function isSummaryRow(cost: CostItem) {
+  const label = cost.label.toLowerCase();
+  return label === "gross pnl" || label === "net pnl";
+}
+
+function amountClass(value: number) {
+  return value < 0 ? "negative" : "positive";
+}
+
 export function CostAttribution({ costs, compact = false }: { costs: CostItem[]; compact?: boolean }) {
   const gross = findCost(costs, "Gross PnL") ?? costs[0];
   const suppliedNet = findCost(costs, "Net PnL");
-  const deductions = costs.filter((cost) => cost.amount < 0);
+  const deductions = costs.filter((cost) => !isSummaryRow(cost) && cost.amount < 0);
   const totalCosts = deductions.reduce((sum, cost) => sum + cost.amount, 0);
   const computedNet = gross.amount + totalCosts;
   const net = suppliedNet ? { ...suppliedNet, amount: suppliedNet.amount || computedNet } : { label: "Net PnL", amount: computedNet };
-  const grossAbs = Math.max(Math.abs(gross.amount), 1);
-  const retainedPct = Math.max(0, Math.min(100, (Math.abs(net.amount) / grossAbs) * 100));
-  const costPct = Math.max(0, Math.min(100, (Math.abs(totalCosts) / grossAbs) * 100));
+  const denominator = Math.max(Math.abs(gross.amount), Math.abs(net.amount), Math.abs(totalCosts), 1);
+  const retainedPct = Math.max(0, Math.min(100, (Math.abs(net.amount) / denominator) * 100));
+  const costPct = Math.max(0, Math.min(100, (Math.abs(totalCosts) / denominator) * 100));
 
   return (
     <Stack className={compact ? "cost-attribution compact" : "cost-attribution"} gap="md">
@@ -33,7 +42,7 @@ export function CostAttribution({ costs, compact = false }: { costs: CostItem[];
           <Text size="xs" c="dimmed">
             Gross PnL
           </Text>
-          <Text className="cost-number positive">{signedCurrency(gross.amount)}</Text>
+          <Text className={`cost-number ${amountClass(gross.amount)}`}>{signedCurrency(gross.amount)}</Text>
         </div>
         <div>
           <Text size="xs" c="dimmed">
@@ -45,7 +54,7 @@ export function CostAttribution({ costs, compact = false }: { costs: CostItem[];
           <Text size="xs" c="dimmed">
             Net PnL
           </Text>
-          <Text className="cost-number positive">{signedCurrency(net.amount)}</Text>
+          <Text className={`cost-number ${amountClass(net.amount)}`}>{signedCurrency(net.amount)}</Text>
         </div>
       </div>
 

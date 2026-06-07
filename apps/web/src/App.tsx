@@ -1220,7 +1220,12 @@ export function App() {
 
               {renderedDetailTabs.result ? (
                 <div hidden={activeDetailTab !== "result"}>
-                  <ResultReviewPage graph={workbench.graph} setup={workbench.setup} result={workbench.result} />
+                  <ResultReviewPage
+                    graph={workbench.graph}
+                    setup={workbench.setup}
+                    result={workbench.result}
+                    replay={workbench.marketReplay}
+                  />
                 </div>
               ) : null}
               {renderedDetailTabs.replay ? (
