@@ -62,6 +62,16 @@ CREATE_CF_PAGES_PROJECT=1 ./scripts/deploy-web-cloudflare.sh
 
 After both remote projects exist, `make deploy` deploys API first, then web.
 
+Use the stable project URL for sharing:
+
+```text
+https://catalyst-backtest-web.pages.dev
+```
+
+Wrangler may print a hash-prefixed deployment URL such as
+`https://<hash>.catalyst-backtest-web.pages.dev`. Treat that as a deployment
+preview URL, not the canonical public URL.
+
 For a Git-connected Cloudflare Pages project:
 
 | Setting | Value |

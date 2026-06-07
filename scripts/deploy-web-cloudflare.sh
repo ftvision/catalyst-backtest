@@ -9,6 +9,7 @@ VITE_CATALYST_API_BASE="${VITE_CATALYST_API_BASE:-https://${FLY_APP_NAME}.fly.de
 CF_PAGES_PROJECT="${CF_PAGES_PROJECT:-catalyst-backtest-web}"
 CF_PAGES_BRANCH="${CF_PAGES_BRANCH:-main}"
 CF_PAGES_PRODUCTION_BRANCH="${CF_PAGES_PRODUCTION_BRANCH:-main}"
+CF_PAGES_STABLE_URL="${CF_PAGES_STABLE_URL:-https://${CF_PAGES_PROJECT}.pages.dev}"
 CREATE_CF_PAGES_PROJECT="${CREATE_CF_PAGES_PROJECT:-0}"
 WRANGLER_CMD="${WRANGLER_CMD:-wrangler}"
 
@@ -47,3 +48,6 @@ fi
 "${wrangler_cmd[@]}" pages deploy dist \
   --project-name "$CF_PAGES_PROJECT" \
   --branch "$CF_PAGES_BRANCH"
+
+echo "Stable Pages URL: $CF_PAGES_STABLE_URL"
+echo "Wrangler may also print a hash-prefixed preview URL; use the stable URL for sharing."
