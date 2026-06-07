@@ -101,7 +101,7 @@ export function RunSetupPage({
         { value: "conservative_v1", label: "Conservative v1" },
         { value: "research_v1", label: "Research v1" },
       ];
-  const hasMarketData = marketCatalog.some((item) => item.kind === "candles");
+  const hasMarketData = marketCatalog.length > 0;
   const activeMarketWarnings = [
     ...marketWarnings,
     ...setup.warnings.filter((warning) => warning !== "No service warnings for this run."),

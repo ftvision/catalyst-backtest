@@ -567,7 +567,7 @@ export function App() {
         setPolicyProfiles(profiles.items);
         setMarketCatalog(catalog.items);
         setMarketWarnings(catalog.warnings ?? []);
-        const marketItem = catalog.items.find((item) => item.kind === "candles");
+        const marketItem = compatibleMarketItem(strategy.graph, catalog.items);
         if (marketItem) {
           await hydrateWithMarketItem({
             graph: strategy.graph,

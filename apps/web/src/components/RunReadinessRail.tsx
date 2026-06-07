@@ -3,11 +3,17 @@ import { Play } from "lucide-react";
 import type { SetupData } from "../types";
 import { StatusBadge } from "./StatusBadge";
 
+const PLACEHOLDER_WARNING = "No service warnings for this run.";
+
+function visibleWarnings(setup: SetupData) {
+  return setup.warnings.filter((warning) => warning !== PLACEHOLDER_WARNING);
+}
+
 function readinessStatus(setup: SetupData, hasMarketData: boolean, graphStatus: string) {
   if (graphStatus !== "validated") return "danger";
   if (!hasMarketData) return "danger";
   if (setup.coverage.some((item) => item.status === "danger")) return "danger";
-  if (setup.coverage.some((item) => item.status === "warning") || setup.warnings.length) return "warning";
+  if (setup.coverage.some((item) => item.status === "warning") || visibleWarnings(setup).length) return "warning";
   return "success";
 }
 
@@ -27,6 +33,7 @@ export function RunReadinessRail({
   onRun: () => void;
 }) {
   const status = readinessStatus(setup, hasMarketData, graphStatus);
+  const warnings = visibleWarnings(setup);
   const marketDataReady = hasMarketData && !setup.coverage.some((item) => item.status === "danger");
   const marketDataDetail = !hasMarketData
     ? "No local series"
@@ -87,7 +94,7 @@ export function RunReadinessRail({
           <Text size="xs" c="dimmed">
             Warnings
           </Text>
-          <Text size="sm">{setup.warnings.join(" ")}</Text>
+          <Text size="sm">{warnings.length ? warnings.join(" ") : "None"}</Text>
         </Stack>
 
         <Button leftSection={<Play size={14} />} onClick={onRun} disabled={disabled || status === "danger"}>

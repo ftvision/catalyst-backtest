@@ -1,6 +1,6 @@
 import { Group, Select, SimpleGrid, Stack, Text, TextInput } from "@mantine/core";
 import type { MarketDataCatalogItem } from "../api/client";
-import { normalizeMarketDataKind } from "../utils/marketDataKind";
+import { marketDataKindMatches, normalizeMarketDataKind } from "../utils/marketDataKind";
 import { CoverageTimeline } from "./CoverageTimeline";
 import { StatusBadge } from "./StatusBadge";
 
@@ -100,7 +100,10 @@ export function MarketDataSelector({
         marketCatalogId(item) === marketCatalogId(selected),
       )
     : [];
-  const coverageStatus = warnings.length ? "danger" : related.length ? "success" : "warning";
+  const missingRequiredKinds = Array.from(normalizedRequiredKinds).filter(
+    (kind) => !related.some((item) => marketDataKindMatches(item.kind, kind)),
+  );
+  const coverageStatus = warnings.length || missingRequiredKinds.length ? "danger" : related.length ? "success" : "warning";
   const options = catalog.map((item) => ({
     value: marketCatalogId(item),
     label: labelFor(item),
