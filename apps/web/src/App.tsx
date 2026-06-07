@@ -54,6 +54,7 @@ import { SimulationHistoryPage } from "./pages/SimulationHistoryPage";
 import { marketCatalogId } from "./components/MarketDataSelector";
 import {
   getLastRunId,
+  loadAllCachedRunDetails,
   loadCachedRunDetail,
   makeCachedRunDetail,
   saveCachedRunDetail,
@@ -197,6 +198,22 @@ function listItemFromCachedRun(detail: CachedRunDetail): BacktestListItem {
 function upsertHistoryItem(items: BacktestListItem[], item: BacktestListItem) {
   const next = items.filter((existing) => existing.id !== item.id);
   return [item, ...next];
+}
+
+/**
+ * Union of several history lists, deduped by run id, newest first. Earlier
+ * lists win on collision — pass the freshest source (the live service list)
+ * first and the locally-cached runs after, so the cache fills in runs the
+ * in-memory service has forgotten without overwriting fresher status.
+ */
+function mergeHistoryItems(...lists: BacktestListItem[][]): BacktestListItem[] {
+  const byId = new Map<string, BacktestListItem>();
+  for (const list of lists) {
+    for (const item of list) {
+      if (!byId.has(item.id)) byId.set(item.id, item);
+    }
+  }
+  return [...byId.values()].sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? ""));
 }
 
 function stringConfig(value: unknown): string | undefined {
@@ -617,25 +634,28 @@ export function App() {
       scenarioId: input.scenarioId,
       scenarioTitle: input.scenarioTitle,
     });
-    setWorkbench((current) => ({
-      ...current,
-      graph: graphFromPreview(input.graph, preview, {
-        id: input.strategyId,
-        name: input.strategyTitle,
-        version: input.scenarioId,
-      }),
-      marketReplay: marketReplayWithMarketData(current.marketReplay, input.marketData),
-      setup: setupFromService({
-        graph: input.graph,
-        config: input.config,
-        policyProfile: input.policyProfile,
-        dataSourceLabel: sourceLabel,
-        preview,
-        profiles: profiles.items,
-      }),
-      runHistory: history.items.length ? runHistoryFromApi(history.items) : current.runHistory,
-      historyItems: history.items,
-    }));
+    setWorkbench((current) => {
+      const historyItems = mergeHistoryItems(history.items, current.historyItems);
+      return {
+        ...current,
+        graph: graphFromPreview(input.graph, preview, {
+          id: input.strategyId,
+          name: input.strategyTitle,
+          version: input.scenarioId,
+        }),
+        marketReplay: marketReplayWithMarketData(current.marketReplay, input.marketData),
+        setup: setupFromService({
+          graph: input.graph,
+          config: input.config,
+          policyProfile: input.policyProfile,
+          dataSourceLabel: sourceLabel,
+          preview,
+          profiles: profiles.items,
+        }),
+        runHistory: historyItems.length ? runHistoryFromApi(historyItems) : current.runHistory,
+        historyItems,
+      };
+    });
     setApiStatus("healthy");
     setApiMessage(`Connected to ${catalystApi.baseUrl} / ${sourceLabel}; checking coverage`);
 
@@ -827,7 +847,25 @@ export function App() {
     let cancelled = false;
 
     async function loadServiceWorkbench() {
+      // Merge every locally-cached run into the history list so the user's full
+      // backtest history survives a refresh — the in-memory service only knows
+      // about runs from the current process, but IndexedDB keeps them all.
+      async function restoreCachedHistory() {
+        const cached = await loadAllCachedRunDetails();
+        if (cancelled || !cached.length) return;
+        const cachedItems = cached.map(listItemFromCachedRun);
+        setWorkbench((current) => {
+          const historyItems = mergeHistoryItems(current.historyItems, cachedItems);
+          return {
+            ...current,
+            runHistory: historyItems.length ? runHistoryFromApi(historyItems) : current.runHistory,
+            historyItems,
+          };
+        });
+      }
+
       async function restoreLastRun() {
+        await restoreCachedHistory();
         const lastRunId = getLastRunId();
         if (!lastRunId || cancelled) return;
         await loadRunDetail(lastRunId, { quiet: true });
@@ -995,19 +1033,22 @@ export function App() {
         replayMarketData,
       });
 
-      setWorkbench((current) => ({
-        ...current,
-        setup: {
-          ...current.setup,
-          ...serviceSetup,
-          coverage: current.setup.coverage,
-        },
-        marketReplay: replay,
-        result: review,
-        audit: auditData,
-        runHistory: history.items.length ? runHistoryFromApi(history.items) : current.runHistory,
-        historyItems: history.items,
-      }));
+      setWorkbench((current) => {
+        const historyItems = mergeHistoryItems(history.items, [listItemFromCachedRun(cachedDetail)], current.historyItems);
+        return {
+          ...current,
+          setup: {
+            ...current.setup,
+            ...serviceSetup,
+            coverage: current.setup.coverage,
+          },
+          marketReplay: replay,
+          result: review,
+          audit: auditData,
+          runHistory: historyItems.length ? runHistoryFromApi(historyItems) : current.runHistory,
+          historyItems,
+        };
+      });
       setActiveMarketData(replayMarketData);
       setSelectedEventId(replay.selectedEventId);
       setRunStatus("succeeded");
