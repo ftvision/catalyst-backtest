@@ -135,6 +135,7 @@ export function EventLensPage({
                   events={replay.events}
                   selectedEventId={selectedEventId}
                   compact
+                  granularityMode="tick"
                 />
               </Stack>
             </Paper>
