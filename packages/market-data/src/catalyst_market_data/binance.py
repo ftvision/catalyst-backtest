@@ -133,7 +133,10 @@ def ingest_binance(
     """Fetch klines and write them to the store under (venue, symbol, interval)."""
 
     candles = fetch_klines(binance_symbol, interval, start, end, transport)
-    return store.write_candles(venue, symbol, interval, candles)
+    n = store.write_candles(venue, symbol, interval, candles)
+    # Binance is a CEX *reference* proxy, not the venue's native price (#38).
+    store.set_provenance("candles", f"{venue}/{symbol}", "reference")
+    return n
 
 
 __all__ = ["fetch_klines", "ingest_binance", "httpx_transport", "BINANCE_KLINES_URL", "Transport"]

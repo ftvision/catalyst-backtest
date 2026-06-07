@@ -76,6 +76,10 @@ def main(argv: list[str] | None = None) -> int:
     pr.add_argument("--low-col", default="low")
     pr.add_argument("--close-col", default="close")
     pr.add_argument("--volume-col", default="volume")
+    pr.add_argument(
+        "--provenance", default="native", choices=["native", "reference", "derived"],
+        help="How to label this series' price (default native — it's a venue query)",
+    )
 
     args = parser.parse_args(argv)
     store = ParquetStore(args.root)
@@ -97,7 +101,11 @@ def main(argv: list[str] | None = None) -> int:
             open_col=args.open_col, high_col=args.high_col, low_col=args.low_col,
             close_col=args.close_col, volume_col=args.volume_col, params=params,
         )
-        print(f"ingested {n} candles ({args.venue}/{args.symbol}/{args.interval}) from Dune")
+        store.set_provenance("candles", f"{args.venue}/{args.symbol}", args.provenance)
+        print(
+            f"ingested {n} candles ({args.venue}/{args.symbol}/{args.interval}) "
+            f"from Dune [{args.provenance}]"
+        )
         return 0
 
     return 1

@@ -148,7 +148,14 @@
             "end": { "type": "string", "format": "date-time" },
             "complete": { "type": "boolean" }
           }
-        }
+        },
+        "provenance": {
+          "type": "string",
+          "enum": ["native", "reference", "derived"],
+          "description": "native = the venue's own price/feed; reference = a proxy (e.g. CEX price under another venue); derived = computed."
+        },
+        "venue": { "type": "string", "description": "Series venue, for per-series providers." },
+        "symbol": { "type": "string", "description": "Series symbol, for per-series providers." }
       }
     }
   }

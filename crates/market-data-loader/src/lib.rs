@@ -297,6 +297,7 @@ pub async fn load_bundle(
     let start_us = parse_micros(start)?;
     let end_us = parse_micros(end)?;
     let reqs = &bundle_ref.data_requirements;
+    let provenance = load_provenance(&store, &base).await;
 
     let mut warnings: Vec<String> = Vec::new();
     let mut providers: Vec<Provider> = Vec::new();
@@ -349,15 +350,18 @@ pub async fn load_bundle(
                 .collect(),
         });
     }
-    if !reqs.candles.is_empty() {
-        providers.push(provider(
-            "candles",
-            &candles
-                .iter()
-                .map(|s| !s.points.is_empty())
-                .collect::<Vec<_>>(),
-            &coverage,
-        ));
+    // Per-series candle providers carry provenance (native vs reference proxy).
+    for (r, s) in reqs.candles.iter().zip(candles.iter()) {
+        let key = format!("candles/{}/{}", r.venue, r.symbol);
+        let prov = provenance.get(&key).cloned().unwrap_or_else(|| "reference".to_string());
+        providers.push(Provider {
+            name: "parquet-store".to_string(),
+            kind: "candles".to_string(),
+            coverage: Some(coverage(!s.points.is_empty())),
+            provenance: Some(prov),
+            venue: Some(r.venue.clone()),
+            symbol: Some(r.symbol.clone()),
+        });
     }
 
     // funding
@@ -494,5 +498,24 @@ fn provider(kind: &str, non_empty: &[bool], coverage: &dyn Fn(bool) -> Coverage)
         name: "parquet-store".to_string(),
         kind: kind.to_string(),
         coverage: Some(coverage(complete)),
+        provenance: None,
+        venue: None,
+        symbol: None,
+    }
+}
+
+/// Read the store's provenance manifest (`<base>/_provenance.json`), keyed as
+/// `"<kind>/<venue>/<symbol>"`. Missing/unparseable manifest -> empty.
+async fn load_provenance(
+    store: &Arc<dyn ObjectStore>,
+    base: &StorePath,
+) -> std::collections::HashMap<String, String> {
+    let path = base.child("_provenance.json");
+    match store.get(&path).await {
+        Ok(res) => match res.bytes().await {
+            Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_default(),
+            Err(_) => Default::default(),
+        },
+        Err(_) => Default::default(),
     }
 }

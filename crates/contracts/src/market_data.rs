@@ -89,6 +89,16 @@ pub struct Provider {
     pub kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub coverage: Option<Coverage>,
+    /// Data provenance: `native` (the venue's own price/feed), `reference` (a
+    /// proxy, e.g. a CEX price stored under another venue), or `derived`. Lets
+    /// results tell a Hyperliquid mark / Base-DEX price from a Binance reference.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<String>,
+    /// The series this provider covers, for per-series providers (else None).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub venue: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

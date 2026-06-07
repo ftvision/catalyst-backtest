@@ -125,6 +125,7 @@ def test_ingest_binance_writes_store(tmp_path) -> None:
     assert n == 1
     src = ParquetSource(tmp_path, dt(1, 0), dt(1, 1), "1h")
     assert src.candles("hyperliquid", "ETH")[0].close == "2005"
+    assert store.read_provenance()["candles/hyperliquid/ETH"] == "reference"
 
 
 def test_fetch_klines_without_transport_refuses_network() -> None:

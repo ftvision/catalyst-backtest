@@ -50,3 +50,13 @@ def test_network_disabled_transport_refuses() -> None:
 def test_http_transport_is_constructible() -> None:
     # building the transport must not require network (httpx imported lazily inside)
     assert callable(http_transport())
+
+
+def test_provenance_manifest_round_trip(tmp_path) -> None:
+    store = ParquetStore(tmp_path)
+    assert store.read_provenance() == {}
+    store.set_provenance("candles", "hyperliquid/ETH", "native")
+    store.set_provenance("candles", "base/ETH", "reference")
+    m = store.read_provenance()
+    assert m["candles/hyperliquid/ETH"] == "native"
+    assert m["candles/base/ETH"] == "reference"

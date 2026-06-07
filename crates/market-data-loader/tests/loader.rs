@@ -176,3 +176,48 @@ fn reads_via_explicit_file_url() {
     assert_eq!(bundle.candles[0].points.len(), 2);
     assert_eq!(bundle.candles[0].points[0].close, "2000");
 }
+
+// --- provider provenance (#38) ---
+
+#[test]
+fn candle_providers_carry_provenance_from_manifest() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    write_candles(root, "hyperliquid", "ETH", "1h", "2024-01-01", &[H0, H0 + HOUR]);
+    write_candles(root, "base", "ETH", "1h", "2024-01-01", &[H0, H0 + HOUR]);
+    // manifest marks the HL series native; base has no entry -> defaults reference
+    fs::write(
+        root.join("_provenance.json"),
+        r#"{"candles/hyperliquid/ETH": "native"}"#,
+    )
+    .unwrap();
+
+    let bundle_ref = BundleRef {
+        root: root.to_string_lossy().to_string(),
+        data_requirements: DataRequirements {
+            candles: vec![
+                CandleReq { venue: "hyperliquid".into(), symbol: "ETH".into() },
+                CandleReq { venue: "base".into(), symbol: "ETH".into() },
+            ],
+            ..Default::default()
+        },
+    };
+    let bundle = pollster::block_on(load_bundle(
+        &bundle_ref,
+        "2024-01-01T00:00:00Z",
+        "2024-01-01T03:00:00Z",
+        "1h",
+    ))
+    .unwrap();
+
+    let prov = |venue: &str| {
+        bundle
+            .providers
+            .iter()
+            .find(|p| p.kind == "candles" && p.venue.as_deref() == Some(venue))
+            .and_then(|p| p.provenance.clone())
+            .unwrap()
+    };
+    assert_eq!(prov("hyperliquid"), "native");
+    assert_eq!(prov("base"), "reference"); // default when not in the manifest
+}

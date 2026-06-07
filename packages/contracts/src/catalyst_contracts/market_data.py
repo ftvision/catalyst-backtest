@@ -71,6 +71,9 @@ class Provider(StrictModel):
     name: str
     kind: Literal["candles", "funding", "gas", "yields"]
     coverage: Coverage | None = None
+    provenance: Literal["native", "reference", "derived"] | None = None
+    venue: str | None = None
+    symbol: str | None = None
 
 
 class MarketDataBundle(StrictModel):
