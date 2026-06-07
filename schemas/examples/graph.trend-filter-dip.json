@@ -1,0 +1,65 @@
+{
+  "schema_version": "catalyst.graph.definition.v1",
+  "nodes": [
+    {
+      "id": "in-uptrend",
+      "kind": "signal",
+      "subtype": "threshold",
+      "config": {
+        "source": { "kind": "price", "symbol": "ETH", "venue": "base" },
+        "operator": ">",
+        "reference": {
+          "source": {
+            "kind": "derived",
+            "of": { "kind": "price", "symbol": "ETH", "venue": "base" },
+            "transform": "sma",
+            "window": 50
+          }
+        }
+      },
+      "enabled": true
+    },
+    {
+      "id": "short-term-dip",
+      "kind": "signal",
+      "subtype": "threshold",
+      "config": {
+        "source": { "kind": "price", "symbol": "ETH", "venue": "base" },
+        "operator": "<",
+        "reference": {
+          "source": {
+            "kind": "derived",
+            "of": { "kind": "price", "symbol": "ETH", "venue": "base" },
+            "transform": "sma",
+            "window": 10
+          }
+        }
+      },
+      "enabled": true
+    },
+    {
+      "id": "buy-the-dip-in-uptrend",
+      "kind": "signal",
+      "subtype": "all",
+      "config": {},
+      "enabled": true
+    },
+    {
+      "id": "scale-in",
+      "kind": "action",
+      "subtype": "swap",
+      "config": {
+        "from_asset": "USDC",
+        "to_asset": "ETH",
+        "amount": { "basis": "pct_portfolio", "value": "20" },
+        "chain": "base"
+      },
+      "enabled": true
+    }
+  ],
+  "edges": [
+    { "from": "in-uptrend", "to": "buy-the-dip-in-uptrend" },
+    { "from": "short-term-dip", "to": "buy-the-dip-in-uptrend" },
+    { "from": "buy-the-dip-in-uptrend", "to": "scale-in" }
+  ]
+}

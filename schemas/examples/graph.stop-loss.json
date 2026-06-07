@@ -1,0 +1,42 @@
+{
+  "schema_version": "catalyst.graph.definition.v1",
+  "variables": { "stop_price": "1700" },
+  "nodes": [
+    {
+      "id": "open-position",
+      "kind": "action",
+      "subtype": "swap",
+      "config": {
+        "from_asset": "USDC",
+        "to_asset": "ETH",
+        "amount": { "basis": "pct_portfolio", "value": "50" },
+        "chain": "base"
+      },
+      "enabled": true
+    },
+    {
+      "id": "stop-breached",
+      "kind": "signal",
+      "subtype": "threshold",
+      "config": {
+        "source": { "kind": "price", "symbol": "ETH", "venue": "base" },
+        "operator": "<",
+        "reference": { "var": "stop_price" }
+      },
+      "enabled": true
+    },
+    {
+      "id": "stop-out",
+      "kind": "action",
+      "subtype": "swap",
+      "config": {
+        "from_asset": "ETH",
+        "to_asset": "USDC",
+        "amount": { "basis": "pct_balance", "value": "100" },
+        "chain": "base"
+      },
+      "enabled": true
+    }
+  ],
+  "edges": [{ "from": "stop-breached", "to": "stop-out" }]
+}

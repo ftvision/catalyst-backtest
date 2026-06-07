@@ -283,3 +283,32 @@ fn derived_reference_sets_lookback_and_requires_candles() {
     assert_eq!(c.data_requirements.lookback_bars, 20);
     assert!(c.data_requirements.candles.iter().any(|cd| cd.symbol == "ETH" && cd.venue == "base"));
 }
+
+// --- All shipped example strategy graphs must compile ---
+
+#[test]
+fn all_example_graphs_compile() {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../schemas/examples")
+        .canonicalize()
+        .expect("schemas/examples exists");
+    let mut names: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|n| n.starts_with("graph.") && n.ends_with(".json"))
+        .collect();
+    names.sort();
+    assert!(names.len() >= 11, "expected the example strategy graphs, found {}", names.len());
+
+    for name in names {
+        let raw = std::fs::read_to_string(dir.join(&name)).unwrap();
+        let g: Graph =
+            serde_json::from_str(&raw).unwrap_or_else(|e| panic!("[{name}] does not parse: {e}"));
+        let compiled = compile(&g).unwrap_or_else(|e| panic!("[{name}] did not compile: {e}"));
+        // every action must have at least one trigger
+        for a in &compiled.actions {
+            assert!(!a.triggers.is_empty(), "[{name}] action {} has no triggers", a.id);
+        }
+    }
+}
