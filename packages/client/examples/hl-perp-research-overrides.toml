@@ -1,0 +1,20 @@
+# Hyperliquid perp — repeating 5x ETH long round trips (g07), under the research
+# policy, with explicit execution overrides. Overrides in [config.execution] win
+# over the policy's defaults; omit any you don't want to change.
+#
+#   catalyst-bt run packages/client/examples/hl-perp-research-overrides.toml --json
+
+graph = "../../../strategies/graphs/g07_hl_perp_round_trips.json"
+policy = "research_v1"
+
+[config]
+start = "2026-01-01T00:00:00Z"
+end = "2026-06-01T00:00:00Z"
+interval = "1h"
+
+[config.initial_portfolio.hyperliquid]
+USDC = "25000"
+
+[config.execution]
+slippage_bps = "5"
+gas_model = "none"   # Hyperliquid is gasless

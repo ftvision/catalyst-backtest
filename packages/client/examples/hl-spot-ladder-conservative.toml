@@ -1,0 +1,15 @@
+# Hyperliquid spot — repeating multi-level ETH buy/sell ladder (g04), run under
+# the conservative policy (worse-side fills, higher slippage).
+#
+#   catalyst-bt run packages/client/examples/hl-spot-ladder-conservative.toml
+
+graph = "../../../strategies/graphs/g04_hl_spot_ladder.json"
+policy = "conservative_v1"   # strict_v1 | conservative_v1 | research_v1
+
+[config]
+start = "2026-01-01T00:00:00Z"
+end = "2026-06-01T00:00:00Z"
+interval = "1h"
+
+[config.initial_portfolio.hyperliquid]
+USDC = "10000"
