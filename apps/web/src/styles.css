@@ -197,14 +197,24 @@ select {
 }
 
 .panel {
+  min-width: 0;
   border: 1px solid var(--cb-border);
   background: oklch(0.99 0.005 235);
   box-shadow: var(--cb-shadow);
 }
 
 .panel-muted {
+  min-width: 0;
   border: 1px solid var(--cb-border);
   background: var(--cb-surface-2);
+}
+
+.section-header {
+  min-width: 0;
+}
+
+.section-header > * {
+  min-width: 0;
 }
 
 .section-grid {
@@ -219,6 +229,7 @@ select {
 }
 
 .run-details-header {
+  min-width: 0;
   border: 1px solid var(--cb-border);
   border-radius: 6px;
   background: oklch(0.99 0.005 235);
@@ -228,6 +239,10 @@ select {
 
 .run-details-header .mantine-SegmentedControl-root {
   min-width: min(100%, 430px);
+}
+
+.run-details-header .mantine-SegmentedControl-label {
+  white-space: nowrap;
 }
 
 .setup-grid {
@@ -281,6 +296,7 @@ select {
 }
 
 .graph-topology-preview {
+  min-width: 0;
   height: 300px;
   overflow: hidden;
   border: 1px solid var(--cb-border);
@@ -658,6 +674,7 @@ select {
 }
 
 .chart-shell {
+  min-width: 0;
   position: relative;
 }
 
@@ -922,9 +939,11 @@ select {
 
 .mono {
   font-family: var(--mantine-font-family-monospace);
+  overflow-wrap: anywhere;
 }
 
 .metric-value {
+  overflow-wrap: anywhere;
   font-size: 1.08rem;
   font-weight: 680;
   letter-spacing: 0;
@@ -947,7 +966,12 @@ select {
 }
 
 .table-scroll {
+  max-width: 100%;
   overflow-x: auto;
+}
+
+.table-scroll .mantine-Table-table {
+  min-width: max-content;
 }
 
 .portfolio-editor-scroll .mantine-Table-td {
@@ -961,6 +985,20 @@ select {
 .portfolio-editor-action-cell {
   width: 72px;
   text-align: center;
+}
+
+@media (max-width: 1280px) {
+  .workspace {
+    padding-inline: 20px;
+  }
+
+  .history-detail-grid {
+    grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+  }
+
+  .history-detail-panel:last-child {
+    grid-column: 1 / -1;
+  }
 }
 
 @media (max-width: 1100px) {
@@ -990,19 +1028,43 @@ select {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .section-header {
+    align-items: stretch;
+  }
+
+  .section-header > .mantine-Button-root {
+    align-self: flex-start;
+  }
+
+  .chart-frame {
+    height: 540px;
+  }
+
+  .chart-frame.compact {
+    height: 280px;
+  }
+
+  .equity-drawdown-chart {
+    height: 330px;
+  }
 }
 
-@media (max-width: 720px) {
+@media (max-width: 900px) {
   .app-shell {
     display: block;
   }
 
   .app-sidebar {
-    position: static;
+    position: sticky;
     min-height: auto;
+    top: 0;
     border-right: 0;
     border-bottom: 1px solid var(--cb-border);
     padding: 12px 14px;
+  }
+
+  .app-sidebar .mantine-Stack-root {
+    gap: 8px;
   }
 
   .brand-lockup {
@@ -1028,7 +1090,7 @@ select {
   .topbar-inner {
     grid-template-columns: 1fr;
     gap: 12px;
-    padding: 12px 14px;
+    padding: 12px 18px;
   }
 
   .topbar-actions {
@@ -1041,6 +1103,14 @@ select {
 
   .run-details-header .mantine-SegmentedControl-root {
     width: 100%;
+  }
+
+  .run-details-header .mantine-SegmentedControl-control {
+    min-width: 0;
+  }
+
+  .run-details-header .mantine-SegmentedControl-label {
+    padding-inline: 8px;
   }
 
   .topbar-run-context {
@@ -1064,11 +1134,23 @@ select {
   }
 
   .workspace {
-    padding: 16px 14px 28px;
+    padding: 18px 18px 30px;
   }
 
   .chart-frame {
-    height: 560px;
+    height: 500px;
+  }
+
+  .chart-frame.compact {
+    height: 270px;
+  }
+
+  .equity-drawdown-chart {
+    height: 310px;
+  }
+
+  .graph-topology-preview {
+    height: 260px;
   }
 
   .chart-event-label {
@@ -1099,5 +1181,99 @@ select {
 
   .history-coverage-axis {
     display: none;
+  }
+}
+
+@media (max-width: 560px) {
+  .app-sidebar {
+    padding: 10px 12px;
+  }
+
+  .workflow-nav {
+    margin-inline: -2px;
+    padding-top: 10px;
+  }
+
+  .topbar-inner {
+    padding: 10px 12px;
+  }
+
+  .topbar-actions {
+    width: 100%;
+  }
+
+  .workspace-context {
+    max-width: 100%;
+  }
+
+  .workspace {
+    padding: 14px 10px 24px;
+  }
+
+  .section-header {
+    gap: 10px;
+  }
+
+  .section-header > .mantine-Button-root {
+    width: 100%;
+  }
+
+  .run-details-header {
+    padding: 10px;
+  }
+
+  .run-details-header .mantine-SegmentedControl-root {
+    overflow-x: auto;
+  }
+
+  .run-details-header .mantine-SegmentedControl-innerLabel {
+    font-size: 0.78rem;
+  }
+
+  .metric-cell,
+  .market-data-summary-cell {
+    min-height: 64px;
+  }
+
+  .metric-value {
+    font-size: 1rem;
+  }
+
+  .chart-frame {
+    height: 430px;
+  }
+
+  .chart-frame.compact {
+    height: 250px;
+  }
+
+  .equity-drawdown-chart {
+    height: 290px;
+  }
+
+  .chart-controls {
+    top: 8px;
+    right: 8px;
+  }
+
+  .chart-granularity-badge {
+    top: 8px;
+    left: 8px;
+  }
+
+  .graph-topology-preview {
+    height: 230px;
+  }
+
+  .cost-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .event-row {
+    min-height: 0;
+  }
+
+  .policy-helper {
+    max-width: calc(100vw - 28px);
   }
 }

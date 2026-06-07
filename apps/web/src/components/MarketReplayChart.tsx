@@ -48,6 +48,7 @@ const drawdownFillBottom = "rgba(214, 74, 69, 0.32)";
 
 const compactLeadBars = 4;
 const compactTrailingBars = 24;
+const compactWindowBars = compactLeadBars + compactTrailingBars;
 const secondsPerDay = 86_400;
 const wideGranularityThresholdSeconds = secondsPerDay * 35;
 const mediumGranularityThresholdSeconds = secondsPerDay * 10;
@@ -197,6 +198,18 @@ function isEventInCandleWindow(event: MarketEvent, candles: CandlePoint[]) {
   const firstCandle = candles[0].time;
   const lastCandle = candles[candles.length - 1].time;
   return event.time >= firstCandle && event.time <= lastCandle;
+}
+
+function compactVisibleLogicalRange(selectedIndex: number, candleCount: number) {
+  const lastIndex = candleCount - 1;
+  const span = Math.min(compactWindowBars, lastIndex);
+  const desiredFrom = selectedIndex - compactLeadBars;
+  const from = Math.max(0, Math.min(desiredFrom, lastIndex - span));
+
+  return {
+    from,
+    to: from + span,
+  };
 }
 
 export function MarketReplayChart({
@@ -446,10 +459,7 @@ export function MarketReplayChart({
       : -1;
 
     if (compact && selectedCandleIndex >= 0) {
-      chart.timeScale().setVisibleLogicalRange({
-        from: selectedCandleIndex - compactLeadBars,
-        to: selectedCandleIndex + compactTrailingBars,
-      });
+      chart.timeScale().setVisibleLogicalRange(compactVisibleLogicalRange(selectedCandleIndex, candles.length));
     } else {
       chart.timeScale().fitContent();
     }
@@ -458,11 +468,15 @@ export function MarketReplayChart({
     const updateEventRails = () => {
       if (disposed) return;
 
-      const nextRails = events.flatMap((event, index) => {
+      const visibleEvents = compact && selectedEvent ? [selectedEvent] : events;
+      const nextRails = visibleEvents.flatMap((event, index) => {
         const fallbackCandles = fallbackCandlesForGranularity();
         const fallbackTime = fallbackCandles.length
           ? fallbackCandles[
-              Math.min(fallbackCandles.length - 1, Math.round(((index + 1) / (events.length + 1)) * (fallbackCandles.length - 1)))
+              Math.min(
+                fallbackCandles.length - 1,
+                Math.round(((index + 1) / (visibleEvents.length + 1)) * (fallbackCandles.length - 1)),
+              )
             ]?.time
           : undefined;
         const coordinateTime = eventsAligned ? eventTimeForGranularity(event) : fallbackTime;
