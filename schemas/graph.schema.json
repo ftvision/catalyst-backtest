@@ -35,8 +35,13 @@
   "$defs": {
     "decimal": {
       "type": "string",
-      "description": "A decimal value carried as a string to avoid float precision loss, e.g. \"100\" or \"0.04\". The literal \"all\" is permitted for full-balance actions.",
+      "description": "A non-negative decimal carried as a string to avoid float precision loss, e.g. \"100\" or \"0.04\". The literal \"all\" is permitted for full-balance actions.",
       "pattern": "^(all|[0-9]+(\\.[0-9]+)?)$"
+    },
+    "signedDecimal": {
+      "type": "string",
+      "description": "A signed decimal carried as a string, e.g. \"-0.05\". Used where negative thresholds are meaningful (funding rates, rate-of-change).",
+      "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
     },
     "amountOrPct": {
       "description": "An action amount: an absolute decimal (or \"all\"), or a percentage of a basis.",
@@ -237,7 +242,7 @@
           "type": "object",
           "required": ["const"],
           "additionalProperties": false,
-          "properties": { "const": { "$ref": "#/$defs/decimal" } }
+          "properties": { "const": { "$ref": "#/$defs/signedDecimal" } }
         },
         {
           "type": "object",

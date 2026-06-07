@@ -1,0 +1,70 @@
+{
+  "schema_version": "catalyst.graph.definition.v1",
+  "nodes": [
+    {
+      "id": "downside-momentum",
+      "kind": "signal",
+      "subtype": "threshold",
+      "config": {
+        "source": {
+          "kind": "derived",
+          "of": { "kind": "price", "symbol": "ETH", "venue": "hyperliquid" },
+          "transform": "roc",
+          "window": 12
+        },
+        "operator": "<=",
+        "reference": { "const": "-0.05" }
+      },
+      "enabled": true
+    },
+    {
+      "id": "open-short",
+      "kind": "action",
+      "subtype": "perp_order",
+      "config": {
+        "symbol": "ETH",
+        "side": "short",
+        "size_usd": { "basis": "pct_portfolio", "value": "30" },
+        "chain": "hyperliquid",
+        "order_type": "market"
+      },
+      "enabled": true
+    },
+    {
+      "id": "trend-recovered",
+      "kind": "signal",
+      "subtype": "threshold",
+      "config": {
+        "source": { "kind": "price", "symbol": "ETH", "venue": "hyperliquid" },
+        "operator": ">",
+        "reference": {
+          "source": {
+            "kind": "derived",
+            "of": { "kind": "price", "symbol": "ETH", "venue": "hyperliquid" },
+            "transform": "sma",
+            "window": 10
+          }
+        }
+      },
+      "enabled": true
+    },
+    {
+      "id": "cover-short",
+      "kind": "action",
+      "subtype": "perp_order",
+      "config": {
+        "symbol": "ETH",
+        "side": "long",
+        "size_usd": { "basis": "pct_position", "value": "100" },
+        "chain": "hyperliquid",
+        "order_type": "market",
+        "reduce_only": true
+      },
+      "enabled": true
+    }
+  ],
+  "edges": [
+    { "from": "downside-momentum", "to": "open-short" },
+    { "from": "trend-recovered", "to": "cover-short" }
+  ]
+}

@@ -1,0 +1,69 @@
+{
+  "schema_version": "catalyst.graph.definition.v1",
+  "nodes": [
+    {
+      "id": "new-20-bar-high",
+      "kind": "signal",
+      "subtype": "threshold",
+      "config": {
+        "source": { "kind": "price", "symbol": "ETH", "venue": "base" },
+        "operator": ">=",
+        "reference": {
+          "source": {
+            "kind": "derived",
+            "of": { "kind": "price", "symbol": "ETH", "venue": "base" },
+            "transform": "rolling_high",
+            "window": 20
+          }
+        }
+      },
+      "enabled": true
+    },
+    {
+      "id": "buy-breakout",
+      "kind": "action",
+      "subtype": "swap",
+      "config": {
+        "from_asset": "USDC",
+        "to_asset": "ETH",
+        "amount": { "basis": "pct_portfolio", "value": "50" },
+        "chain": "base"
+      },
+      "enabled": true
+    },
+    {
+      "id": "new-20-bar-low",
+      "kind": "signal",
+      "subtype": "threshold",
+      "config": {
+        "source": { "kind": "price", "symbol": "ETH", "venue": "base" },
+        "operator": "<=",
+        "reference": {
+          "source": {
+            "kind": "derived",
+            "of": { "kind": "price", "symbol": "ETH", "venue": "base" },
+            "transform": "rolling_low",
+            "window": 20
+          }
+        }
+      },
+      "enabled": true
+    },
+    {
+      "id": "exit-breakdown",
+      "kind": "action",
+      "subtype": "swap",
+      "config": {
+        "from_asset": "ETH",
+        "to_asset": "USDC",
+        "amount": { "basis": "pct_balance", "value": "100" },
+        "chain": "base"
+      },
+      "enabled": true
+    }
+  ],
+  "edges": [
+    { "from": "new-20-bar-high", "to": "buy-breakout" },
+    { "from": "new-20-bar-low", "to": "exit-breakdown" }
+  ]
+}
