@@ -15,7 +15,7 @@ Run Setup is a preflight contract. A strategy author should understand exactly
 what will be simulated before a run starts:
 
 1. The graph being tested.
-2. The market data or market scenario used as the replay world.
+2. The market data used as the replay world.
 3. The initial portfolio used as starting state.
 4. The simulation configuration and policy assumptions.
 
@@ -31,7 +31,7 @@ The workbench navigation should grow from four pages to five:
 
 | Page | Purpose |
 | --- | --- |
-| Run Setup | Configure graph, market data or scenario, portfolio, and simulation policy before running. |
+| Run Setup | Configure graph, market data, portfolio, and simulation policy before running. |
 | Market Replay | Overview of market candles, volume, equity, drawdown, and event rails. |
 | Event Lens | Detailed event investigation with local market context, gas, funding, and costs. |
 | Result Review | Portfolio outcome, equity and drawdown, cost attribution, and final state. |
@@ -81,16 +81,15 @@ Node details panel fields:
 - Policy assumptions affecting the node.
 - Events produced in the last selected run, if available.
 
-### Market Data Or Scenario Section
+### Market Data Section
 
-Market data selection must be first-class. Use tabs:
+Market data selection is the most important setup interaction after graph
+selection. The user needs to see what local data exists, choose a replay window,
+and understand whether the graph's required series are covered before running.
 
-- Historical data.
-- Scenario.
+Primary fields:
 
-Historical data fields:
-
-- Source: Parquet store, inline bundle, or remote source.
+- Source: Parquet store first, then inline bundle or remote source if supported.
 - Venue.
 - Symbol or pair.
 - Quote asset.
@@ -99,14 +98,15 @@ Historical data fields:
 - UTC end.
 - Required series: candles, gas, funding, yields.
 
-Scenario fields:
+Selector behavior:
 
-- Scenario selector.
-- Scenario title.
-- Scenario source path or id.
-- Scenario time range.
-- Included series.
-- Warnings.
+- Pick source first, then constrain venue, symbol, and interval options from the
+  source catalog.
+- Show available horizontal coverage before asking for start and end.
+- Default start and end to the widest complete window that satisfies required
+  candle and gas data.
+- Allow partial optional series only with an explicit warning.
+- Treat missing required series as a hard blocker.
 
 Coverage timeline:
 
@@ -122,6 +122,10 @@ Primary actions:
 - Change source.
 - Preview window.
 - Inspect coverage.
+
+Scenario loading is deferred. If scenarios remain in the service catalog, they
+can appear as a secondary source type later, but they should not compete with
+local market-data selection in the first implementation pass.
 
 ### Initial Portfolio Section
 
@@ -324,7 +328,7 @@ New components:
 | `SetupModule` | Section frame with title, state, summary, and content. |
 | `GraphRequirementTable` | Read-only graph node table with selectable rows. |
 | `NodeDetailsPanel` | Inline selected-node details and dependencies. |
-| `MarketDataSelector` | Historical data vs scenario selector. |
+| `MarketDataSelector` | Source, venue, symbol, interval, UTC window, and coverage selector. |
 | `CoverageTimeline` | Multi-row horizontal coverage visualization. |
 | `PortfolioTable` | Initial balances, weights, and validation states. |
 | `ConfigurationPanel` | Policy and simulation assumption controls. |
@@ -373,6 +377,9 @@ POST /market-data/window
 
 `GET /market-data/catalog` should return available horizontal coverage by
 series, not just whether a requested window can be loaded.
+
+This is the highest-priority new setup API. The setup page should be able to ask
+"what local market data do I have?" before it asks the user to run a backtest.
 
 Suggested row shape:
 
@@ -455,10 +462,11 @@ for selected-row details.
 2. Extract tokens into CSS variables and Mantine theme extensions.
 3. Build Storybook stories for the new setup modules and history table.
 4. Implement Run Setup layout with read-only controls first.
-5. Add real market data selector and coverage catalog once the API exists.
+5. Add the real market data selector and coverage catalog.
 6. Implement Simulation History table against `GET /backtests`.
 7. Add selected-run details rail with lazy loading.
-8. Wire duplicate setup and rerun actions.
+8. Defer scenario loading until local market-data selection is reliable.
+9. Wire duplicate setup and rerun actions.
 
 ## Non Goals
 
@@ -466,4 +474,5 @@ for selected-row details.
 - Order book or exchange-terminal UI.
 - Live trading controls.
 - Multi-run comparison charts in the first pass.
+- Scenario loading in the first setup implementation pass.
 - Arbitrary user-authored scenario editing in v1.
