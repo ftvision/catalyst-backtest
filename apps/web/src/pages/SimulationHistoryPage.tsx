@@ -131,7 +131,7 @@ export function SimulationHistoryPage({
   const readiness = [
     { label: "Graph requirements", detail: "All matched", ok: graph.status !== "danger" && graph.status !== "failed" },
     { label: "Market data coverage", detail: coverageWarning ? "Funding partially missing" : "Complete", ok: !coverageWarning },
-    { label: "Initial portfolio", detail: `${setup.portfolio.length} balances`, ok: setup.portfolio.length > 0 },
+    { label: "Initial balances", detail: `${setup.portfolio.length} balance rows`, ok: setup.portfolio.length > 0 },
     { label: "Configuration", detail: "All parameters set", ok: Boolean(setup.policy && setup.interval) },
   ];
   const createdText = selected?.created_at ?? result.createdAt;
@@ -333,7 +333,7 @@ export function SimulationHistoryPage({
               <SimpleGrid cols={1} spacing="md">
                 <Paper className="panel-muted history-detail-panel" p="sm">
                   <Stack gap="xs">
-                    <Text fw={650} size="sm">Initial portfolio</Text>
+                    <Text fw={650} size="sm">Initial balances</Text>
                     <DataTable
                       columns={["Asset", "Venue", "Amount", "Weight"]}
                       rows={setup.portfolio.map((item) => [
