@@ -236,9 +236,12 @@ stays scoped to the existing `price_threshold` golden graphs.
   `pct_balance` (swap from-asset / yield asset / perp cash) and `pct_position`
   (perp notional / yield principal+accrued). This unlocks stop-loss,
   take-profit, and rebalancing.
-- **`pct_portfolio` is accepted by the contract/schema but rejected at execution**
-  with a clear message — it needs portfolio equity threaded into execution, a
-  small follow-up.
+- **`pct_portfolio`** sizes against total portfolio equity: the engine computes
+  tick-start equity (`compute_equity`) once per tick and threads it into
+  `execute_action`, which resolves `value/100 × equity`, converting the USD slice
+  to asset units via the action asset's price for unit-denominated swaps/yields
+  (perp `size_usd` is already USD). Sampled at tick start (documented; slightly
+  stale within a multi-action chain).
 - Schema gains `amountOrPct`; a `graph.relative-sizing.json` example
   (take-profit: sell 50% on a price spike) is round-trip validated.
 
@@ -258,12 +261,8 @@ stays scoped to the existing `price_threshold` golden graphs.
 - Schema gains the `derived` source; a `graph.ma-cross.json` example
   (price < 20-bar SMA → buy 25% of balance) is round-trip validated.
 
-All four ADR-0002 steps are now implemented.
-
-### Remaining follow-ups (small, noted in code)
-
-- `pct_portfolio` sizing (needs portfolio equity threaded into execution).
-- Nothing else outstanding for the signal/sizing surface.
+All four ADR-0002 steps are now implemented, including `pct_portfolio` sizing.
+Nothing outstanding for the signal/sizing surface.
 
 ## Open decisions
 

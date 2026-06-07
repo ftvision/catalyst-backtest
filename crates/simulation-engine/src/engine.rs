@@ -176,10 +176,14 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
         accrue_yield(&mut ledger, &index, ts, interval_secs, &ts_iso, &mut events);
         check_liquidations(&mut ledger, &index, ts, &ts_iso, &policy, &mut events);
 
+        // Tick-start equity, used to resolve pct_portfolio sizing for any action
+        // this tick (snapshots below recompute it post-action).
+        let tick_equity = compute_equity(&ledger, &index, ts);
+
         // Resting orders placed on earlier bars get a chance to fill/expire first.
         fill_resting_orders(
-            tick_index, ts, &ts_iso, &exec_graph, &mut ledger, &index, &policy, &mut events,
-            &mut resting, &mut order_seq,
+            tick_index, ts, &ts_iso, &exec_graph, &mut ledger, &index, &policy, tick_equity,
+            &mut events, &mut resting, &mut order_seq,
         );
 
         let ctx = TickContext { index: &index, ts };
@@ -188,7 +192,7 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
             for action_id in &exec_graph.initial_actions {
                 run_action_chain(
                     action_id, &exec_graph, &mut ledger, &ctx, &policy, &ts_iso, tick_index,
-                    &mut events, &mut resting, &mut order_seq,
+                    tick_equity, &mut events, &mut resting, &mut order_seq,
                 );
             }
             initial_done = true;
@@ -203,6 +207,7 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
             &ts_iso,
             tick_index,
             interval_secs,
+            tick_equity,
             &policy,
             &mut events,
             &mut signal_state,
@@ -270,6 +275,7 @@ fn evaluate_signals(
     ts_iso: &str,
     tick_index: usize,
     interval_secs: i64,
+    equity: Decimal,
     policy: &ResolvedPolicy,
     events: &mut Vec<Event>,
     signal_state: &mut HashMap<String, bool>,
@@ -383,8 +389,8 @@ fn evaluate_signals(
         });
         for target in &signal.targets {
             run_action_chain(
-                target, exec_graph, ledger, ctx, policy, ts_iso, tick_index, events, resting,
-                order_seq,
+                target, exec_graph, ledger, ctx, policy, ts_iso, tick_index, equity, events,
+                resting, order_seq,
             );
         }
     }
@@ -552,6 +558,7 @@ fn run_action_chain(
     policy: &ResolvedPolicy,
     ts_iso: &str,
     tick_index: usize,
+    equity: Decimal,
     events: &mut Vec<Event>,
     resting: &mut Vec<RestingOrder>,
     order_seq: &mut u64,
@@ -570,7 +577,7 @@ fn run_action_chain(
         // yield deposit whose gas can't be covered — leaves the real ledger
         // untouched, so individual models don't need to hand-roll rollbacks.
         let mut trial = ledger.clone();
-        match execute_action(action, &mut trial, ctx, policy) {
+        match execute_action(action, &mut trial, ctx, policy, equity) {
             ActionOutcome::Executed(fill) => {
                 *ledger = trial; // commit the trial copy
                 events.push(Event {
@@ -644,6 +651,7 @@ fn fill_resting_orders(
     ledger: &mut Ledger,
     index: &BundleIndex,
     policy: &ResolvedPolicy,
+    equity: Decimal,
     events: &mut Vec<Event>,
     resting: &mut Vec<RestingOrder>,
     order_seq: &mut u64,
@@ -710,8 +718,8 @@ fn fill_resting_orders(
                 // The order's downstream chain runs now, at the fill bar.
                 for target in &order.downstream {
                     run_action_chain(
-                        target, exec_graph, ledger, &ctx, policy, ts_iso, tick_index, events,
-                        resting, order_seq,
+                        target, exec_graph, ledger, &ctx, policy, ts_iso, tick_index, equity,
+                        events, resting, order_seq,
                     );
                 }
             }
@@ -737,14 +745,17 @@ fn execute_action(
     ledger: &mut Ledger,
     ctx: &dyn MarketContext,
     policy: &ResolvedPolicy,
+    equity: Decimal,
 ) -> ActionOutcome {
     match action.subtype.as_str() {
         "swap" => match serde_json::from_value::<SwapConfig>(action.config.clone()) {
             Ok(mut cfg) => {
                 // A swap has no distinct "position"; both balance/position bases
-                // resolve against the from-asset balance.
+                // resolve against the from-asset balance. pct_portfolio converts
+                // the USD slice back into from-asset units via its price.
                 let bal = ledger.balance(&cfg.chain, &cfg.from_asset);
-                match resolve_amount(&cfg.amount, bal, bal) {
+                let unit_price = asset_price(ctx, &cfg.chain, &cfg.from_asset);
+                match resolve_amount(&cfg.amount, bal, bal, equity, unit_price) {
                     Ok(a) => cfg.amount = a,
                     Err(e) => return ActionOutcome::Rejected(e),
                 }
@@ -773,7 +784,8 @@ fn execute_action(
                     .perp(&cfg.chain, &cfg.symbol)
                     .map(|p| (p.size * p.entry_price).abs())
                     .unwrap_or(Decimal::ZERO);
-                match resolve_amount(&cfg.size_usd, bal, position) {
+                // size_usd is already USD, so pct_portfolio needs no conversion.
+                match resolve_amount(&cfg.size_usd, bal, position, equity, Decimal::ONE) {
                     Ok(a) => cfg.size_usd = a,
                     Err(e) => return ActionOutcome::Rejected(e),
                 }
@@ -796,14 +808,14 @@ fn execute_action(
             Err(e) => ActionOutcome::Rejected(format!("bad perp config: {e}")),
         },
         "yield_deposit" => match serde_json::from_value::<YieldConfig>(action.config.clone()) {
-            Ok(mut cfg) => match resolve_yield_amount(&mut cfg, ledger) {
+            Ok(mut cfg) => match resolve_yield_amount(&mut cfg, ledger, ctx, equity) {
                 Ok(()) => execute_yield_deposit(ledger, ctx, policy, &cfg).into(),
                 Err(e) => ActionOutcome::Rejected(e),
             },
             Err(e) => ActionOutcome::Rejected(format!("bad yield config: {e}")),
         },
         "yield_withdraw" => match serde_json::from_value::<YieldConfig>(action.config.clone()) {
-            Ok(mut cfg) => match resolve_yield_amount(&mut cfg, ledger) {
+            Ok(mut cfg) => match resolve_yield_amount(&mut cfg, ledger, ctx, equity) {
                 Ok(()) => execute_yield_withdraw(ledger, ctx, policy, &cfg).into(),
                 Err(e) => ActionOutcome::Rejected(e),
             },
@@ -813,10 +825,26 @@ fn execute_action(
     }
 }
 
+/// Mark price of `asset` on `venue` for unit conversion (1 for stables).
+fn asset_price(ctx: &dyn MarketContext, venue: &str, asset: &str) -> Decimal {
+    if is_stable(asset) {
+        Decimal::ONE
+    } else {
+        ctx.bar(venue, asset).map(|b| b.close).unwrap_or(Decimal::ZERO)
+    }
+}
+
 /// Resolve a relative [`Amount`] to an absolute decimal string against the
-/// supplied bases. `pct_portfolio` is not yet wired (needs portfolio valuation
-/// threaded into execution) and is rejected with a clear message.
-fn resolve_amount(amount: &Amount, balance: Decimal, position: Decimal) -> Result<Amount, String> {
+/// supplied bases. `pct_portfolio` is a USD slice of total equity; for
+/// unit-denominated actions (swap/yield) it is converted to asset units via
+/// `unit_price` (1 for USD-denominated perp size).
+fn resolve_amount(
+    amount: &Amount,
+    balance: Decimal,
+    position: Decimal,
+    equity: Decimal,
+    unit_price: Decimal,
+) -> Result<Amount, String> {
     match amount {
         Amount::Absolute(_) => Ok(amount.clone()),
         Amount::Relative { basis, value } => {
@@ -825,7 +853,12 @@ fn resolve_amount(amount: &Amount, balance: Decimal, position: Decimal) -> Resul
                 AmountBasis::PctBalance => pct * balance,
                 AmountBasis::PctPosition => pct * position,
                 AmountBasis::PctPortfolio => {
-                    return Err("pct_portfolio sizing is not yet supported".to_string());
+                    if unit_price.is_zero() {
+                        return Err(
+                            "pct_portfolio sizing needs a price for the action asset".to_string()
+                        );
+                    }
+                    pct * equity / unit_price
                 }
             };
             Ok(Amount::Absolute(resolved.normalize().to_string()))
@@ -833,7 +866,12 @@ fn resolve_amount(amount: &Amount, balance: Decimal, position: Decimal) -> Resul
     }
 }
 
-fn resolve_yield_amount(cfg: &mut YieldConfig, ledger: &Ledger) -> Result<(), String> {
+fn resolve_yield_amount(
+    cfg: &mut YieldConfig,
+    ledger: &Ledger,
+    ctx: &dyn MarketContext,
+    equity: Decimal,
+) -> Result<(), String> {
     let balance = ledger.balance(&cfg.chain, &cfg.asset);
     let position = ledger
         .yields()
@@ -845,7 +883,8 @@ fn resolve_yield_amount(cfg: &mut YieldConfig, ledger: &Ledger) -> Result<(), St
         })
         .map(|y| y.principal + y.accrued)
         .unwrap_or(Decimal::ZERO);
-    cfg.amount = resolve_amount(&cfg.amount, balance, position)?;
+    let unit_price = asset_price(ctx, &cfg.chain, &cfg.asset);
+    cfg.amount = resolve_amount(&cfg.amount, balance, position, equity, unit_price)?;
     Ok(())
 }
 

@@ -141,7 +141,8 @@ fn yield_pct_balance_deposits_a_fraction() {
 }
 
 #[test]
-fn pct_portfolio_is_rejected_until_supported() {
+fn pct_portfolio_sizes_against_total_equity() {
+    // equity = 1000 USDC; spend 10% = 100 USDC of it on ETH, leaving 900.
     let g = graph(json!({
         "nodes": [{
             "id": "buy", "kind": "action", "subtype": "swap",
@@ -157,9 +158,32 @@ fn pct_portfolio_is_rejected_until_supported() {
         market_data: bundle("base", &["2000", "2000"]),
     };
     let trace = run(&input).unwrap();
-    assert_eq!(count(&trace, "action_rejected"), 1);
-    assert!(trace
-        .events
-        .iter()
-        .any(|e| e.reason.as_deref().is_some_and(|r| r.contains("pct_portfolio"))));
+    assert_eq!(count(&trace, "action_executed"), 1);
+    assert_eq!(count(&trace, "action_rejected"), 0);
+    // ~100 USDC spent (10% of equity), plus a few bps of fee.
+    let usdc = trace.final_portfolio.balances["base"]["USDC"].parse::<f64>().unwrap();
+    assert!((899.0..900.0).contains(&usdc), "expected ~900 USDC left, got {usdc}");
+}
+
+#[test]
+fn pct_portfolio_perp_sizes_in_usd() {
+    // equity = 2000 USDC; open a perp sized at 25% of equity = 500 USD notional.
+    let g = graph(json!({
+        "nodes": [{
+            "id": "open", "kind": "action", "subtype": "perp_order",
+            "config": {"symbol": "ETH", "side": "long",
+                       "size_usd": {"basis": "pct_portfolio", "value": "25"},
+                       "leverage": "1", "chain": "hyperliquid"}
+        }],
+        "edges": []
+    }));
+    let input = SimulationInput {
+        graph: g,
+        config: config(json!({"hyperliquid": {"USDC": "2000"}}), 2),
+        policy: strict(),
+        market_data: bundle("hyperliquid", &["2000", "2000"]),
+    };
+    let trace = run(&input).unwrap();
+    assert_eq!(count(&trace, "action_executed"), 1);
+    assert_eq!(count(&trace, "action_rejected"), 0);
 }
