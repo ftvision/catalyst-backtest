@@ -690,13 +690,24 @@ export function App() {
         throw new Error(status.error ?? `Backtest ${created.id} failed`);
       }
 
-      const [serviceResult, events, metadata, history] = await Promise.all([
+      const marketDataWindowRequest = {
+        graph: activeGraph,
+        start: activeConfig.start,
+        end: activeConfig.end,
+        interval: activeConfig.interval,
+        ...(dataSourceMode === "inline" ? { market_data: activeMarketData } : {}),
+      };
+      const replayMarketDataPromise = catalystApi
+        .loadMarketDataWindow(marketDataWindowRequest)
+        .catch(() => activeMarketData);
+      const [serviceResult, events, metadata, history, replayMarketData] = await Promise.all([
         catalystApi.getResult(created.id),
         catalystApi.getEvents(created.id, { limit: 100 }),
         catalystApi.getMetadata(created.id),
         catalystApi.listBacktests(),
+        replayMarketDataPromise,
       ]);
-      const replay = marketReplayFromApi(serviceResult, events.items, activeMarketData);
+      const replay = marketReplayFromApi(serviceResult, events.items, replayMarketData);
       const review = resultFromApi(serviceResult, status.status);
       const auditData = auditFromApi(events.items, serviceResult, replay);
       const serviceSetup = setupFromService({
@@ -721,6 +732,7 @@ export function App() {
         runHistory: history.items.length ? runHistoryFromApi(history.items) : current.runHistory,
         historyItems: history.items,
       }));
+      setActiveMarketData(replayMarketData);
       setSelectedEventId(replay.selectedEventId);
       setRunStatus("succeeded");
       setApiStatus("healthy");

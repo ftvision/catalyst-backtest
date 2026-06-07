@@ -371,8 +371,10 @@ export function marketReplayFromApi(
   const fundingPoints = marketData.funding?.[0]?.points ?? [];
   const equity = result.equity_curve ?? [];
   const drawdown = result.drawdown_curve ?? [];
-  const replay = candles.map((candle, index) => ({
+  const sampleCount = Math.max(candles.length, equity.length, drawdown.length);
+  const replay = Array.from({ length: sampleCount }, (_, index) => ({
     label: `T${String(index + 1).padStart(2, "0")}`,
+    time: candles[index]?.time ?? (equity[index]?.ts ? unixTime(equity[index].ts, index) : undefined),
     equity: numberValue(equity[index]?.equity_usd, numberValue(equity.at(-1)?.equity_usd)),
     drawdown: numberValue(drawdown[index]?.drawdown_pct, numberValue(drawdown.at(-1)?.drawdown_pct)),
     gas: numberValue(gasPoints[index]?.gas_usd),
