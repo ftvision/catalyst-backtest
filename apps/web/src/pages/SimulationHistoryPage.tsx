@@ -1,6 +1,6 @@
 import { Button, Group, Paper, SegmentedControl, Select, SimpleGrid, Stack, Table, Text, TextInput } from "@mantine/core";
 import { useEffect, useMemo, useState } from "react";
-import { FileChartColumn, RotateCcw } from "lucide-react";
+import { FileChartColumn, RotateCcw, Trash2 } from "lucide-react";
 import type { BacktestListItem } from "../api/client";
 import { SectionHeader } from "../components/SectionHeader";
 import { StatusBadge } from "../components/StatusBadge";
@@ -24,11 +24,27 @@ function rowFromFallback(row: Record<string, string>): BacktestListItem {
   };
 }
 
+function formatReturnPct(value: unknown) {
+  if (value === undefined || value === null || value === "") return "-";
+  const numeric =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number(value.replace(/[% ,]/g, ""))
+        : Number.NaN;
+  if (!Number.isFinite(numeric)) return String(value);
+  return `${new Intl.NumberFormat("en-US", {
+    minimumFractionDigits: 4,
+    maximumFractionDigits: 4,
+  }).format(numeric)}%`;
+}
+
 export function SimulationHistoryPage({
   items,
   fallbackRows,
   onOpenResult,
   onReplayEvents,
+  onDeleteRun,
   selectedRunId,
   onSelectRun,
 }: {
@@ -36,6 +52,7 @@ export function SimulationHistoryPage({
   fallbackRows: Array<Record<string, string>>;
   onOpenResult: (runId?: string) => void;
   onReplayEvents: (runId?: string) => void;
+  onDeleteRun?: (runId: string) => void;
   selectedRunId?: string;
   onSelectRun?: (id: string) => void;
 }) {
@@ -43,7 +60,7 @@ export function SimulationHistoryPage({
   const [status, setStatus] = useState("all");
   const [policy, setPolicy] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-  const [selectedId, setSelectedId] = useState(selectedRunId ?? rows[0]?.id);
+  const [selectedId, setSelectedId] = useState<string | undefined>(selectedRunId ?? rows[0]?.id);
 
   useEffect(() => {
     if (selectedRunId) setSelectedId(selectedRunId);
@@ -151,7 +168,7 @@ export function SimulationHistoryPage({
                   <Table.Td>{shortDate(row.created_at)}</Table.Td>
                   <Table.Td>{shortDate(row.start)} to {shortDate(row.end)}</Table.Td>
                   <Table.Td>{row.policy_profile ?? "-"}</Table.Td>
-                  <Table.Td>{row.summary?.return_pct ?? "-"}</Table.Td>
+                  <Table.Td>{formatReturnPct(row.summary?.return_pct)}</Table.Td>
                   <Table.Td>{row.warning_count ?? 0}</Table.Td>
                   <Table.Td>
                     <Group gap="xs" wrap="nowrap">
@@ -179,6 +196,21 @@ export function SimulationHistoryPage({
                       >
                         Replay event
                       </Button>
+                      {onDeleteRun ? (
+                        <Button
+                          size="xs"
+                          variant="subtle"
+                          color="red"
+                          leftSection={<Trash2 size={13} />}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onDeleteRun(row.id);
+                            setSelectedId((current) => (current === row.id ? filtered.find((candidate) => candidate.id !== row.id)?.id : current));
+                          }}
+                        >
+                          Delete
+                        </Button>
+                      ) : null}
                     </Group>
                   </Table.Td>
                 </Table.Tr>
