@@ -7,6 +7,7 @@ import {
   type IChartApi,
   type UTCTimestamp,
 } from "lightweight-charts";
+import { ChartInteractionControls } from "./ChartInteractionControls";
 import { formatNumber, formatPercent } from "../utils/format";
 
 export interface EquityDrawdownPoint {
@@ -34,6 +35,11 @@ const drawdownFillBottom = "rgba(214, 74, 69, 0.32)";
 
 export function EquityDrawdownChart({ data }: { data: EquityDrawdownPoint[] }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+
+  const resetRange = () => {
+    chartRef.current?.timeScale().fitContent();
+  };
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -59,6 +65,16 @@ export function EquityDrawdownChart({ data }: { data: EquityDrawdownPoint[] }) {
       rightPriceScale: {
         borderColor: "#d4dae3",
       },
+      handleScroll: {
+        mouseWheel: false,
+        pressedMouseMove: true,
+        horzTouchDrag: true,
+      },
+      handleScale: {
+        axisPressedMouseMove: true,
+        mouseWheel: false,
+        pinch: true,
+      },
       timeScale: {
         borderColor: "#d4dae3",
         timeVisible: true,
@@ -70,6 +86,7 @@ export function EquityDrawdownChart({ data }: { data: EquityDrawdownPoint[] }) {
         horzLine: { color: equityColor, labelBackgroundColor: equityColor },
       },
     });
+    chartRef.current = chart;
 
     const equitySeries = chart.addSeries(AreaSeries, {
       lineColor: equityColor,
@@ -128,8 +145,14 @@ export function EquityDrawdownChart({ data }: { data: EquityDrawdownPoint[] }) {
     return () => {
       resizeObserver.disconnect();
       chart.remove();
+      chartRef.current = null;
     };
   }, [data]);
 
-  return <div ref={containerRef} className="equity-drawdown-chart" />;
+  return (
+    <div className="chart-shell result-chart-shell">
+      <div ref={containerRef} className="equity-drawdown-chart" />
+      <ChartInteractionControls ariaLabel="Equity chart controls" chartRef={chartRef} labelPrefix="equity" resetRange={resetRange} />
+    </div>
+  );
 }
