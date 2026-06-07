@@ -14,12 +14,13 @@
     },
     "variables": {
       "type": "object",
-      "description": "Optional graph-level variables emitted by Catalyst. Opaque to the backtester for now.",
+      "description": "Named scalar values substitutable into node configs. Reference one as a \"$name\" string (e.g. \"amount\": \"$size\") or, in a signal reference, as { \"var\": \"name\" }. The compiler resolves them to concrete values; an undefined reference is a compile error and an unused variable warns.",
+      "additionalProperties": { "type": ["string", "number", "boolean"] },
       "default": {}
     },
     "settings": {
       "type": "object",
-      "description": "Optional graph-level settings emitted by Catalyst. Opaque to the backtester for now.",
+      "description": "Reserved graph-level settings. Validated as an object but not yet honored by the backtester; request config and policy always take precedence, and any keys present are reported as ignored warnings.",
       "default": {}
     },
     "nodes": {
@@ -35,13 +36,13 @@
   "$defs": {
     "decimal": {
       "type": "string",
-      "description": "A non-negative decimal carried as a string to avoid float precision loss, e.g. \"100\" or \"0.04\". The literal \"all\" is permitted for full-balance actions.",
-      "pattern": "^(all|[0-9]+(\\.[0-9]+)?)$"
+      "description": "A non-negative decimal carried as a string to avoid float precision loss, e.g. \"100\" or \"0.04\". The literal \"all\" is permitted for full-balance actions. A \"$name\" token references a graph variable, resolved by the compiler.",
+      "pattern": "^(all|\\$[A-Za-z_][A-Za-z0-9_]*|[0-9]+(\\.[0-9]+)?)$"
     },
     "signedDecimal": {
       "type": "string",
-      "description": "A signed decimal carried as a string, e.g. \"-0.05\". Used where negative thresholds are meaningful (funding rates, rate-of-change).",
-      "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+      "description": "A signed decimal carried as a string, e.g. \"-0.05\". Used where negative thresholds are meaningful (funding rates, rate-of-change). A \"$name\" token references a graph variable.",
+      "pattern": "^(\\$[A-Za-z_][A-Za-z0-9_]*|-?[0-9]+(\\.[0-9]+)?)$"
     },
     "amountOrPct": {
       "description": "An action amount: an absolute decimal (or \"all\"), or a percentage of a basis.",

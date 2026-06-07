@@ -283,3 +283,92 @@ fn derived_reference_sets_lookback_and_requires_candles() {
     assert_eq!(c.data_requirements.lookback_bars, 20);
     assert!(c.data_requirements.candles.iter().any(|cd| cd.symbol == "ETH" && cd.venue == "base"));
 }
+
+// --- #49: graph variables / settings ---
+
+fn var_swap_graph(amount: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "variables": {"size": "250"},
+        "nodes": [{
+            "id": "buy", "kind": "action", "subtype": "swap",
+            "config": {"from_asset": "USDC", "to_asset": "ETH", "amount": amount, "chain": "base"}
+        }],
+        "edges": []
+    })
+}
+
+#[test]
+fn variable_substitutes_into_action_amount() {
+    let c = compile(&graph(&var_swap_graph(serde_json::json!("$size")))).unwrap();
+    assert_eq!(c.actions[0].config["amount"], serde_json::json!("250"));
+    assert_eq!(c.resolved_variables.get("size"), Some(&serde_json::json!("250")));
+}
+
+#[test]
+fn undefined_variable_is_a_compile_error() {
+    let g = serde_json::json!({
+        "nodes": [{
+            "id": "buy", "kind": "action", "subtype": "swap",
+            "config": {"from_asset": "USDC", "to_asset": "ETH", "amount": "$missing", "chain": "base"}
+        }],
+        "edges": []
+    });
+    let err = compile(&graph(&g)).unwrap_err();
+    assert!(err.to_string().contains("undefined variable"), "{err}");
+    assert!(err.to_string().contains("missing"), "{err}");
+}
+
+#[test]
+fn unused_variable_warns() {
+    let g = serde_json::json!({
+        "variables": {"size": "250", "ghost": "1"},
+        "nodes": [{
+            "id": "buy", "kind": "action", "subtype": "swap",
+            "config": {"from_asset": "USDC", "to_asset": "ETH", "amount": "$size", "chain": "base"}
+        }],
+        "edges": []
+    });
+    let c = compile(&graph(&g)).unwrap();
+    assert!(c.warnings.iter().any(|w| w.contains("ghost") && w.contains("never used")), "{:?}", c.warnings);
+    assert!(!c.resolved_variables.contains_key("ghost"));
+}
+
+#[test]
+fn var_reference_object_resolves_to_const() {
+    let g = serde_json::json!({
+        "variables": {"floor": "1800"},
+        "nodes": [
+            {"id": "below", "kind": "signal", "subtype": "threshold",
+             "config": {"source": {"kind": "price", "symbol": "ETH"},
+                        "operator": "<", "reference": {"var": "floor"}}},
+            {"id": "buy", "kind": "action", "subtype": "swap",
+             "config": {"from_asset": "USDC", "to_asset": "ETH", "amount": "10", "chain": "base"}}
+        ],
+        "edges": [{"from": "below", "to": "buy"}]
+    });
+    let c = compile(&graph(&g)).unwrap();
+    let sig = c.signals.iter().find(|s| s.id == "below").unwrap();
+    assert_eq!(sig.config["reference"], serde_json::json!({"const": "1800"}));
+}
+
+#[test]
+fn settings_with_keys_warn_and_non_object_variables_error() {
+    let g = serde_json::json!({
+        "settings": {"foo": "bar"},
+        "nodes": [{
+            "id": "buy", "kind": "action", "subtype": "swap",
+            "config": {"from_asset": "USDC", "to_asset": "ETH", "amount": "10", "chain": "base"}
+        }],
+        "edges": []
+    });
+    let c = compile(&graph(&g)).unwrap();
+    assert!(c.warnings.iter().any(|w| w.contains("settings") && w.contains("not yet honored")), "{:?}", c.warnings);
+
+    let bad = serde_json::json!({
+        "variables": [1, 2],
+        "nodes": [{"id": "buy", "kind": "action", "subtype": "swap",
+            "config": {"from_asset": "USDC", "to_asset": "ETH", "amount": "10", "chain": "base"}}],
+        "edges": []
+    });
+    assert!(compile(&graph(&bad)).is_err());
+}

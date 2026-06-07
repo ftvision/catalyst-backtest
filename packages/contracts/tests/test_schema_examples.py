@@ -60,3 +60,21 @@ def test_unknown_node_subtype_is_rejected() -> None:
     bad["nodes"][0]["subtype"] = "options_order"
     with pytest.raises(jsonschema.ValidationError):
         validate(bad, "graph")
+
+
+def test_variable_token_validates_in_decimal_fields() -> None:
+    # a "$name" token is accepted where a decimal is expected; the compiler
+    # resolves it later.
+    g = _load("graph.swap.json")
+    g.setdefault("variables", {})["size"] = "100"
+    g["nodes"][0]["config"]["amount"] = "$size"
+    validate(g, "graph")  # must not raise
+
+
+def test_non_scalar_variable_value_is_rejected() -> None:
+    import jsonschema
+
+    g = _load("graph.swap.json")
+    g["variables"] = {"size": {"nested": "object"}}
+    with pytest.raises(jsonschema.ValidationError):
+        validate(g, "graph")

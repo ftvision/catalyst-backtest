@@ -291,6 +291,36 @@ async fn strategy_scenarios_are_exposed() {
 }
 
 #[tokio::test]
+async fn preview_reports_resolved_variables_and_undefined_errors() {
+    let st = state();
+
+    // a defined variable is resolved and reported
+    let g = json!({
+        "variables": {"size": "250"},
+        "nodes": [{"id": "buy", "kind": "action", "subtype": "swap",
+            "config": {"from_asset": "USDC", "to_asset": "ETH", "amount": "$size", "chain": "base"}}],
+        "edges": []
+    });
+    let (s, v) = send(&st, "POST", "/backtests/preview", Some(json!({"graph": g}))).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v["valid"], true);
+    assert_eq!(v["resolved_variables"]["size"], "250");
+
+    // an undefined variable is a compile error -> not valid
+    let bad = json!({
+        "graph": {
+            "nodes": [{"id": "buy", "kind": "action", "subtype": "swap",
+                "config": {"from_asset": "USDC", "to_asset": "ETH", "amount": "$missing", "chain": "base"}}],
+            "edges": []
+        }
+    });
+    let (s2, v2) = send(&st, "POST", "/backtests/preview", Some(bad)).await;
+    assert_eq!(s2, StatusCode::OK);
+    assert_eq!(v2["valid"], false);
+    assert!(v2["error"].as_str().unwrap().contains("undefined variable"));
+}
+
+#[tokio::test]
 async fn preview_valid_and_invalid() {
     let st = state();
     let (s, v) = send(
