@@ -252,13 +252,15 @@ async fn strategy_repository_is_exposed() {
     let (s, list) = send(&st, "GET", "/strategies", None).await;
     assert_eq!(s, StatusCode::OK);
     let items = list["items"].as_array().unwrap();
-    assert_eq!(items.len(), 5);
-    assert!(items.iter().any(|item| item["id"] == "g04_hl_spot_ladder"));
+    assert_eq!(items.len(), 18);
+    assert!(items
+        .iter()
+        .any(|item| item["id"] == "g18_direct_hl_spot_sell_eth"));
 
-    let (s, strategy) = send(&st, "GET", "/strategies/g04_hl_spot_ladder", None).await;
+    let (s, strategy) = send(&st, "GET", "/strategies/g18_direct_hl_spot_sell_eth", None).await;
     assert_eq!(s, StatusCode::OK);
-    assert_eq!(strategy["id"], "g04_hl_spot_ladder");
-    assert_eq!(strategy["graph"]["nodes"].as_array().unwrap().len(), 9);
+    assert_eq!(strategy["id"], "g18_direct_hl_spot_sell_eth");
+    assert_eq!(strategy["graph"]["nodes"].as_array().unwrap().len(), 1);
 
     let (s, missing) = send(&st, "GET", "/strategies/not-real", None).await;
     assert_eq!(s, StatusCode::NOT_FOUND);

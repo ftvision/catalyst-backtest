@@ -1,0 +1,81 @@
+{
+  "nodes": [
+    {
+      "id": "open-initial-eth-short-3x",
+      "kind": "action",
+      "subtype": "perp_order",
+      "config": {
+        "symbol": "ETH",
+        "side": "short",
+        "size_usd": "750",
+        "leverage": "3",
+        "chain": "hyperliquid",
+        "order_type": "market",
+        "reduce_only": false
+      },
+      "enabled": true
+    },
+    {
+      "id": "eth-above-2400",
+      "kind": "signal",
+      "subtype": "price_threshold",
+      "config": {
+        "symbol": "ETH",
+        "operator": ">",
+        "threshold": "2400"
+      },
+      "enabled": true
+    },
+    {
+      "id": "open-eth-short-10x",
+      "kind": "action",
+      "subtype": "perp_order",
+      "config": {
+        "symbol": "ETH",
+        "side": "short",
+        "size_usd": "750",
+        "leverage": "10",
+        "chain": "hyperliquid",
+        "order_type": "market",
+        "reduce_only": false
+      },
+      "enabled": true
+    },
+    {
+      "id": "eth-below-1900",
+      "kind": "signal",
+      "subtype": "price_threshold",
+      "config": {
+        "symbol": "ETH",
+        "operator": "<",
+        "threshold": "1900"
+      },
+      "enabled": true
+    },
+    {
+      "id": "close-eth-short",
+      "kind": "action",
+      "subtype": "perp_order",
+      "config": {
+        "symbol": "ETH",
+        "side": "long",
+        "size_usd": "2000",
+        "chain": "hyperliquid",
+        "order_type": "market",
+        "reduce_only": true
+      },
+      "enabled": true
+    }
+  ],
+  "edges": [
+    {
+      "from": "eth-above-2400",
+      "to": "open-eth-short-10x"
+    },
+    {
+      "from": "eth-below-1900",
+      "to": "close-eth-short"
+    }
+  ],
+  "schema_version": "catalyst.graph.definition.v1"
+}

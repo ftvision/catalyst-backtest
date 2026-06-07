@@ -1,0 +1,18 @@
+{
+  "schema_version": "catalyst.graph.definition.v1",
+  "nodes": [
+    {
+      "id": "direct-spot-sell-eth",
+      "kind": "action",
+      "subtype": "swap",
+      "config": {
+        "from_asset": "ETH",
+        "to_asset": "USDC",
+        "amount": "0.04",
+        "chain": "hyperliquid"
+      },
+      "enabled": true
+    }
+  ],
+  "edges": []
+}

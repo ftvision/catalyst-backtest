@@ -1,0 +1,34 @@
+{
+  "nodes": [
+    {
+      "id": "eth-below-1800",
+      "kind": "signal",
+      "subtype": "price_threshold",
+      "config": {
+        "symbol": "ETH",
+        "operator": "<",
+        "threshold": "1800"
+      },
+      "enabled": true
+    },
+    {
+      "id": "buy-eth-on-base",
+      "kind": "action",
+      "subtype": "swap",
+      "config": {
+        "from_asset": "USDC",
+        "to_asset": "ETH",
+        "amount": "100",
+        "chain": "base"
+      },
+      "enabled": true
+    }
+  ],
+  "edges": [
+    {
+      "from": "eth-below-1800",
+      "to": "buy-eth-on-base"
+    }
+  ],
+  "schema_version": "catalyst.graph.definition.v1"
+}

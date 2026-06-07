@@ -1,0 +1,37 @@
+{
+  "nodes": [
+    {
+      "id": "deposit-usdc-into-aave",
+      "kind": "action",
+      "subtype": "yield_deposit",
+      "config": {
+        "chain": "base",
+        "protocol": "aave",
+        "pool": "usdc",
+        "asset": "USDC",
+        "amount": "250"
+      },
+      "enabled": true
+    },
+    {
+      "id": "withdraw-usdc-from-aave",
+      "kind": "action",
+      "subtype": "yield_withdraw",
+      "config": {
+        "chain": "base",
+        "protocol": "aave",
+        "pool": "usdc",
+        "asset": "USDC",
+        "amount": "all"
+      },
+      "enabled": true
+    }
+  ],
+  "edges": [
+    {
+      "from": "deposit-usdc-into-aave",
+      "to": "withdraw-usdc-from-aave"
+    }
+  ],
+  "schema_version": "catalyst.graph.definition.v1"
+}
