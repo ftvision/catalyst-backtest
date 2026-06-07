@@ -27,8 +27,14 @@ def parse_ts(value: object) -> datetime:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
+def _dune_dt(ts: datetime) -> str:
+    # Dune Datetime parameters expect "YYYY-MM-DD HH:MM:SS" (UTC), not ISO-8601
+    # with a "T"/offset, so format explicitly.
+    return ts.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S")
+
+
 def _window(start: datetime, end: datetime, extra: dict | None) -> dict:
-    params = {"start": start.isoformat(), "end": end.isoformat()}
+    params = {"start": _dune_dt(start), "end": _dune_dt(end)}
     if extra:
         params.update(extra)
     return params
