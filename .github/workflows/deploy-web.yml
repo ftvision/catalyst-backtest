@@ -1,0 +1,46 @@
+name: Deploy Web
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_base_url:
+        description: Public Catalyst API URL
+        required: true
+        default: https://catalyst-backtest-api.fly.dev
+      pages_project:
+        description: Cloudflare Pages project
+        required: true
+        default: catalyst-backtest-web
+      pages_branch:
+        description: Cloudflare Pages branch label
+        required: true
+        default: main
+      create_project:
+        description: Create the Pages project first if needed
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+jobs:
+  deploy-web:
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      VITE_CATALYST_API_BASE: ${{ inputs.api_base_url }}
+      CF_PAGES_PROJECT: ${{ inputs.pages_project }}
+      CF_PAGES_BRANCH: ${{ inputs.pages_branch }}
+      CREATE_CF_PAGES_PROJECT: ${{ inputs.create_project == 'true' && '1' || '0' }}
+      WRANGLER_CMD: npx --yes wrangler@4.77.0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: Deploy web to Cloudflare Pages
+        run: ./scripts/deploy-web-cloudflare.sh
