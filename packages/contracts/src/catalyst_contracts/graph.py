@@ -15,7 +15,22 @@ from pydantic import Field
 from ._base import Decimal, OpenModel, StrictModel
 
 NodeKind = Literal["action", "signal"]
-NodeSubtype = Literal["swap", "perp_order", "yield_deposit", "yield_withdraw", "price_threshold"]
+# Action subtypes, then signal subtypes. `threshold` is the generalized signal
+# (any source compared against a reference); `all`/`any`/`not` are boolean
+# combinators. Per-subtype config shapes live in the Rust contract / JSON schema
+# and are validated authoritatively by the service; `Node.config` stays
+# free-form here so any producer payload round-trips.
+NodeSubtype = Literal[
+    "swap",
+    "perp_order",
+    "yield_deposit",
+    "yield_withdraw",
+    "price_threshold",
+    "threshold",
+    "all",
+    "any",
+    "not",
+]
 ThresholdOperator = Literal["<", "<=", ">", ">=", "==", "!="]
 PerpSide = Literal["long", "short"]
 
