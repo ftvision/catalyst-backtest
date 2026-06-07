@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 
 from catalyst_contracts import Candle
 from catalyst_contracts.market_data import GasPoint
-from catalyst_market_data_core import ParquetStore
+from catalyst_market_data_core import ParquetStore, filter_candle_outliers
 
 from .client import DuneClient
 
@@ -100,9 +100,28 @@ def ingest_candles(
     symbol: str,
     interval: str,
     query_id: int,
+    filter_outliers: bool = False,
+    outlier_tolerance: float = 0.5,
+    outlier_window: int = 11,
+    repair_wicks: bool = False,
+    wick_tolerance: float = 0.2,
     **kwargs,
 ) -> int:
+    """Fetch and write candles. With ``filter_outliers``, clean OHLC outliers
+    (rolling-median deviation) before writing and record a quality report in the
+    store's ``_quality.json`` keyed ``candles/<venue>/<symbol>/<interval>``.
+    ``repair_wicks`` collapses implausible high/low wicks to the body rather than
+    dropping the candle (safe when open/close are trusted)."""
     candles = fetch_candles(client, query_id, **kwargs)
+    if filter_outliers:
+        candles, report = filter_candle_outliers(
+            candles,
+            window=outlier_window,
+            tolerance=outlier_tolerance,
+            repair_wicks=repair_wicks,
+            wick_tolerance=wick_tolerance,
+        )
+        store.set_quality("candles", f"{venue}/{symbol}/{interval}", report.as_dict())
     return store.write_candles(venue, symbol, interval, candles)
 
 

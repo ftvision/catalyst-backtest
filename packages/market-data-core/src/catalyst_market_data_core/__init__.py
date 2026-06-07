@@ -9,6 +9,7 @@ this core so the store layout and fetch plumbing are single-sourced.
 
 from __future__ import annotations
 
+from .quality import CandleQualityReport, filter_candle_outliers
 from .store import ParquetSource, ParquetStore
 from .transport import Transport, http_transport, network_disabled
 
@@ -21,4 +22,6 @@ __all__ = [
     "Transport",
     "http_transport",
     "network_disabled",
+    "filter_candle_outliers",
+    "CandleQualityReport",
 ]
