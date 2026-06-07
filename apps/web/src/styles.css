@@ -22,6 +22,7 @@
   --cb-success-bg: oklch(0.972 0.026 178);
   --cb-policy-bg: oklch(0.968 0.026 286);
   --cb-rail-width: 340px;
+  --cb-sidebar-width: 258px;
   --cb-shadow: 0 1px 2px oklch(0.25 0.03 245 / 0.08);
 }
 
@@ -44,10 +45,30 @@ select {
 }
 
 .app-shell {
+  display: grid;
+  grid-template-columns: var(--cb-sidebar-width) minmax(0, 1fr);
   min-height: 100vh;
   background:
     linear-gradient(180deg, var(--cb-surface-2), var(--cb-surface) 260px),
     var(--cb-surface);
+}
+
+.app-sidebar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  border-right: 1px solid var(--cb-border);
+  background:
+    linear-gradient(180deg, oklch(0.992 0.004 235), oklch(0.968 0.011 235)),
+    var(--cb-surface);
+  padding: 18px 14px;
+}
+
+.app-main {
+  min-width: 0;
 }
 
 .topbar {
@@ -61,40 +82,112 @@ select {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 20px;
   align-items: center;
-  padding: 14px 24px;
+  min-height: 68px;
+  padding: 12px 24px;
 }
 
 .topbar-actions {
   min-width: 0;
 }
 
+.workspace-context {
+  min-width: 0;
+  max-width: 520px;
+}
+
 .topbar-run-context {
   max-width: 220px;
 }
 
+.brand-lockup {
+  min-height: 48px;
+}
+
 .brand-mark {
-  display: grid;
+  position: relative;
+  display: block;
   width: 32px;
   height: 32px;
-  place-items: center;
-  border: 1px solid var(--cb-border-strong);
-  border-radius: 6px;
-  background: var(--cb-surface);
+  flex: 0 0 auto;
+}
+
+.brand-mark span {
+  position: absolute;
+  display: block;
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: var(--cb-blue);
+  box-shadow: 0 1px 2px oklch(0.25 0.03 245 / 0.12);
+}
+
+.brand-mark span:nth-child(1) {
+  top: 3px;
+  left: 11px;
+}
+
+.brand-mark span:nth-child(2) {
+  top: 11px;
+  left: 3px;
+}
+
+.brand-mark span:nth-child(3) {
+  top: 11px;
+  left: 19px;
+}
+
+.brand-mark span:nth-child(4) {
+  top: 20px;
+  left: 8px;
+}
+
+.brand-mark span:nth-child(5) {
+  top: 20px;
+  left: 18px;
+}
+
+.workflow-nav {
+  display: grid;
+  gap: 7px;
+  padding: 20px 0;
+}
+
+.workflow-link {
+  min-height: 42px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: var(--cb-text);
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease;
+}
+
+.workflow-link:hover {
+  background: var(--cb-row-hover);
+}
+
+.workflow-link[data-active] {
+  border-color: oklch(0.83 0.055 245);
+  background: var(--cb-row-selected);
+  color: var(--cb-blue);
+  box-shadow: inset 0 0 0 1px oklch(0.88 0.035 245);
+}
+
+.workflow-link .mantine-NavLink-section {
+  color: var(--cb-muted);
+}
+
+.workflow-link[data-active] .mantine-NavLink-section {
   color: var(--cb-blue);
 }
 
-.workflow {
-  border-bottom: 1px solid var(--cb-border);
-  background: var(--cb-surface);
-  padding: 0 24px;
-}
-
-.workflow .mantine-Tabs-list {
-  flex-wrap: wrap;
-}
-
-.workflow .mantine-Tabs-tab {
-  min-height: 40px;
+.sidebar-status {
+  margin-top: auto;
+  border: 1px solid var(--cb-border);
+  border-radius: 7px;
+  background: oklch(0.99 0.004 235);
+  padding: 12px;
 }
 
 .workspace {
@@ -477,6 +570,10 @@ select {
 }
 
 @media (max-width: 1100px) {
+  .app-shell {
+    grid-template-columns: 220px minmax(0, 1fr);
+  }
+
   .section-grid,
   .setup-grid,
   .setup-preflight-grid,
@@ -499,6 +596,38 @@ select {
 }
 
 @media (max-width: 720px) {
+  .app-shell {
+    display: block;
+  }
+
+  .app-sidebar {
+    position: static;
+    min-height: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--cb-border);
+    padding: 12px 14px;
+  }
+
+  .brand-lockup {
+    min-height: 40px;
+  }
+
+  .workflow-nav {
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    padding: 12px 0 0;
+  }
+
+  .workflow-link {
+    min-width: max-content;
+    min-height: 44px;
+  }
+
+  .sidebar-status {
+    display: none;
+  }
+
   .topbar-inner {
     grid-template-columns: 1fr;
     gap: 12px;
@@ -525,16 +654,8 @@ select {
 
   .topbar .mantine-Button-root,
   .workspace .mantine-Button-root,
-  .workflow .mantine-Tabs-tab {
+  .workflow-link {
     min-height: 44px;
-  }
-
-  .workflow {
-    padding: 0 14px;
-  }
-
-  .workflow .mantine-Tabs-list {
-    gap: 0 4px;
   }
 
   .workspace {

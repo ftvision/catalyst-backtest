@@ -3,9 +3,10 @@ import {
   ActionIcon,
   Badge,
   Button,
+  Divider,
   Group,
+  NavLink,
   Stack,
-  Tabs,
   Text,
   Title,
   Tooltip,
@@ -13,7 +14,6 @@ import {
 import { useClipboard } from "@mantine/hooks";
 import {
   Activity,
-  Braces,
   CandlestickChart,
   Clipboard,
   Download,
@@ -472,122 +472,147 @@ export function App() {
 
   return (
     <div className="app-shell">
-      <header className="topbar">
-        <div className="topbar-inner">
-          <Group gap="sm" align="center">
-            <div className="brand-mark" aria-hidden="true">
-              <Braces size={18} />
-            </div>
-            <Stack gap={1}>
-              <Group gap="xs">
-                <Title order={1}>Catalyst Backtest</Title>
-                <Badge
-                  variant="light"
-                  color={apiStatus === "healthy" ? "teal" : apiStatus === "offline" ? "gray" : apiStatus === "failed" ? "red" : "blue"}
-                  radius="sm"
-                >
-                  API {apiStatus}
-                </Badge>
-              </Group>
-              <Text size="sm" c="dimmed">
-                {apiMessage}
-              </Text>
-            </Stack>
-          </Group>
+      <aside className="app-sidebar" aria-label="Workbench navigation">
+        <Group className="brand-lockup" gap="sm" align="center">
+          <div className="brand-mark" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+            <span />
+            <span />
+          </div>
+          <Title order={1}>Catalyst Backtest</Title>
+        </Group>
 
-          <Group className="topbar-actions" gap="xs" justify="flex-end">
-            <Stack className="topbar-run-context" gap={0} align="flex-end">
+        <Divider />
+
+        <nav className="workflow-nav">
+          {routes.map((route) => (
+            <NavLink
+              key={route.id}
+              active={activeRoute === route.id}
+              className="workflow-link"
+              component="button"
+              label={route.label}
+              leftSection={route.icon}
+              onClick={() => setActiveRoute(route.id)}
+              type="button"
+              aria-current={activeRoute === route.id ? "page" : undefined}
+            />
+          ))}
+        </nav>
+
+        <Stack className="sidebar-status" gap={4}>
+          <Text size="xs" c="dimmed">
+            Service
+          </Text>
+          <Badge
+            variant="light"
+            color={apiStatus === "healthy" ? "teal" : apiStatus === "offline" ? "gray" : apiStatus === "failed" ? "red" : "blue"}
+            radius="sm"
+          >
+            API {apiStatus}
+          </Badge>
+          <Text size="xs" c="dimmed" lineClamp={3}>
+            {apiMessage}
+          </Text>
+        </Stack>
+      </aside>
+
+      <div className="app-main">
+        <header className="topbar">
+          <div className="topbar-inner">
+            <Stack gap={1} className="workspace-context">
               <Text size="xs" c="dimmed">
-                Selected event
+                Workspace
               </Text>
-              <Text size="xs" c="dimmed" className="mono">
-                {selectedEvent ? `${selectedEvent.index} ${selectedEvent.label}` : workbench.setup.runId}
+              <Text fw={650} size="sm" lineClamp={1}>
+                {activeSelection.strategyTitle}
               </Text>
             </Stack>
-            <Tooltip label={clipboard.copied ? "Copied" : "Copy run ID"}>
-              <ActionIcon aria-label="Copy run ID" onClick={() => clipboard.copy(workbench.setup.runId)}>
-                <Clipboard size={16} />
-              </ActionIcon>
-            </Tooltip>
-            <Tooltip label="Download JSON">
-              <ActionIcon aria-label="Download JSON" onClick={downloadPayload}>
-                <Download size={16} />
-              </ActionIcon>
-            </Tooltip>
-            <Button leftSection={<Play size={14} />} onClick={runBacktest} loading={isRunning}>
-              {runLabel}
-            </Button>
-          </Group>
-        </div>
-      </header>
 
-      <div className="workflow">
-        <Tabs value={activeRoute} onChange={(value) => setActiveRoute(value as RouteId)}>
-          <Tabs.List>
-            {routes.map((route) => (
-              <Tabs.Tab key={route.id} value={route.id} leftSection={route.icon}>
-                {route.label}
-              </Tabs.Tab>
-            ))}
-          </Tabs.List>
-        </Tabs>
+            <Group className="topbar-actions" gap="xs" justify="flex-end">
+              <Stack className="topbar-run-context" gap={0} align="flex-end">
+                <Text size="xs" c="dimmed">
+                  Selected event
+                </Text>
+                <Text size="xs" c="dimmed" className="mono">
+                  {selectedEvent ? `${selectedEvent.index} ${selectedEvent.label}` : workbench.setup.runId}
+                </Text>
+              </Stack>
+              <Tooltip label={clipboard.copied ? "Copied" : "Copy run ID"}>
+                <ActionIcon aria-label="Copy run ID" onClick={() => clipboard.copy(workbench.setup.runId)}>
+                  <Clipboard size={16} />
+                </ActionIcon>
+              </Tooltip>
+              <Tooltip label="Download JSON">
+                <ActionIcon aria-label="Download JSON" onClick={downloadPayload}>
+                  <Download size={16} />
+                </ActionIcon>
+              </Tooltip>
+              <Button leftSection={<Play size={14} />} onClick={runBacktest} loading={isRunning}>
+                {runLabel}
+              </Button>
+            </Group>
+          </div>
+        </header>
+
+        <main className="workspace">
+          {activeRoute === "setup" ? (
+            <RunSetupPage
+              graph={workbench.graph}
+              setup={workbench.setup}
+              runHistory={workbench.runHistory}
+              onRun={runBacktest}
+              runLabel={runLabel}
+              runDisabled={isRunning}
+              strategies={strategies}
+              selectedStrategyId={activeSelection.strategyId}
+              onSelectStrategy={(id) => void loadStrategySelection(id)}
+              selectorDisabled={isRunning}
+              marketCatalog={marketCatalog}
+              selectedMarketDataId={selectedMarketDataId}
+              onSelectMarketData={(id) => void loadMarketSelection(id)}
+              marketWarnings={marketWarnings}
+            />
+          ) : null}
+          {activeRoute === "replay" ? (
+            <MarketReplayPage
+              graph={workbench.graph}
+              setup={workbench.setup}
+              result={workbench.result}
+              replay={workbench.marketReplay}
+              selectedEventId={selectedEventId}
+              onSelectEvent={setSelectedEventId}
+              onInspectEvent={() => setActiveRoute("lens")}
+            />
+          ) : null}
+          {activeRoute === "lens" ? (
+            <EventLensPage
+              audit={workbench.audit}
+              replay={workbench.marketReplay}
+              result={workbench.result}
+              setup={workbench.setup}
+              selectedEventId={selectedEventId}
+              selectedReplayEvent={selectedEvent}
+              onSelectEvent={setSelectedEventId}
+            />
+          ) : null}
+          {activeRoute === "result" ? (
+            <ResultReviewPage graph={workbench.graph} setup={workbench.setup} result={workbench.result} />
+          ) : null}
+          {activeRoute === "history" ? (
+            <SimulationHistoryPage
+              items={workbench.historyItems}
+              fallbackRows={workbench.runHistory}
+              setup={workbench.setup}
+              result={workbench.result}
+              onOpenResult={() => setActiveRoute("result")}
+              onReplayEvents={() => setActiveRoute("replay")}
+            />
+          ) : null}
+        </main>
       </div>
-
-      <main className="workspace">
-        {activeRoute === "setup" ? (
-          <RunSetupPage
-            graph={workbench.graph}
-            setup={workbench.setup}
-            runHistory={workbench.runHistory}
-            onRun={runBacktest}
-            runLabel={runLabel}
-            runDisabled={isRunning}
-            strategies={strategies}
-            selectedStrategyId={activeSelection.strategyId}
-            onSelectStrategy={(id) => void loadStrategySelection(id)}
-            selectorDisabled={isRunning}
-            marketCatalog={marketCatalog}
-            selectedMarketDataId={selectedMarketDataId}
-            onSelectMarketData={(id) => void loadMarketSelection(id)}
-            marketWarnings={marketWarnings}
-          />
-        ) : null}
-        {activeRoute === "replay" ? (
-          <MarketReplayPage
-            graph={workbench.graph}
-            setup={workbench.setup}
-            result={workbench.result}
-            replay={workbench.marketReplay}
-            selectedEventId={selectedEventId}
-            onSelectEvent={setSelectedEventId}
-            onInspectEvent={() => setActiveRoute("lens")}
-          />
-        ) : null}
-        {activeRoute === "lens" ? (
-          <EventLensPage
-            audit={workbench.audit}
-            replay={workbench.marketReplay}
-            result={workbench.result}
-            setup={workbench.setup}
-            selectedEventId={selectedEventId}
-            selectedReplayEvent={selectedEvent}
-            onSelectEvent={setSelectedEventId}
-          />
-        ) : null}
-        {activeRoute === "result" ? (
-          <ResultReviewPage graph={workbench.graph} setup={workbench.setup} result={workbench.result} />
-        ) : null}
-        {activeRoute === "history" ? (
-          <SimulationHistoryPage
-            items={workbench.historyItems}
-            fallbackRows={workbench.runHistory}
-            setup={workbench.setup}
-            result={workbench.result}
-            onOpenResult={() => setActiveRoute("result")}
-            onReplayEvents={() => setActiveRoute("replay")}
-          />
-        ) : null}
-      </main>
     </div>
   );
 }
