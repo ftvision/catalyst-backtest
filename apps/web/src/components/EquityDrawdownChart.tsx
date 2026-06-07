@@ -36,9 +36,16 @@ const drawdownFillBottom = "rgba(214, 74, 69, 0.32)";
 export function EquityDrawdownChart({ data }: { data: EquityDrawdownPoint[] }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
+  const logicalRangeBounds = data.length > 1 ? { from: 0, to: data.length - 1 } : undefined;
 
   const resetRange = () => {
-    chartRef.current?.timeScale().fitContent();
+    const timeScale = chartRef.current?.timeScale();
+    if (!timeScale) return;
+    if (logicalRangeBounds) {
+      timeScale.setVisibleLogicalRange(logicalRangeBounds);
+      return;
+    }
+    timeScale.fitContent();
   };
 
   useEffect(() => {
@@ -77,6 +84,8 @@ export function EquityDrawdownChart({ data }: { data: EquityDrawdownPoint[] }) {
       },
       timeScale: {
         borderColor: "#d4dae3",
+        minBarSpacing: 0.05,
+        rightOffset: 0,
         timeVisible: true,
         secondsVisible: false,
         tickMarkFormatter: (time: UTCTimestamp) => formatChartTime(time),
@@ -135,7 +144,11 @@ export function EquityDrawdownChart({ data }: { data: EquityDrawdownPoint[] }) {
     const panes = chart.panes();
     panes[0]?.setHeight(245);
     panes[1]?.setHeight(105);
-    chart.timeScale().fitContent();
+    if (logicalRangeBounds) {
+      chart.timeScale().setVisibleLogicalRange(logicalRangeBounds);
+    } else {
+      chart.timeScale().fitContent();
+    }
 
     const resizeObserver = new ResizeObserver(([entry]) => {
       chart.resize(entry.contentRect.width, entry.contentRect.height);
@@ -152,7 +165,13 @@ export function EquityDrawdownChart({ data }: { data: EquityDrawdownPoint[] }) {
   return (
     <div className="chart-shell result-chart-shell">
       <div ref={containerRef} className="equity-drawdown-chart" />
-      <ChartInteractionControls ariaLabel="Equity chart controls" chartRef={chartRef} labelPrefix="equity" resetRange={resetRange} />
+      <ChartInteractionControls
+        ariaLabel="Equity chart controls"
+        chartRef={chartRef}
+        labelPrefix="equity"
+        logicalRangeBounds={logicalRangeBounds}
+        resetRange={resetRange}
+      />
     </div>
   );
 }

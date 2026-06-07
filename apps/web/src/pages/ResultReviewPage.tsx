@@ -71,6 +71,24 @@ function initialPortfolioByVenue(portfolio: SetupData["portfolio"], replay: Mark
   }));
 }
 
+function fallbackTrend(result: ResultData, setup: SetupData) {
+  const startMs = Date.parse(setup.start);
+  const endMs = Date.parse(setup.end);
+  const hasSetupWindow = Number.isFinite(startMs) && Number.isFinite(endMs) && endMs > startMs;
+  const fallbackStartMs = hasSetupWindow ? startMs : Date.UTC(2024, 0, 1, 0, 0, 0);
+  const stepMs =
+    hasSetupWindow && result.equity.length > 1
+      ? (endMs - startMs) / (result.equity.length - 1)
+      : 60 * 60 * 1000;
+
+  return result.equity.map((value, index) => ({
+    time: Math.floor((fallbackStartMs + index * stepMs) / 1000) as UTCTimestamp,
+    label: `T${String(index + 1).padStart(2, "0")}`,
+    equity: value,
+    drawdown: result.drawdown[index] ?? 0,
+  }));
+}
+
 export function ResultReviewPage({
   graph,
   setup,
@@ -82,12 +100,7 @@ export function ResultReviewPage({
   result: ResultData;
   replay: MarketReplayData;
 }) {
-  const trend = result.trend ?? result.equity.map((value, index) => ({
-    time: (Date.UTC(2024, 0, 1, index, 0, 0) / 1000) as UTCTimestamp,
-    label: `T${String(index + 1).padStart(2, "0")}`,
-    equity: value,
-    drawdown: result.drawdown[index],
-  }));
+  const trend = result.trend ?? fallbackTrend(result, setup);
   const initialPortfolio = initialPortfolioByVenue(setup.portfolio, replay);
 
   return (

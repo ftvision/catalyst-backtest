@@ -5,19 +5,26 @@ import type {
   ResultData,
   SetupData,
 } from "../types";
+import type { UTCTimestamp } from "lightweight-charts";
 
-const baseTime = Date.UTC(2024, 4, 11, 0, 0, 0) / 1000;
-const hour = 60 * 60 * 2;
+const setupStartIso = "2026-03-01T00:00:00Z";
+const setupEndIso = "2026-06-01T00:00:00Z";
+const oneHourSeconds = 60 * 60;
+const baseTime = Date.parse(setupStartIso) / 1000;
+const runEndTime = Date.parse(setupEndIso) / 1000;
+const mockPointCount = Math.floor((runEndTime - baseTime) / oneHourSeconds) + 1;
+const hour = oneHourSeconds;
 
 const candleSeeds = [
   2808, 2748, 2665, 2712, 2792, 2824, 2892, 2988, 2916, 2854, 2768, 2832, 2874,
   2942, 2988, 3045, 3004, 3096,
 ];
 
-const marketCandles = Array.from({ length: 72 }, (_, index) => {
-  const seedIndex = Math.floor((index / 71) * (candleSeeds.length - 1));
+const marketCandles = Array.from({ length: mockPointCount }, (_, index) => {
+  const progress = index / (mockPointCount - 1);
+  const seedIndex = Math.floor(progress * (candleSeeds.length - 1));
   const nextSeedIndex = Math.min(seedIndex + 1, candleSeeds.length - 1);
-  const local = (index / 71) * (candleSeeds.length - 1) - seedIndex;
+  const local = progress * (candleSeeds.length - 1) - seedIndex;
   const baseClose = candleSeeds[seedIndex] * (1 - local) + candleSeeds[nextSeedIndex] * local;
   const wave = Math.sin(index * 0.83) * 28 + Math.cos(index * 0.31) * 16;
   const close = Math.round(baseClose + wave);
@@ -25,7 +32,7 @@ const marketCandles = Array.from({ length: 72 }, (_, index) => {
   const spread = 18 + Math.abs(Math.sin(index * 0.47)) * 34;
   const high = Math.round(Math.max(open, close) + spread);
   const low = Math.round(Math.min(open, close) - spread * 0.78);
-  const spike = [8, 9, 26, 39, 52, 63].includes(index) ? 2.8 : 1;
+  const spike = [144, 389, 846, 1275, 1654, 2040].includes(index) ? 2.8 : 1;
 
   return {
     close,
@@ -44,6 +51,39 @@ const drawdown = marketCandles.map((_, index) =>
 );
 const gas = marketCandles.map((_, index) => Number((1.5 + Math.abs(Math.sin(index * 0.39)) * 1.6).toFixed(2)));
 const funding = marketCandles.map((_, index) => Number((Math.sin(index * 0.27) * 0.0018).toFixed(5)));
+
+function buildResultTrend() {
+  let peak = 100_000;
+
+  return Array.from({ length: mockPointCount }, (_, index) => {
+    const progress = index / (mockPointCount - 1);
+    const structuralReturn = 100_000 + progress * 9_371.92;
+    const mediumCycle = Math.sin(index * 0.018) * 1_850;
+    const fastCycle = Math.sin(index * 0.073) * 520;
+    const earlyDip = -4_200 * Math.exp(-Math.pow((progress - 0.24) / 0.12, 2));
+    const lateRun = Math.max(0, progress - 0.72) * 3_100;
+    const equityValue = Number((structuralReturn + mediumCycle + fastCycle + earlyDip + lateRun).toFixed(2));
+    peak = Math.max(peak, equityValue);
+    const drawdownValue = Number((((equityValue - peak) / peak) * 100).toFixed(3));
+
+    return {
+      time: (baseTime + index * oneHourSeconds) as UTCTimestamp,
+      label: `T${String(index + 1).padStart(4, "0")}`,
+      equity: equityValue,
+      drawdown: drawdownValue,
+    };
+  });
+}
+
+const resultTrend = buildResultTrend();
+
+function utcLabelAtHour(hourOffset: number) {
+  const date = new Date((baseTime + hourOffset * hour) * 1000);
+  const month = date.toLocaleString("en-US", { month: "short", timeZone: "UTC" });
+  const day = date.getUTCDate();
+  const time = `${String(date.getUTCHours()).padStart(2, "0")}:${String(date.getUTCMinutes()).padStart(2, "0")}`;
+  return `${month} ${day} ${time}`;
+}
 
 export const graph: GraphSummary = {
   id: "g_eth_threshold_base_swap",
@@ -75,8 +115,8 @@ export const graph: GraphSummary = {
 
 export const setup: SetupData = {
   runId: "run_2026_06_06_18_24",
-  start: "2026-03-01T00:00",
-  end: "2026-06-01T00:00",
+  start: setupStartIso,
+  end: setupEndIso,
   interval: "1h",
   policy: "strict_v1",
   portfolio: [
@@ -116,8 +156,9 @@ export const result: ResultData = {
     { label: "Trades", value: "24", detail: "18 wins / 6 losses" },
     { label: "Rejected", value: "7", detail: "policy blocked" },
   ],
-  equity: [98, 99, 97, 94, 92, 94, 93, 95, 96, 98, 97, 101, 103, 102, 105, 104, 107, 106, 109],
-  drawdown: [0, -0.4, -0.7, -2.1, -3.5, -2.9, -3.2, -2.4, -2.1, -1.8, -2.4, -1.5, -1.1, -1.3, -0.9, -1.1, -0.7, -0.8, -0.6],
+  equity: resultTrend.map((point) => point.equity),
+  drawdown: resultTrend.map((point) => point.drawdown),
+  trend: resultTrend,
   portfolio: [
     {
       venue: "Base",
@@ -157,7 +198,7 @@ export const result: ResultData = {
 export const marketReplay: MarketReplayData = {
   symbol: "ETH / USDC",
   venue: "Base + Hyperliquid",
-  period: "May 11 - May 18, 2024",
+  period: "Mar 1 - Jun 1, 2026",
   selectedEventId: "evt-2",
   candles: marketCandles.map((candle, index) => ({
     time: (baseTime + index * hour) as MarketReplayData["candles"][number]["time"],
@@ -168,18 +209,19 @@ export const marketReplay: MarketReplayData = {
     volume: candle.volume,
   })),
   replay: equity.map((value, index) => ({
-    label: `T${String(index + 1).padStart(2, "0")}`,
+    label: `T${String(index + 1).padStart(4, "0")}`,
+    time: (baseTime + index * hour) as MarketReplayData["replay"][number]["time"],
     equity: value,
     drawdown: drawdown[index],
     gas: gas[index],
     funding: funding[index] * 1000,
   })),
   events: [
-    { id: "evt-1", index: 1, time: (baseTime + 5 * hour) as MarketReplayData["events"][number]["time"], labelTime: "May 11 10:10", kind: "signal_fired", label: "ETH below threshold", node: "eth-below-1800", status: "signal", price: "$1,797.65", impact: "-" },
-    { id: "evt-2", index: 2, time: (baseTime + 24 * hour) as MarketReplayData["events"][number]["time"], labelTime: "May 13 14:30", kind: "action_executed", label: "Buy ETH on Base", node: "buy-eth-on-base", status: "executed", price: "$2,988.40", impact: "-10,000 USDC, +3.3442 ETH" },
-    { id: "evt-3", index: 3, time: (baseTime + 37 * hour) as MarketReplayData["events"][number]["time"], labelTime: "May 14 14:35", kind: "rejected_action", label: "Close position rejected", node: "close-position", status: "rejected", price: "$2,991.20", impact: "insufficient balance" },
-    { id: "evt-4", index: 4, time: (baseTime + 50 * hour) as MarketReplayData["events"][number]["time"], labelTime: "May 16 00:00", kind: "funding_accrued", label: "Funding accrued", node: "funding-eth-perp", status: "policy", price: "$2,923.10", impact: "+$12.34" },
-    { id: "evt-5", index: 5, time: (baseTime + 63 * hour) as MarketReplayData["events"][number]["time"], labelTime: "May 18 11:02", kind: "gas_cost", label: "Base gas paid", node: "tx-gas", status: "warning", price: "$3,045.50", impact: "-$0.18" },
+    { id: "evt-1", index: 1, time: (baseTime + 36 * hour) as MarketReplayData["events"][number]["time"], labelTime: utcLabelAtHour(36), kind: "signal_fired", label: "ETH below threshold", node: "eth-below-1800", status: "signal", price: "$2,797.65", impact: "-" },
+    { id: "evt-2", index: 2, time: (baseTime + 312 * hour) as MarketReplayData["events"][number]["time"], labelTime: utcLabelAtHour(312), kind: "action_executed", label: "Buy ETH on Base", node: "buy-eth-on-base", status: "executed", price: "$2,988.40", impact: "-10,000 USDC, +3.3442 ETH" },
+    { id: "evt-3", index: 3, time: (baseTime + 744 * hour) as MarketReplayData["events"][number]["time"], labelTime: utcLabelAtHour(744), kind: "rejected_action", label: "Close position rejected", node: "close-position", status: "rejected", price: "$2,991.20", impact: "insufficient balance" },
+    { id: "evt-4", index: 4, time: (baseTime + 1320 * hour) as MarketReplayData["events"][number]["time"], labelTime: utcLabelAtHour(1320), kind: "funding_accrued", label: "Funding accrued", node: "funding-eth-perp", status: "policy", price: "$2,923.10", impact: "+$12.34" },
+    { id: "evt-5", index: 5, time: (baseTime + 1968 * hour) as MarketReplayData["events"][number]["time"], labelTime: utcLabelAtHour(1968), kind: "gas_cost", label: "Base gas paid", node: "tx-gas", status: "warning", price: "$3,045.50", impact: "-$0.18" },
   ],
   evidence: [
     ["Candle close", "$1,797.65"],
