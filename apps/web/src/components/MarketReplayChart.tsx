@@ -18,6 +18,7 @@ import { formatNumber, formatPercent } from "../utils/format";
 interface EventRail {
   id: string;
   left: number;
+  top?: number;
   label: string;
   node: string;
   status: MarketEvent["status"];
@@ -566,11 +567,20 @@ export function MarketReplayChart({
         const coordinate = chart.timeScale().timeToCoordinate(coordinateTime);
         if (coordinate === null) return [];
         if (coordinate < 0 || coordinate > container.clientWidth) return [];
+        const priceCoordinate =
+          event.observedPrice === undefined || !Number.isFinite(event.observedPrice)
+            ? null
+            : candleSeries.priceToCoordinate(event.observedPrice);
+        const dotTop =
+          priceCoordinate === null
+            ? undefined
+            : Math.max(4, Math.min(container.clientHeight - 4, priceCoordinate));
 
         return [
           {
             id: event.id,
             left: coordinate,
+            top: dotTop,
             label: event.kind,
             node: event.node,
             status: event.status,
@@ -643,6 +653,7 @@ export function MarketReplayChart({
             style={
               {
                 left: `${rail.left}px`,
+                "--event-dot-top": rail.top === undefined ? undefined : `${rail.top}px`,
                 "--event-color": markerColor[rail.status],
               } as CSSProperties
             }

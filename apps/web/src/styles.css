@@ -896,7 +896,7 @@ select {
 
 .chart-event-dot {
   position: absolute;
-  top: 104px;
+  top: var(--event-dot-top, 104px);
   left: -4px;
   width: 8px;
   height: 8px;
@@ -904,6 +904,7 @@ select {
   border-radius: 999px;
   background: var(--event-color);
   box-shadow: 0 0 0 1px var(--event-color);
+  transform: translateY(-50%);
 }
 
 .chart-event-rail.selected .chart-event-dot {
