@@ -232,6 +232,10 @@ function eventCandleIndex(event: MarketEvent, candles: CandlePoint[]) {
   if (!candles.length) return -1;
 
   const exactIndex = candles.findIndex((candle) => candle.time === event.time);
+  if (event.status !== "signal") {
+    return exactIndex >= 0 ? exactIndex : nearestCandleIndexByTime(candles, event.time);
+  }
+
   const observedPrice = event.observedPrice;
   if (observedPrice === undefined || !Number.isFinite(observedPrice)) {
     return exactIndex >= 0 ? exactIndex : nearestCandleIndexByTime(candles, event.time);
