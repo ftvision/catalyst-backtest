@@ -232,6 +232,7 @@ export function MarketReplayChart({
   const [displayedGranularity, setDisplayedGranularity] = useState<ChartGranularity>("1h");
   const eventsAligned = isEventWindowAligned(candles, events);
   const chartData = useMemo(() => getReplayChartCache(candles, replay), [candles, replay]);
+  const displayedCandleCount = chartData.candlesByGranularity[displayedGranularity]?.length ?? candles.length;
 
   const resetRange = () => {
     resetRangeRef.current();
@@ -255,6 +256,10 @@ export function MarketReplayChart({
       shouldUseAdaptiveGranularity ? candlesByGranularity[granularity] : candles;
     const replayForGranularity = (granularity: ChartGranularity) =>
       shouldUseAdaptiveGranularity ? replayByGranularity[granularity] : hourlyReplay;
+    const fullLogicalRangeForGranularity = (granularity: ChartGranularity) => {
+      const displayCandles = candlesForGranularity(granularity);
+      return displayCandles.length > 1 ? { from: 0, to: displayCandles.length - 1 } : undefined;
+    };
     const eventTimeForGranularity = (event: MarketEvent) => {
       const displayCandles = candlesForGranularity(activeGranularity);
       if (!isEventInCandleWindow(event, displayCandles)) return undefined;
@@ -298,6 +303,8 @@ export function MarketReplayChart({
       },
       timeScale: {
         borderColor: "#d4dae3",
+        minBarSpacing: 0.05,
+        rightOffset: 0,
         timeVisible: true,
         secondsVisible: false,
         tickMarkFormatter: (time: UTCTimestamp) => formatChartTime(time),
@@ -461,7 +468,12 @@ export function MarketReplayChart({
     if (compact && selectedCandleIndex >= 0) {
       chart.timeScale().setVisibleLogicalRange(compactVisibleLogicalRange(selectedCandleIndex, candles.length));
     } else {
-      chart.timeScale().fitContent();
+      const fullLogicalRange = fullLogicalRangeForGranularity(activeGranularity);
+      if (fullLogicalRange) {
+        chart.timeScale().setVisibleLogicalRange(fullLogicalRange);
+      } else {
+        chart.timeScale().fitContent();
+      }
     }
 
     let disposed = false;
@@ -510,7 +522,12 @@ export function MarketReplayChart({
     resetRangeRef.current = () => {
       const fullGranularity = shouldUseAdaptiveGranularity ? granularityForRange(fullRangeSeconds) : "1h";
       applyGranularity(fullGranularity, null);
-      chart.timeScale().fitContent();
+      const fullLogicalRange = fullLogicalRangeForGranularity(fullGranularity);
+      if (fullLogicalRange) {
+        chart.timeScale().setVisibleLogicalRange(fullLogicalRange);
+      } else {
+        chart.timeScale().fitContent();
+      }
       window.requestAnimationFrame(updateEventRails);
     };
     const handleSizeChange = () => updateEventRails();
@@ -545,6 +562,7 @@ export function MarketReplayChart({
           ariaLabel="Market replay chart controls"
           chartRef={chartRef}
           labelPrefix="market replay"
+          logicalRangeBounds={displayedCandleCount > 1 ? { from: 0, to: displayedCandleCount - 1 } : undefined}
           resetRange={resetRange}
         />
       ) : null}

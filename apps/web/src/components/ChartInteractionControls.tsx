@@ -7,6 +7,7 @@ interface ChartInteractionControlsProps {
   ariaLabel: string;
   chartRef: MutableRefObject<IChartApi | null>;
   labelPrefix: string;
+  logicalRangeBounds?: { from: number; to: number };
   resetRange: () => void;
 }
 
@@ -16,7 +17,13 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
-export function ChartInteractionControls({ ariaLabel, chartRef, labelPrefix, resetRange }: ChartInteractionControlsProps) {
+export function ChartInteractionControls({
+  ariaLabel,
+  chartRef,
+  labelPrefix,
+  logicalRangeBounds,
+  resetRange,
+}: ChartInteractionControlsProps) {
   const [selectMode, setSelectMode] = useState(false);
   const [selectionStartX, setSelectionStartX] = useState<number | null>(null);
 
@@ -25,9 +32,23 @@ export function ChartInteractionControls({ ariaLabel, chartRef, labelPrefix, res
     const range = timeScale?.getVisibleLogicalRange();
     if (!timeScale || !range) return;
 
+    const span = range.to - range.from;
+    if (span <= 0) return;
+
     const center = (range.from + range.to) / 2;
-    const halfSpan = ((range.to - range.from) * factor) / 2;
-    timeScale.setVisibleLogicalRange({ from: center - halfSpan, to: center + halfSpan });
+    const targetSpan = span * factor;
+    const boundsSpan = logicalRangeBounds ? logicalRangeBounds.to - logicalRangeBounds.from : 0;
+
+    if (logicalRangeBounds && targetSpan >= boundsSpan) {
+      timeScale.setVisibleLogicalRange(logicalRangeBounds);
+      return;
+    }
+
+    const halfSpan = targetSpan / 2;
+    const clampedCenter = logicalRangeBounds
+      ? clamp(center, logicalRangeBounds.from + halfSpan, logicalRangeBounds.to - halfSpan)
+      : center;
+    timeScale.setVisibleLogicalRange({ from: clampedCenter - halfSpan, to: clampedCenter + halfSpan });
   };
 
   const pointerX = (event: MouseEvent<HTMLDivElement>) => {
