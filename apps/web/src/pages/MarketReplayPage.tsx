@@ -50,8 +50,8 @@ export function MarketReplayPage({
         }
       />
 
-      <div className="section-grid">
-        <Paper className="panel" p="md" radius="sm">
+      <div className="section-grid market-replay-grid">
+        <Paper className="panel market-replay-chart-panel" p="md" radius="sm">
           <Stack gap="sm">
             <Group justify="space-between" align="flex-start">
               <Stack gap={2}>
@@ -77,8 +77,8 @@ export function MarketReplayPage({
           </Stack>
         </Paper>
 
-        <Paper className="panel" p="md" radius="sm">
-          <Stack gap="sm">
+        <Paper className="panel event-overview-panel" p="md" radius="sm">
+          <Stack className="event-overview-content" gap="sm">
             <Stack gap={2}>
               <Text fw={650}>Event overview</Text>
               <Text size="xs" c="dimmed">
@@ -112,28 +112,30 @@ export function MarketReplayPage({
             <Text size="xs" c="dimmed">
               Nearby events
             </Text>
-            {replay.events.filter((event) => event.id !== selectedEvent.id).map((event) => (
-              <button
-                key={event.id}
-                className="event-row"
-                type="button"
-                aria-pressed={selectedEventId === event.id}
-                onClick={() => onSelectEvent(event.id)}
-              >
-                <Group justify="space-between" gap="xs">
-                  <Text size="sm" fw={650}>
-                    {event.index}. {event.label}
+            <div className="event-overview-list">
+              {replay.events.filter((event) => event.id !== selectedEvent.id).map((event) => (
+                <button
+                  key={event.id}
+                  className="event-row"
+                  type="button"
+                  aria-pressed={selectedEventId === event.id}
+                  onClick={() => onSelectEvent(event.id)}
+                >
+                  <Group justify="space-between" gap="xs">
+                    <Text size="sm" fw={650}>
+                      {event.index}. {event.label}
+                    </Text>
+                    <StatusBadge status={event.status} />
+                  </Group>
+                  <Text size="xs" c="dimmed">
+                    {event.labelTime} / {event.node}
                   </Text>
-                  <StatusBadge status={event.status} />
-                </Group>
-                <Text size="xs" c="dimmed">
-                  {event.labelTime} / {event.node}
-                </Text>
-                <Text size="xs" className="mono">
-                  {event.price} / {event.impact}
-                </Text>
-              </button>
-            ))}
+                  <Text size="xs" className="mono">
+                    {event.price} / {event.impact}
+                  </Text>
+                </button>
+              ))}
+            </div>
           </Stack>
         </Paper>
       </div>
