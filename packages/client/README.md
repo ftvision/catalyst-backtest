@@ -23,7 +23,8 @@ A backtest is **graph + config + policy + (optional) market data**:
 - **Market data** is normally omitted — the service loads it from its own store
   for the run's window. Pass `--market-data bundle.json` to send one inline.
 
-See [`examples/run.toml`](examples/run.toml):
+See [`examples/`](examples/README.md) for ready-to-run files and a quickstart;
+the simplest is [`examples/run.toml`](examples/run.toml):
 
 ```toml
 graph = "../../../strategies/graphs/g05_hl_perp_open_long.json"

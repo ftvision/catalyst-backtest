@@ -1,0 +1,17 @@
+# Hyperliquid perp — open a 5x ETH long, then close it (g06), on 4h bars.
+#
+# 4h candles reach much further back than 1h (~2024-02 vs ~2025-12-31), so this
+# uses a longer window. Run it with:
+#
+#   catalyst-bt run packages/client/examples/hl-perp-roundtrip-4h.toml
+
+graph = "../../../strategies/graphs/g06_hl_perp_open_close.json"
+policy = "strict_v1"
+
+[config]
+start = "2025-01-01T00:00:00Z"
+end = "2026-01-01T00:00:00Z"
+interval = "4h"
+
+[config.initial_portfolio.hyperliquid]
+USDC = "10000"
