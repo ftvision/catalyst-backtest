@@ -409,3 +409,19 @@ async fn market_data_window_reads_configured_store() {
     assert_eq!(v["candles"][0]["points"].as_array().unwrap().len(), 2);
     assert_eq!(v["providers"][0]["name"], "parquet-store");
 }
+
+#[tokio::test]
+async fn market_data_catalog_lists_configured_store() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_eth_candles(tmp.path());
+    let st = AppState::new(Some(tmp.path().to_string_lossy().to_string()), 1024);
+    let (s, v) = send(&st, "GET", "/market-data/catalog", None).await;
+    assert_eq!(s, StatusCode::OK, "body: {v}");
+    let items = v["items"].as_array().unwrap();
+    let candle = items.iter().find(|item| item["kind"] == "candles").unwrap();
+    assert_eq!(candle["source"], "parquet-store");
+    assert_eq!(candle["venue"], "base");
+    assert_eq!(candle["symbol"], "ETH");
+    assert_eq!(candle["interval"], "1h");
+    assert_eq!(candle["start"], "2024-01-01T00:00:00Z");
+}
