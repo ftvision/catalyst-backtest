@@ -103,6 +103,18 @@ export async function loadCachedRunDetail(runId: string): Promise<CachedRunDetai
   return detail;
 }
 
+/** Every cached run, newest first — the user's local backtest history. */
+export async function loadAllCachedRunDetails(): Promise<CachedRunDetail[]> {
+  try {
+    const all = await runStoreTransaction<CachedRunDetail[]>("readonly", (store) => store.getAll());
+    return all
+      .filter((detail) => detail?.schemaVersion === CACHE_SCHEMA_VERSION)
+      .sort((a, b) => b.savedAt.localeCompare(a.savedAt));
+  } catch {
+    return [];
+  }
+}
+
 export function setLastRunId(runId: string) {
   if (typeof localStorage === "undefined") return;
   localStorage.setItem(LAST_RUN_ID_KEY, runId);
