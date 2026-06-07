@@ -1,5 +1,6 @@
 import { Group, Stack, Text } from "@mantine/core";
 import type { MarketDataCatalogItem } from "../api/client";
+import { marketDataKindMatches, normalizeMarketDataKind } from "../utils/marketDataKind";
 import { StatusBadge } from "./StatusBadge";
 
 function timeMs(value?: string | null) {
@@ -13,6 +14,11 @@ function shortUtc(value?: string | null) {
   if (ms === undefined) return "-";
   const date = new Date(ms);
   return `${date.toISOString().slice(0, 10)} ${String(date.getUTCHours()).padStart(2, "0")}:00 UTC`;
+}
+
+function dateBoundaryMs(value: string, end: boolean) {
+  if (value.includes("T")) return timeMs(value);
+  return timeMs(`${value}T${end ? "23:59:59" : "00:00:00"}Z`);
 }
 
 function rowLabel(item: MarketDataCatalogItem) {
@@ -40,7 +46,9 @@ export function CoverageTimeline({
   const rows: Array<{ item?: MarketDataCatalogItem; kind: string; missing: boolean }> = [
     ...items.map((item) => ({ item, kind: item.kind, missing: false })),
     ...requiredKinds
-      .filter((kind) => !items.some((item) => item.kind === kind))
+      .map((kind) => normalizeMarketDataKind(kind))
+      .filter((kind, index, kinds) => kinds.indexOf(kind) === index)
+      .filter((kind) => !items.some((item) => marketDataKindMatches(item.kind, kind)))
       .map((kind) => ({ kind, missing: true })),
   ];
 
@@ -60,20 +68,35 @@ export function CoverageTimeline({
           const end = timeMs(row.item?.end);
           const left = start === undefined ? 0 : ((start - min) / width) * 100;
           const spanWidth = end === undefined || start === undefined ? 100 : Math.max(((end - start) / width) * 100, 2);
-          const status = row.missing ? "warning" : "success";
+          const hasGaps = Boolean(row.item?.missing_date_ranges?.length);
+          const status = row.missing || hasGaps ? "warning" : "success";
           return (
             <div key={`${row.kind}-${index}`} className="coverage-row">
               <div className="coverage-row-label">
                 <Text size="xs" fw={650}>
                   {row.item ? rowLabel(row.item) : row.kind}
                 </Text>
-                <StatusBadge status={status} label={row.missing ? "missing" : "covered"} />
+                <StatusBadge status={status} label={row.missing ? "missing" : hasGaps ? "gaps" : "covered"} />
               </div>
               <div className="coverage-track" aria-label={`${row.kind} coverage`}>
                 <span
                   className={row.missing ? "coverage-segment missing" : "coverage-segment covered"}
                   style={{ left: `${left}%`, width: `${spanWidth}%` }}
                 />
+                {row.item?.missing_date_ranges?.map((range) => {
+                  const gapStart = dateBoundaryMs(range.start, false);
+                  const gapEnd = dateBoundaryMs(range.end, true);
+                  if (gapStart === undefined || gapEnd === undefined) return null;
+                  const gapLeft = Math.max(0, Math.min(100, ((gapStart - min) / width) * 100));
+                  const gapRight = Math.max(0, Math.min(100, ((gapEnd - min) / width) * 100));
+                  return (
+                    <span
+                      key={`${range.start}-${range.end}`}
+                      className="coverage-segment missing"
+                      style={{ left: `${gapLeft}%`, width: `${Math.max(gapRight - gapLeft, 1)}%` }}
+                    />
+                  );
+                })}
               </div>
             </div>
           );

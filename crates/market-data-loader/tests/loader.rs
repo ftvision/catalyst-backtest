@@ -281,10 +281,41 @@ fn lists_catalog_via_explicit_file_url() {
     assert_eq!(candle.start.as_deref(), Some("2024-01-01T00:00:00Z"));
     assert_eq!(candle.end.as_deref(), Some("2024-01-01T23:59:59Z"));
     assert_eq!(candle.files, 1);
+    assert!(candle.missing_date_ranges.is_empty());
 
     let gas = items.iter().find(|item| item.kind == "gas").unwrap();
     assert_eq!(gas.chain.as_deref(), Some("base"));
     assert_eq!(gas.interval.as_deref(), Some("1h"));
+}
+
+#[test]
+fn catalog_reports_missing_date_ranges() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_candles(
+        tmp.path(),
+        "base",
+        "ETH",
+        "1h",
+        "2024-01-01",
+        &[H0, H0 + HOUR],
+    );
+    write_candles(
+        tmp.path(),
+        "base",
+        "ETH",
+        "1h",
+        "2024-01-04",
+        &[H0 + 3 * 24 * HOUR],
+    );
+
+    let items = pollster::block_on(list_catalog(&tmp.path().to_string_lossy())).unwrap();
+    let candle = items.iter().find(|item| item.kind == "candles").unwrap();
+    assert_eq!(candle.start.as_deref(), Some("2024-01-01T00:00:00Z"));
+    assert_eq!(candle.end.as_deref(), Some("2024-01-04T23:59:59Z"));
+    assert_eq!(candle.files, 2);
+    assert_eq!(candle.missing_date_ranges.len(), 1);
+    assert_eq!(candle.missing_date_ranges[0].start, "2024-01-02");
+    assert_eq!(candle.missing_date_ranges[0].end, "2024-01-03");
 }
 
 // --- provider provenance (#38) ---

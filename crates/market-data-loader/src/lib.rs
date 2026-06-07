@@ -90,6 +90,12 @@ pub struct BundleRef {
     pub data_requirements: DataRequirements,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DateRange {
+    pub start: String,
+    pub end: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct CatalogItem {
     pub kind: String,
@@ -114,6 +120,8 @@ pub struct CatalogItem {
     pub start: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub end: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub missing_date_ranges: Vec<DateRange>,
     pub files: usize,
 }
 
@@ -286,6 +294,8 @@ fn child(base: &StorePath, parts: &[String]) -> StorePath {
 /// A row: (ts micros, value columns as optional decimal-strings, in `value_cols` order).
 type Row = (i64, Vec<Option<String>>);
 
+const MAX_CONCURRENT_FILE_READS: usize = 16;
+
 /// Read every `*.parquet` under `prefix` whose filename date falls in the window,
 /// and return rows whose `ts` is within `[start_us, end_us]`, sorted by `ts`.
 async fn read_window(
@@ -323,18 +333,38 @@ async fn read_window(
     }
     locations.sort();
 
+    let fetches = futures::stream::iter(locations.into_iter().map(|loc| {
+        let store = Arc::clone(store);
+        async move {
+            let bytes = store
+                .get(&loc)
+                .await
+                .map_err(|e| LoaderError::Store(e.to_string()))?
+                .bytes()
+                .await
+                .map_err(|e| LoaderError::Store(e.to_string()))?;
+            parse_bytes_to_rows(bytes, value_cols, start_us, end_us)
+        }
+    }))
+    .buffer_unordered(MAX_CONCURRENT_FILE_READS);
+
     let mut rows: Vec<Row> = Vec::new();
-    for loc in locations {
-        let bytes = store
-            .get(&loc)
-            .await
-            .map_err(|e| LoaderError::Store(e.to_string()))?
-            .bytes()
-            .await
-            .map_err(|e| LoaderError::Store(e.to_string()))?;
-        parse_bytes(bytes, value_cols, start_us, end_us, &mut rows)?;
+    futures::pin_mut!(fetches);
+    while let Some(batch_rows) = fetches.next().await {
+        rows.extend(batch_rows?);
     }
     rows.sort_by_key(|(ts, _)| *ts);
+    Ok(rows)
+}
+
+fn parse_bytes_to_rows(
+    bytes: Bytes,
+    value_cols: &[&str],
+    start_us: i64,
+    end_us: i64,
+) -> Result<Vec<Row>, LoaderError> {
+    let mut rows = Vec::new();
+    parse_bytes(bytes, value_cols, start_us, end_us, &mut rows)?;
     Ok(rows)
 }
 
@@ -413,6 +443,24 @@ fn relative_object_path(base: &StorePath, location: &StorePath) -> String {
         .to_string()
 }
 
+fn missing_date_ranges(dates: &[String]) -> Vec<DateRange> {
+    let parsed: Vec<NaiveDate> = dates
+        .iter()
+        .filter_map(|date| date.parse::<NaiveDate>().ok())
+        .collect();
+    let mut ranges = Vec::new();
+    for pair in parsed.windows(2) {
+        let expected = pair[0] + chrono::Duration::days(1);
+        if pair[1] > expected {
+            ranges.push(DateRange {
+                start: expected.to_string(),
+                end: (pair[1] - chrono::Duration::days(1)).to_string(),
+            });
+        }
+    }
+    ranges
+}
+
 fn catalog_acc_for_parts(parts: &[&str]) -> Option<(String, CatalogItem)> {
     match parts {
         ["candles", venue_part, symbol_part, interval_part, _file] => {
@@ -435,6 +483,7 @@ fn catalog_acc_for_parts(parts: &[&str]) -> Option<(String, CatalogItem)> {
                     interval: Some(interval),
                     start: None,
                     end: None,
+                    missing_date_ranges: Vec::new(),
                     files: 0,
                 },
             ))
@@ -458,6 +507,7 @@ fn catalog_acc_for_parts(parts: &[&str]) -> Option<(String, CatalogItem)> {
                     interval: Some("1h".to_string()),
                     start: None,
                     end: None,
+                    missing_date_ranges: Vec::new(),
                     files: 0,
                 },
             ))
@@ -480,6 +530,7 @@ fn catalog_acc_for_parts(parts: &[&str]) -> Option<(String, CatalogItem)> {
                     interval: Some("1h".to_string()),
                     start: None,
                     end: None,
+                    missing_date_ranges: Vec::new(),
                     files: 0,
                 },
             ))
@@ -505,6 +556,7 @@ fn catalog_acc_for_parts(parts: &[&str]) -> Option<(String, CatalogItem)> {
                     interval: Some("1d".to_string()),
                     start: None,
                     end: None,
+                    missing_date_ranges: Vec::new(),
                     files: 0,
                 },
             ))
@@ -550,6 +602,7 @@ pub async fn list_catalog(root: &str) -> Result<Vec<CatalogItem>, LoaderError> {
             acc.item.files = acc.dates.len();
             acc.item.start = acc.dates.first().map(|date| format!("{date}T00:00:00Z"));
             acc.item.end = acc.dates.last().map(|date| format!("{date}T23:59:59Z"));
+            acc.item.missing_date_ranges = missing_date_ranges(&acc.dates);
             acc.item
         })
         .collect();

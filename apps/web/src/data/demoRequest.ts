@@ -1,6 +1,6 @@
 import type { BacktestRequest, CandlePointApi, CatalystGraph, MarketDataBundle } from "../api/client";
 
-const startMs = Date.UTC(2024, 0, 1, 0, 0, 0);
+const startMs = Date.UTC(2026, 0, 1, 0, 0, 0);
 const hourMs = 60 * 60 * 1000;
 const closes = [
   2808, 2768, 2710, 2665, 2688, 2712, 2748, 2792, 2824, 2868, 2892, 2948,

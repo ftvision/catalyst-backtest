@@ -7,6 +7,7 @@ import { SetupModule } from "../components/SetupModule";
 import { StatusBadge } from "../components/StatusBadge";
 import { marketCatalogId } from "../components/MarketDataSelector";
 import type { GraphSummary, SetupData } from "../types";
+import { marketDataKindMatches, normalizeMarketDataKind } from "../utils/marketDataKind";
 
 function unique(values: Array<string | undefined | null>) {
   return Array.from(new Set(values.filter((value): value is string => Boolean(value)))).sort();
@@ -37,24 +38,27 @@ function itemLabel(item: MarketDataCatalogItem) {
 }
 
 function itemCoverageStatus(item: MarketDataCatalogItem, setup: SetupData) {
-  const matchingCoverage = setup.coverage.find((row) => row.kind.toLowerCase() === item.kind.toLowerCase());
-  if (matchingCoverage?.status) return matchingCoverage.status;
+  const hasDateGaps = Boolean(item.missing_date_ranges?.length);
+  const matchingCoverage = setup.coverage.find((row) => marketDataKindMatches(row.kind, item.kind));
+  if (matchingCoverage?.status) return hasDateGaps && matchingCoverage.status === "success" ? "warning" : matchingCoverage.status;
+  if (hasDateGaps) return "warning";
   if (!item.start || !item.end || !item.points) return "warning";
   return "success";
 }
 
 function requiredKinds(setup: SetupData) {
-  const kinds = setup.coverage.map((item) => item.kind.toLowerCase());
+  const kinds = Array.from(new Set(setup.coverage.map((item) => normalizeMarketDataKind(item.kind))));
   return kinds.length ? kinds : ["candles", "gas", "funding"];
 }
 
 function graphRequirementText(graph: GraphSummary, item: MarketDataCatalogItem) {
-  const kind = item.kind.toLowerCase();
+  const kind = normalizeMarketDataKind(item.kind);
   const candidates = graph.nodes.filter((node) => {
     const haystack = `${node.kind} ${node.detail} ${node.label}`.toLowerCase();
     if (kind === "candles") return haystack.includes("price") || haystack.includes("signal") || haystack.includes("swap");
     if (kind === "gas") return haystack.includes("gas") || haystack.includes("base") || haystack.includes("swap");
     if (kind === "funding") return haystack.includes("funding") || haystack.includes("perp") || haystack.includes("long");
+    if (kind === "yields") return haystack.includes("yield");
     return haystack.includes(kind);
   });
 
@@ -112,8 +116,8 @@ export function MarketDataPage({
     [catalog, intervalFilter, kindFilter, search, symbolFilter, venueFilter],
   );
   const selected = catalog.find((item) => marketCatalogId(item) === selectedId) ?? filtered[0] ?? catalog[0];
-  const presentRequired = required.filter((kind) => catalog.some((item) => item.kind.toLowerCase() === kind));
-  const missingRequired = required.filter((kind) => !catalog.some((item) => item.kind.toLowerCase() === kind));
+  const presentRequired = required.filter((kind) => catalog.some((item) => marketDataKindMatches(item.kind, kind)));
+  const missingRequired = required.filter((kind) => !catalog.some((item) => marketDataKindMatches(item.kind, kind)));
   const incomplete = catalog.filter((item) => itemCoverageStatus(item, setup) !== "success");
   const status = missingRequired.length ? "danger" : incomplete.length || warnings.length ? "warning" : "success";
 
@@ -237,6 +241,12 @@ export function MarketDataPage({
                 <Text size="sm">{selected.interval ?? "-"}</Text>
                 <Text size="xs" c="dimmed">Files</Text>
                 <Text size="sm" className="mono">{formatNumber(selected.files)}</Text>
+                <Text size="xs" c="dimmed">Date gaps</Text>
+                <Text size="sm" className="mono">
+                  {selected.missing_date_ranges?.length
+                    ? selected.missing_date_ranges.map((range) => `${range.start} to ${range.end}`).slice(0, 3).join(", ")
+                    : "-"}
+                </Text>
                 <Text size="xs" c="dimmed">Points</Text>
                 <Text size="sm" className="mono">{formatNumber(selected.points)}</Text>
                 <Text size="xs" c="dimmed">Latest point</Text>
