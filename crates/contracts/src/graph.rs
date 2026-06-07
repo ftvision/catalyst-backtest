@@ -73,11 +73,59 @@ fn default_graph_schema_version() -> String {
 
 // --- Typed config structs (mirror the per-subtype config schemas) ---
 
+/// What a relative [`Amount`] is a percentage of.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AmountBasis {
+    /// % of the relevant asset balance (swap from-asset, yield asset, perp cash).
+    PctBalance,
+    /// % of the relevant open position (perp notional, yield principal+accrued).
+    PctPosition,
+    /// % of total portfolio equity in USD.
+    PctPortfolio,
+}
+
+/// An action amount: either an absolute quantity (a decimal string, or the
+/// `"all"` sentinel) or a percentage of a [`AmountBasis`]. Bare strings still
+/// deserialize as [`Amount::Absolute`], so existing graphs are unchanged.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Amount {
+    Absolute(Decimal),
+    Relative { basis: AmountBasis, value: Decimal },
+}
+
+impl Amount {
+    /// The `"all"` full-balance sentinel.
+    pub fn is_all(&self) -> bool {
+        matches!(self, Amount::Absolute(s) if s == "all")
+    }
+    /// The absolute decimal string. Relative amounts are resolved to absolute
+    /// before execution, so this returns `"0"` for an unresolved relative amount.
+    pub fn as_str(&self) -> &str {
+        match self {
+            Amount::Absolute(s) => s,
+            Amount::Relative { .. } => "0",
+        }
+    }
+}
+
+impl From<&str> for Amount {
+    fn from(s: &str) -> Self {
+        Amount::Absolute(s.to_string())
+    }
+}
+impl From<String> for Amount {
+    fn from(s: String) -> Self {
+        Amount::Absolute(s)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SwapConfig {
     pub from_asset: String,
     pub to_asset: String,
-    pub amount: Decimal,
+    pub amount: Amount,
     pub chain: String,
     /// `market` (fill at the current bar) or `limit` (rest until touched).
     #[serde(default = "default_order_type")]
@@ -105,7 +153,7 @@ pub enum PerpSide {
 pub struct PerpOrderConfig {
     pub symbol: String,
     pub side: PerpSide,
-    pub size_usd: Decimal,
+    pub size_usd: Amount,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub leverage: Option<Decimal>,
     pub chain: String,
@@ -137,7 +185,7 @@ pub struct YieldConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pool: Option<String>,
     pub asset: String,
-    pub amount: Decimal,
+    pub amount: Amount,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

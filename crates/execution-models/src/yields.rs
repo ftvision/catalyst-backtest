@@ -29,11 +29,11 @@ pub fn execute_yield_deposit(
     let pool = cfg.pool.as_deref();
     let gas = gas_usd(chain, ctx, policy);
 
-    let amount = if cfg.amount == "all" {
+    let amount = if cfg.amount.is_all() {
         // Reserve gas so the deposit leaves enough to pay for it.
         (ledger.balance(chain, &cfg.asset) - gas).max(Decimal::ZERO)
     } else {
-        parse(&cfg.amount)
+        parse(cfg.amount.as_str())
     };
     if amount.is_zero() {
         return Execution::rejected(format!("nothing to deposit for {}", cfg.asset));
@@ -71,10 +71,10 @@ pub fn execute_yield_withdraw(
     let pool = cfg.pool.as_deref();
     let gas = gas_usd(chain, ctx, policy);
 
-    let amount = if cfg.amount == "all" {
+    let amount = if cfg.amount.is_all() {
         ledger.yield_value(&cfg.protocol, &cfg.asset, chain, pool)
     } else {
-        parse(&cfg.amount)
+        parse(cfg.amount.as_str())
     };
     if amount.is_zero() {
         return Execution::rejected(format!("nothing to withdraw for {}", cfg.asset));
