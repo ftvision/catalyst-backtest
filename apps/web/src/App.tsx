@@ -602,14 +602,16 @@ export function App() {
             <ResultReviewPage graph={workbench.graph} setup={workbench.setup} result={workbench.result} />
           ) : null}
           {activeRoute === "history" ? (
-            <SimulationHistoryPage
-              items={workbench.historyItems}
-              fallbackRows={workbench.runHistory}
-              setup={workbench.setup}
-              result={workbench.result}
-              onOpenResult={() => setActiveRoute("result")}
-              onReplayEvents={() => setActiveRoute("replay")}
-            />
+          <SimulationHistoryPage
+            items={workbench.historyItems}
+            fallbackRows={workbench.runHistory}
+            graph={workbench.graph}
+            setup={workbench.setup}
+            result={workbench.result}
+            replay={workbench.marketReplay.replay}
+            onOpenResult={() => setActiveRoute("result")}
+            onReplayEvents={() => setActiveRoute("replay")}
+          />
           ) : null}
         </main>
       </div>

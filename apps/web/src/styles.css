@@ -325,6 +325,138 @@ select {
   align-items: start;
 }
 
+.history-detail {
+  overflow: hidden;
+}
+
+.history-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 285px) minmax(360px, 1fr) minmax(320px, 390px);
+  gap: 10px;
+  align-items: stretch;
+}
+
+.history-detail-side {
+  min-width: 0;
+}
+
+.history-detail-panel {
+  min-width: 0;
+  box-shadow: none;
+}
+
+.history-readiness {
+  min-height: 26px;
+}
+
+.history-readiness.ok svg {
+  color: var(--cb-teal);
+}
+
+.history-readiness.warn svg,
+.history-readiness.warn > .mantine-Text-root:last-child {
+  color: var(--cb-amber);
+}
+
+.history-coverage-axis {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding-left: 138px;
+  white-space: nowrap;
+}
+
+.history-coverage-axis > *:nth-child(2) {
+  text-align: center;
+}
+
+.history-coverage-axis > *:last-child {
+  text-align: right;
+}
+
+.history-coverage-row {
+  display: grid;
+  grid-template-columns: 128px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.history-coverage-track {
+  height: 14px;
+  overflow: hidden;
+  border: 1px solid var(--cb-border);
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--cb-surface-3), oklch(0.92 0.01 235));
+}
+
+.history-coverage-fill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+}
+
+.history-coverage-fill.available,
+.legend-swatch.available {
+  background: var(--cb-teal);
+}
+
+.history-coverage-fill.partial,
+.legend-swatch.partial {
+  background: var(--cb-amber);
+}
+
+.history-coverage-fill.missing,
+.legend-swatch.missing {
+  background: var(--cb-surface-3);
+}
+
+.history-coverage-legend {
+  padding-top: 2px;
+}
+
+.legend-swatch {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border: 1px solid var(--cb-border);
+  border-radius: 2px;
+}
+
+.history-chart-panel .equity-drawdown-chart {
+  height: 236px;
+}
+
+.history-detail-panel .table-scroll {
+  max-width: 100%;
+}
+
+.history-detail-panel .mantine-Table-table {
+  font-size: 0.78rem;
+}
+
+.history-detail-panel .mantine-Table-th,
+.history-detail-panel .mantine-Table-td {
+  padding: 7px 9px;
+  white-space: nowrap;
+}
+
+.history-detail-panel .cost-attribution.compact {
+  gap: 10px;
+}
+
+.history-detail-panel .cost-summary {
+  gap: 6px;
+}
+
+.history-detail-panel .cost-summary > div {
+  padding: 8px;
+}
+
+.history-detail-panel .cost-number {
+  font-size: 0.78rem;
+  line-height: 1.18;
+}
+
 .metric-cell {
   min-height: 72px;
 }
@@ -578,8 +710,13 @@ select {
   .setup-grid,
   .setup-preflight-grid,
   .event-grid,
-  .history-grid {
+  .history-grid,
+  .history-detail-grid {
     grid-template-columns: 1fr;
+  }
+
+  .history-coverage-axis {
+    padding-left: 0;
   }
 
   .readiness-rail {
@@ -687,7 +824,12 @@ select {
   }
 
   .setup-step-strip,
-  .coverage-row {
+  .coverage-row,
+  .history-coverage-row {
     grid-template-columns: 1fr;
+  }
+
+  .history-coverage-axis {
+    display: none;
   }
 }
