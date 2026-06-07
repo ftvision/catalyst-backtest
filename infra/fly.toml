@@ -2,7 +2,7 @@ app = "catalyst-backtest-api"
 primary_region = "sjc"
 
 [build]
-  dockerfile = "infra/Dockerfile.api"
+  dockerfile = "Dockerfile.api"
 
 [env]
   CATALYST_SIM_BIND = "0.0.0.0:8080"
