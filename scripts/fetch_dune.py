@@ -7,6 +7,7 @@ store via the real ingester path.
 
 from __future__ import annotations
 
+import argparse
 import os
 import sys
 from datetime import UTC, datetime
@@ -19,8 +20,6 @@ from catalyst_market_data_dune import DuneClient, ingest_candles, ingest_gas
 API = "https://api.dune.com/api/v1"
 KEY = os.environ["DUNE_API_KEY"]
 ROOT = "data/market-data"
-START = datetime(2024, 1, 1, tzinfo=UTC)
-END = datetime(2024, 1, 8, tzinfo=UTC)
 
 GAS_SQL = """
 WITH gas AS (
@@ -83,23 +82,36 @@ def upsert_query(name: str, sql: str, existing: str | None) -> int:
     return qid
 
 
+def _dt(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
+
+
 def main() -> int:
+    ap = argparse.ArgumentParser(prog="fetch_dune")
+    ap.add_argument("--start", type=_dt, default=datetime(2024, 1, 1, tzinfo=UTC))
+    ap.add_argument("--end", type=_dt, default=datetime(2024, 2, 1, tzinfo=UTC))
+    ap.add_argument("--chain", default="ethereum", help="gas chain label to store under")
+    ap.add_argument("--venue", default="ethereum", help="candle venue to store under")
+    ap.add_argument("--symbol", default="ETH")
+    ap.add_argument("--interval", default="1h")
+    args = ap.parse_args()
+
     store = ParquetStore(ROOT)
-    client = DuneClient(KEY, http_transport(), poll_interval=3.0, max_polls=60)
+    client = DuneClient(KEY, http_transport(), poll_interval=3.0, max_polls=90)
 
     gas_id = upsert_query("catalyst: eth L1 gas (hourly)", GAS_SQL, os.environ.get("GAS_ID"))
     px_id = upsert_query("catalyst: eth hourly OHLC", PRICES_SQL, os.environ.get("PX_ID"))
 
-    print("running gas query ...")
-    n_gas = ingest_gas(store, client, chain="ethereum_dune", query_id=gas_id, start=START, end=END)
-    print(f"  wrote {n_gas} gas points -> chain=ethereum_dune")
+    print(f"running gas query {args.start:%Y-%m-%d}..{args.end:%Y-%m-%d} ...")
+    n_gas = ingest_gas(store, client, chain=args.chain, query_id=gas_id, start=args.start, end=args.end)
+    print(f"  wrote {n_gas} gas points -> chain={args.chain}")
 
     print("running prices query ...")
     n_px = ingest_candles(
-        store, client, venue="ethereum", symbol="ETH", interval="1h",
-        query_id=px_id, start=START, end=END,
+        store, client, venue=args.venue, symbol=args.symbol, interval=args.interval,
+        query_id=px_id, start=args.start, end=args.end,
     )
-    print(f"  wrote {n_px} candles -> venue=ethereum/symbol=ETH")
+    print(f"  wrote {n_px} candles -> venue={args.venue}/symbol={args.symbol}")
     return 0
 
 
