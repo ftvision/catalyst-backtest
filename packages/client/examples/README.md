@@ -13,17 +13,24 @@ reference.)
 | [`hl-perp-swings.toml`](hl-perp-swings.toml) | `g13` alternating long/short swings | price-threshold directional |
 | [`hl-perp-research-overrides.toml`](hl-perp-research-overrides.toml) | `g07` HL perp round trips | research policy + execution overrides |
 
-All examples use Hyperliquid, which the deployed store has data for. EVM/Base
-strategies need that venue's data ingested first — run `catalyst-bt catalog` to
-see what's available, and `catalyst-bt coverage <run.toml>` before a run.
+ADR-0002 strategies (data-driven sources, derived indicators, composition,
+relative sizing, variables) — all verified end-to-end against the deployed
+service:
 
-> **Heads-up:** the CLI validates the request locally with the `catalyst-contracts`
-> Pydantic models, which currently only cover the original catalog graphs
-> (**g01–g18**). The ADR-0002 strategies (**g19–g26** — funding/yield-source,
-> moving-average/breakout/momentum, composition) are rejected before the network
-> call because those Python models are behind the Rust contract and JSON schema.
-> Until the Python contract is updated, run g19–g26 from the web UI; see the
-> note at the bottom of this file.
+| File | Strategy | New surface |
+| --- | --- | --- |
+| [`funding-carry.toml`](funding-carry.toml) | `g19` long spot + short perp basis | funding-rate source |
+| [`golden-cross.toml`](golden-cross.toml) | `g20` SMA(10) vs SMA(50) | derived source vs derived source |
+| [`donchian-breakout.toml`](donchian-breakout.toml) | `g21` 20-bar high/low | rolling_high / rolling_low |
+| [`momentum-roc.toml`](momentum-roc.toml) | `g22` ROC(12) entry + SMA exit | rate-of-change source |
+| [`trend-filter-dip.toml`](trend-filter-dip.toml) | `g23` buy the dip in an uptrend | `all` combinator |
+| [`stop-loss.toml`](stop-loss.toml) | `g24` entry + protective stop | graph `variables` |
+| [`yield-rotation.toml`](yield-rotation.toml) | `g25` deposit/withdraw on APR | yield (APR) source |
+| [`short-momentum.toml`](short-momentum.toml) | `g26` short on negative ROC | signed threshold |
+
+Examples cover Hyperliquid (candles + funding) and Base (candles, gas, USDC
+yields) — the venues the deployed store has data for. Run `catalyst-bt catalog`
+to see what's available, and `catalyst-bt coverage <run.toml>` before a run.
 
 ## Setup
 
@@ -115,14 +122,3 @@ history depends on the interval: **1h** reaches back to ~2025-12-31, while **4h*
 reaches ~2024-02. If a run fails on missing required data under `strict_v1`, run
 `coverage` first, then shorten the window or use a coarser interval (the
 `hl-perp-roundtrip-4h.toml` example uses 4h for exactly this reason).
-
-## Known limitation: g19–g26 not yet runnable via the CLI
-
-The client validates the request against the `catalyst-contracts` Pydantic models
-before sending it. Those models still describe the pre-ADR-0002 graph surface, so
-they reject the newer signal/action features the g19–g26 strategies use:
-`subtype: "threshold"`, the `all`/`any`/`not` combinators, `source`/`reference`
-(funding/yield/derived) shapes, the percentage-`amount` object, and `$name`
-variable tokens. The Rust service and JSON schema already support all of these —
-only the Python mirror is behind. Updating `packages/contracts` to match would
-let the CLI submit g19–g26 too.

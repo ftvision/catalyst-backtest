@@ -1,0 +1,16 @@
+# Entry with a variable-referenced protective stop (g24).
+# Verified against the deployed service.
+#
+#   catalyst-bt preview packages/client/examples/stop-loss.toml
+#   catalyst-bt run     packages/client/examples/stop-loss.toml
+
+graph = "../../../strategies/graphs/g24_stop_loss.json"
+policy = "strict_v1"
+
+[config]
+start = "2026-01-01T00:00:00Z"
+end = "2026-06-01T00:00:00Z"
+interval = "1h"
+
+[config.initial_portfolio.base]
+USDC = "10000"

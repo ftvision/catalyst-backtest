@@ -1,0 +1,16 @@
+# Golden cross - buy when SMA(10) crosses above SMA(50) (g20).
+# Verified against the deployed service.
+#
+#   catalyst-bt preview packages/client/examples/golden-cross.toml
+#   catalyst-bt run     packages/client/examples/golden-cross.toml
+
+graph = "../../../strategies/graphs/g20_golden_cross.json"
+policy = "strict_v1"
+
+[config]
+start = "2026-01-01T00:00:00Z"
+end = "2026-06-01T00:00:00Z"
+interval = "1h"
+
+[config.initial_portfolio.base]
+USDC = "10000"
