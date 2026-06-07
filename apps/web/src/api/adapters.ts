@@ -24,6 +24,12 @@ function stringField(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
+function compactDecimalField(value: unknown, maximumFractionDigits = 6): string | undefined {
+  const numeric = numberValue(value, Number.NaN);
+  if (Number.isFinite(numeric)) return compactNumber(numeric, maximumFractionDigits);
+  return stringField(value);
+}
+
 function numberValue(value: unknown, fallback = 0): number {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string") {
@@ -407,6 +413,10 @@ function eventsFromApi(events: BacktestEvent[], marketData: MarketDataBundle): M
     const status = eventStatus(type);
     const price = numberValue(detail.price, priceAt(marketData, event.ts));
     const valueUsd = numberValue(detail.value_usd ?? detail.fee_usd ?? detail.gas_usd);
+    const amount = compactDecimalField(detail.amount);
+    const symbol = stringField(detail.symbol) ?? firstCandleSeries(marketData)?.symbol;
+    const fee = numberValue(detail.fee_usd, Number.NaN);
+    const gas = numberValue(detail.gas_usd, Number.NaN);
 
     return {
       id: `event-${index + 1}`,
@@ -419,6 +429,12 @@ function eventsFromApi(events: BacktestEvent[], marketData: MarketDataBundle): M
       status,
       price: price ? money(price) : "-",
       impact: event.reason ?? (valueUsd ? money(valueUsd) : "-"),
+      side: stringField(detail.side),
+      orderType: stringField(detail.kind),
+      fillAmount: amount ? `${amount}${symbol ? ` ${symbol}` : ""}` : undefined,
+      notional: Number.isFinite(valueUsd) && valueUsd !== 0 ? money(valueUsd) : undefined,
+      fee: Number.isFinite(fee) ? money(fee) : undefined,
+      gas: Number.isFinite(gas) ? money(gas) : undefined,
     };
   });
 }
