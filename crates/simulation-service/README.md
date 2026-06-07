@@ -36,6 +36,7 @@ reads it.
 | --- | --- |
 | `POST /backtests/preview` | Validate graph → `{ graph_hash, valid, graph_summary, data_requirements, resolved_policy, warnings }`. Invalid graphs return `valid:false` (200). |
 | `POST /market-data/coverage` | Per-series coverage + warnings for `{ graph, start, end, interval }` (inline `market_data` or the store). |
+| `POST /market-data/window` | Normalized `MarketDataBundle` for `{ graph, start, end, interval }` (inline `market_data` or the configured store). |
 | `GET /policy-profiles` | `strict_v1` / `conservative_v1` / `research_v1` + resolved policies. |
 
 ### Low-level

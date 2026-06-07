@@ -16,6 +16,15 @@ export interface EquityDrawdownPoint {
   drawdown: number;
 }
 
+function formatChartTime(time: UTCTimestamp) {
+  const date = new Date(Number(time) * 1000);
+  const hour = date.getUTCHours();
+  if (hour === 0) {
+    return date.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+  }
+  return `${String(hour).padStart(2, "0")}:00`;
+}
+
 export function EquityDrawdownChart({ data }: { data: EquityDrawdownPoint[] }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
 
@@ -40,7 +49,9 @@ export function EquityDrawdownChart({ data }: { data: EquityDrawdownPoint[] }) {
       },
       timeScale: {
         borderColor: "#d4dae3",
-        timeVisible: false,
+        timeVisible: true,
+        secondsVisible: false,
+        tickMarkFormatter: (time: UTCTimestamp) => formatChartTime(time),
       },
       crosshair: {
         vertLine: { color: "#2768ce", labelBackgroundColor: "#2768ce" },

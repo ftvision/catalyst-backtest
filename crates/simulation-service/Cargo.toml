@@ -20,6 +20,7 @@ catalyst-simulation-engine = { path = "../simulation-engine" }
 catalyst-result-reporter = { path = "../result-reporter" }
 catalyst-market-data-loader = { path = "../market-data-loader" }
 axum = "0.7"
+tower-http = { version = "0.6", features = ["cors"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
 async-channel = "2"
 serde = { version = "1", features = ["derive"] }

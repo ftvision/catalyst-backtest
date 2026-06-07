@@ -232,32 +232,22 @@ pub async fn coverage(State(state): State<AppState>, Json(body): Json<Value>) ->
         Ok(r) => r,
         Err(e) => return error(StatusCode::BAD_REQUEST, "invalid_request", e.to_string()),
     };
-    let compiled = match compile(&req.graph) {
-        Ok(c) => c,
-        Err(e) => return error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_graph", e.to_string()),
-    };
-    let bundle = match req.market_data {
-        Some(b) => b,
-        None => match state.store_root() {
-            Some(root) => {
-                let r: BundleRef = support::bundle_ref(root, &compiled);
-                match load_bundle(&r, &req.start, &req.end, &req.interval).await {
-                    Ok(b) => b,
-                    Err(e) => {
-                        return error(StatusCode::UNPROCESSABLE_ENTITY, "data_load_error", e.to_string())
-                    }
-                }
-            }
-            None => {
-                return error(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_request",
-                    "no market_data supplied and no store configured",
-                )
-            }
-        },
+    let bundle = match load_market_data_for_window(&state, req).await {
+        Ok(bundle) => bundle,
+        Err(response) => return response,
     };
     Json(support::coverage_response(&bundle)).into_response()
+}
+
+pub async fn market_data_window(State(state): State<AppState>, Json(body): Json<Value>) -> Response {
+    let req: CoverageBody = match serde_json::from_value(body) {
+        Ok(r) => r,
+        Err(e) => return error(StatusCode::BAD_REQUEST, "invalid_request", e.to_string()),
+    };
+    match load_market_data_for_window(&state, req).await {
+        Ok(bundle) => Json(bundle).into_response(),
+        Err(response) => response,
+    }
 }
 
 pub async fn policy_profiles() -> Json<Value> {
@@ -266,6 +256,30 @@ pub async fn policy_profiles() -> Json<Value> {
 
 fn not_found(id: &str) -> Response {
     error(StatusCode::NOT_FOUND, "not_found", format!("no backtest {id:?}"))
+}
+
+async fn load_market_data_for_window(
+    state: &AppState,
+    req: CoverageBody,
+) -> Result<MarketDataBundle, Response> {
+    let compiled = compile(&req.graph)
+        .map_err(|e| error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_graph", e.to_string()))?;
+    match req.market_data {
+        Some(bundle) => Ok(bundle),
+        None => match state.store_root() {
+            Some(root) => {
+                let reference: BundleRef = support::bundle_ref(root, &compiled);
+                load_bundle(&reference, &req.start, &req.end, &req.interval)
+                    .await
+                    .map_err(|e| error(StatusCode::UNPROCESSABLE_ENTITY, "data_load_error", e.to_string()))
+            }
+            None => Err(error(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "no market_data supplied and no store configured",
+            )),
+        },
+    }
 }
 
 // --- low-level: run the engine and return the raw trace (CPU off the async pool) ---

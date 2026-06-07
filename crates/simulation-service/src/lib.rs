@@ -13,6 +13,7 @@
 //! - `GET  /backtests/{id}` `/result` `/metadata` `/events` (paginated/filterable)
 //! - `POST /backtests/preview` — validate graph + summary + data requirements + resolved policy
 //! - `POST /market-data/coverage` — per-series coverage before a run
+//! - `POST /market-data/window` — normalized bundle for the requested window
 //! - `GET  /policy-profiles`
 //!
 //! Market data is either inline in the request or read from the configured
@@ -29,12 +30,19 @@ mod worker;
 pub use state::AppState;
 
 use axum::{
+    http::Method,
     routing::{get, post},
     Router,
 };
+use tower_http::cors::{Any, CorsLayer};
 
 /// Build the router with injected state. Exposed so tests can drive it without a socket.
 pub fn app(state: AppState) -> Router {
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_headers(Any);
+
     Router::new()
         .route("/health", get(handlers::health))
         .route("/simulate", post(handlers::simulate))
@@ -45,6 +53,8 @@ pub fn app(state: AppState) -> Router {
         .route("/backtests/:id/metadata", get(handlers::get_metadata))
         .route("/backtests/:id/events", get(handlers::get_events))
         .route("/market-data/coverage", post(handlers::coverage))
+        .route("/market-data/window", post(handlers::market_data_window))
         .route("/policy-profiles", get(handlers::policy_profiles))
         .with_state(state)
+        .layer(cors)
 }

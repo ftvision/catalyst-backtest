@@ -11,7 +11,6 @@ import {
   Table,
   Text,
   TextInput,
-  Textarea,
   Title,
 } from "@mantine/core";
 import { Play, ShieldAlert } from "lucide-react";
@@ -25,11 +24,17 @@ export function RunSetupPage({
   setup,
   runHistory,
   onRun,
+  runLabel = "Run backtest",
+  runDisabled = false,
+  dataSourceLabel = "Parquet store",
 }: {
   graph: GraphSummary;
   setup: SetupData;
   runHistory: Array<Record<string, string>>;
   onRun: () => void;
+  runLabel?: string;
+  runDisabled?: boolean;
+  dataSourceLabel?: string;
 }) {
   return (
     <Stack gap="md">
@@ -37,8 +42,8 @@ export function RunSetupPage({
         title="Run Setup"
         subtitle="Resolve graph requirements, portfolio, data coverage, and policy before creating a run."
         action={
-          <Button leftSection={<Play size={14} />} onClick={onRun}>
-            Run backtest
+          <Button leftSection={<Play size={14} />} onClick={onRun} disabled={runDisabled}>
+            {runLabel}
           </Button>
         }
       />
@@ -116,14 +121,9 @@ export function RunSetupPage({
                 />
                 <NumberInput label="Slippage bps" value={10} readOnly />
                 <NumberInput label="Max missing candles" value={0} readOnly />
+                <TextInput label="Market data source" value={dataSourceLabel} readOnly />
+                <TextInput label="Run ID" value={setup.runId} readOnly />
               </SimpleGrid>
-              <Textarea
-                label="Graph payload"
-                minRows={4}
-                autosize
-                value='{"graph_id":"g_eth_threshold_base_swap","nodes":7,"edges":6}'
-                readOnly
-              />
             </Stack>
           </Paper>
 
