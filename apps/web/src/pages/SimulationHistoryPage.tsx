@@ -1,6 +1,6 @@
 import { BarChart } from "@mantine/charts";
 import { ActionIcon, Button, Group, Paper, SegmentedControl, Select, SimpleGrid, Stack, Table, Text, TextInput, Tooltip } from "@mantine/core";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, CheckCircle2, Copy, CopyPlus, ExternalLink, FileChartColumn, MoreVertical, RotateCcw } from "lucide-react";
 import type { BacktestListItem } from "../api/client";
 import { CostAttribution } from "../components/CostAttribution";
@@ -78,6 +78,8 @@ export function SimulationHistoryPage({
   replay,
   onOpenResult,
   onReplayEvents,
+  selectedRunId,
+  onSelectRun,
 }: {
   items: BacktestListItem[];
   fallbackRows: Array<Record<string, string>>;
@@ -87,12 +89,18 @@ export function SimulationHistoryPage({
   replay: ReplayPoint[];
   onOpenResult: () => void;
   onReplayEvents: () => void;
+  selectedRunId?: string;
+  onSelectRun?: (id: string) => void;
 }) {
   const rows = items.length ? items : fallbackRows.map(rowFromFallback);
   const [status, setStatus] = useState("all");
   const [policy, setPolicy] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-  const [selectedId, setSelectedId] = useState(rows[0]?.id);
+  const [selectedId, setSelectedId] = useState(selectedRunId ?? rows[0]?.id);
+
+  useEffect(() => {
+    if (selectedRunId) setSelectedId(selectedRunId);
+  }, [selectedRunId]);
   const policyOptions = Array.from(new Set(rows.map((row) => row.policy_profile).filter(Boolean))).map((value) => ({
     value: value as string,
     label: value as string,
@@ -204,7 +212,10 @@ export function SimulationHistoryPage({
                 <Table.Tr
                   key={row.id}
                   className={selected?.id === row.id ? "selected-row" : undefined}
-                  onClick={() => setSelectedId(row.id)}
+                  onClick={() => {
+                    setSelectedId(row.id);
+                    onSelectRun?.(row.id);
+                  }}
                 >
                   <Table.Td className="mono">{row.id}</Table.Td>
                   <Table.Td><StatusBadge status={row.status} /></Table.Td>

@@ -40,6 +40,7 @@ import {
   type BacktestStatus,
   type CatalystGraph,
   type CoverageResponse,
+  type GraphPreview,
   type MarketDataCatalogItem,
   type MarketDataBundle,
   type StrategyListItem,
@@ -54,6 +55,14 @@ import { ResultReviewPage } from "./pages/ResultReviewPage";
 import { RunSetupPage } from "./pages/RunSetupPage";
 import { SimulationHistoryPage } from "./pages/SimulationHistoryPage";
 import { marketCatalogId } from "./components/MarketDataSelector";
+import {
+  getLastRunId,
+  loadCachedRunDetail,
+  makeCachedRunDetail,
+  saveCachedRunDetail,
+  setLastRunId,
+  type CachedRunDetail,
+} from "./storage/runCache";
 import type { AuditData, GraphSummary, MarketReplayData, ResultData, SetupData } from "./types";
 
 type RouteId = "setup" | "data" | "replay" | "lens" | "result" | "history";
@@ -73,6 +82,7 @@ type DataSourceMode = "store" | "inline";
 
 const DEFAULT_BACKTEST_START = "2026-03-01T00:00:00Z";
 const DEFAULT_BACKTEST_END = "2026-06-01T00:00:00Z";
+const ACTIVE_ROUTE_STORAGE_KEY = "catalyst:active-route";
 
 interface WorkbenchState {
   graph: GraphSummary;
@@ -89,6 +99,17 @@ interface ActiveSelection {
   strategyTitle: string;
   scenarioId: string;
   scenarioTitle: string;
+}
+
+function initialRouteFromStorage(): RouteId {
+  if (typeof localStorage === "undefined") return "setup";
+  const stored = localStorage.getItem(ACTIVE_ROUTE_STORAGE_KEY);
+  return routes.some((route) => route.id === stored) ? (stored as RouteId) : "setup";
+}
+
+function storeActiveRoute(route: RouteId) {
+  if (typeof localStorage === "undefined") return;
+  localStorage.setItem(ACTIVE_ROUTE_STORAGE_KEY, route);
 }
 
 interface PolicyProfileOption {
@@ -141,6 +162,39 @@ function portfolioRowsFromConfig(config: BacktestConfig) {
       percent: "-",
     })),
   );
+}
+
+function labelForDataSourceMode(mode: DataSourceMode) {
+  return mode === "store" ? "Parquet store" : "Inline fallback";
+}
+
+function previewFromCachedRun(detail: CachedRunDetail): GraphPreview {
+  return {
+    graph_hash: detail.metadata.graph_hash ?? detail.graphHash ?? "cached-run",
+    valid: true,
+  };
+}
+
+function listItemFromCachedRun(detail: CachedRunDetail): BacktestListItem {
+  return {
+    id: detail.runId,
+    graph_hash: detail.metadata.graph_hash ?? detail.graphHash,
+    status: detail.status.status,
+    policy_profile: detail.request.policyProfile,
+    start: detail.metadata.config?.start ?? detail.request.config.start,
+    end: detail.metadata.config?.end ?? detail.request.config.end,
+    interval: detail.metadata.config?.interval ?? detail.request.config.interval,
+    created_at: detail.status.created_at ?? detail.metadata.created_at,
+    started_at: detail.status.started_at ?? detail.metadata.started_at,
+    finished_at: detail.status.finished_at ?? detail.metadata.finished_at,
+    summary: detail.metadata.summary ?? detail.result.summary,
+    warning_count: detail.metadata.warnings?.length ?? detail.result.metadata?.warnings?.length ?? 0,
+  };
+}
+
+function upsertHistoryItem(items: BacktestListItem[], item: BacktestListItem) {
+  const next = items.filter((existing) => existing.id !== item.id);
+  return [item, ...next];
 }
 
 function stringConfig(value: unknown): string | undefined {
@@ -251,7 +305,7 @@ function compatibleMarketItem(graph: CatalystGraph, catalog: MarketDataCatalogIt
 }
 
 export function App() {
-  const [activeRoute, setActiveRoute] = useState<RouteId>("setup");
+  const [activeRoute, setActiveRoute] = useState<RouteId>(() => initialRouteFromStorage());
   const [selectedEventId, setSelectedEventId] = useState(marketReplay.selectedEventId);
   const [apiStatus, setApiStatus] = useState<ApiStatus>("checking");
   const [apiMessage, setApiMessage] = useState(`Checking ${catalystApi.baseUrl}`);
@@ -294,6 +348,10 @@ export function App() {
   const dataSourceLabel =
     dataSourceMode === "store" ? "Parquet store" : "Inline fallback";
 
+  useEffect(() => {
+    storeActiveRoute(activeRoute);
+  }, [activeRoute]);
+
   function configFromMarketItem(base: BacktestConfig, item?: MarketDataCatalogItem): BacktestConfig {
     return {
       ...base,
@@ -333,6 +391,180 @@ export function App() {
       return next;
     });
     setApiMessage(`Initial balances updated / ${dataSourceLabel}`);
+  }
+
+  function applyRunDetail(detail: CachedRunDetail) {
+    const replayMarketData = detail.replayMarketData ?? emptyMarketData(detail.request.config);
+    const replay = marketReplayFromApi(detail.result, detail.events, replayMarketData);
+    const review = resultFromApi(detail.result, detail.status.status);
+    const auditData = auditFromApi(detail.events, detail.result, replay);
+    const setupData = setupFromService({
+      runId: detail.runId,
+      graph: detail.request.graph,
+      config: detail.request.config,
+      policyProfile: detail.request.policyProfile,
+      dataSourceLabel: labelForDataSourceMode(detail.request.dataSourceMode),
+      metadata: detail.metadata,
+    });
+    const graphData = graphFromPreview(detail.request.graph, previewFromCachedRun(detail), {
+      id: detail.strategyId,
+      name: detail.strategyTitle,
+      version: detail.scenarioId,
+    });
+    const historyItem = listItemFromCachedRun(detail);
+
+    setDataSourceMode(detail.request.dataSourceMode);
+    setActiveGraph(detail.request.graph);
+    setActiveConfig(detail.request.config);
+    setActiveMarketData(replayMarketData);
+    setSelectedMarketDataId(detail.request.marketDataId);
+    setActiveSelection((current) => ({
+      strategyId: detail.strategyId ?? current.strategyId,
+      strategyTitle: detail.strategyTitle ?? current.strategyTitle,
+      scenarioId: detail.scenarioId ?? current.scenarioId,
+      scenarioTitle: detail.scenarioTitle ?? current.scenarioTitle,
+    }));
+    setWorkbench((current) => {
+      const historyItems = upsertHistoryItem(current.historyItems, historyItem);
+      return {
+        ...current,
+        graph: graphData,
+        setup: {
+          ...setupData,
+          coverage: current.setup.coverage,
+        },
+        marketReplay: replay,
+        result: review,
+        audit: auditData,
+        historyItems,
+        runHistory: runHistoryFromApi(historyItems),
+      };
+    });
+    setSelectedEventId(replay.selectedEventId);
+    setRunStatus(detail.status.status === "failed" ? "failed" : "succeeded");
+    setLastRunId(detail.runId);
+  }
+
+  async function refreshRunDetailFromServer(cached: CachedRunDetail): Promise<CachedRunDetail> {
+    const marketDataWindowRequest = {
+      graph: cached.request.graph,
+      start: cached.request.config.start,
+      end: cached.request.config.end,
+      interval: cached.request.config.interval,
+      ...(cached.request.dataSourceMode === "inline" && cached.replayMarketData
+        ? { market_data: cached.replayMarketData }
+        : {}),
+    };
+    const replayMarketDataPromise = catalystApi
+      .loadMarketDataWindow(marketDataWindowRequest)
+      .catch(() => cached.replayMarketData);
+    const [status, result, metadata, events, replayMarketData] = await Promise.all([
+      catalystApi.getBacktest(cached.runId),
+      catalystApi.getResult(cached.runId),
+      catalystApi.getMetadata(cached.runId),
+      catalystApi.getEvents(cached.runId, { limit: 100 }),
+      replayMarketDataPromise,
+    ]);
+
+    return makeCachedRunDetail({
+      runId: cached.runId,
+      graphHash: metadata.graph_hash ?? cached.graphHash,
+      strategyId: cached.strategyId,
+      strategyTitle: cached.strategyTitle,
+      scenarioId: cached.scenarioId,
+      scenarioTitle: cached.scenarioTitle,
+      request: cached.request,
+      status,
+      result,
+      metadata,
+      events: events.items,
+      replayMarketData: replayMarketData ?? cached.replayMarketData,
+    });
+  }
+
+  async function loadUncachedRunDetailFromServer(runId: string): Promise<CachedRunDetail> {
+    const status = await catalystApi.getBacktest(runId);
+    const [result, metadata, events] = await Promise.all([
+      catalystApi.getResult(runId),
+      catalystApi.getMetadata(runId),
+      catalystApi.getEvents(runId, { limit: 100 }),
+    ]);
+    const config: BacktestConfig = {
+      ...activeConfig,
+      start: metadata.config?.start ?? activeConfig.start,
+      end: metadata.config?.end ?? activeConfig.end,
+      interval: metadata.config?.interval ?? activeConfig.interval,
+    };
+    const marketDataWindowRequest = {
+      graph: activeGraph,
+      start: config.start,
+      end: config.end,
+      interval: config.interval,
+      ...(dataSourceMode === "inline" ? { market_data: activeMarketData } : {}),
+    };
+    const replayMarketData = await catalystApi
+      .loadMarketDataWindow(marketDataWindowRequest)
+      .catch(() => activeMarketData);
+
+    return makeCachedRunDetail({
+      runId,
+      graphHash: metadata.graph_hash,
+      strategyId: activeSelection.strategyId,
+      strategyTitle: activeSelection.strategyTitle,
+      scenarioId: activeSelection.scenarioId,
+      scenarioTitle: activeSelection.scenarioTitle,
+      request: {
+        graph: activeGraph,
+        config,
+        policyProfile: workbench.setup.policy,
+        dataSourceMode,
+        marketDataId: selectedMarketDataId,
+      },
+      status,
+      result,
+      metadata,
+      events: events.items,
+      replayMarketData,
+    });
+  }
+
+  async function loadRunDetail(runId: string, options: { route?: RouteId; quiet?: boolean } = {}) {
+    try {
+      if (!options.quiet) {
+        setApiStatus("checking");
+        setApiMessage(`Loading run ${runId}`);
+      }
+      const cached = await loadCachedRunDetail(runId);
+      let detail: CachedRunDetail | undefined;
+      let source = "service";
+      if (cached) {
+        detail = cached;
+        source = "browser cache";
+        try {
+          detail = await refreshRunDetailFromServer(cached);
+          await saveCachedRunDetail(detail);
+          source = "service";
+        } catch {
+          source = "browser cache";
+        }
+      } else {
+        try {
+          detail = await loadUncachedRunDetailFromServer(runId);
+          await saveCachedRunDetail(detail);
+        } catch (error) {
+          if (options.quiet) return;
+          throw error;
+        }
+      }
+
+      applyRunDetail(detail);
+      setApiStatus("healthy");
+      setApiMessage(`Loaded run ${runId} from ${source}`);
+      if (options.route) setActiveRoute(options.route);
+    } catch (error) {
+      setApiStatus("failed");
+      setApiMessage(errorMessage(error));
+    }
   }
 
   async function hydrateWorkbench(input: {
@@ -580,6 +812,12 @@ export function App() {
     let cancelled = false;
 
     async function loadServiceWorkbench() {
+      async function restoreLastRun() {
+        const lastRunId = getLastRunId();
+        if (!lastRunId || cancelled) return;
+        await loadRunDetail(lastRunId, { quiet: true });
+      }
+
       try {
         setApiStatus("checking");
         setApiMessage(`Checking ${catalystApi.baseUrl}`);
@@ -616,6 +854,7 @@ export function App() {
             marketItem,
             profiles: profiles.items,
           });
+          await restoreLastRun();
           return;
         }
         await hydrateWorkbench({
@@ -630,10 +869,12 @@ export function App() {
           sourceMode: "inline",
           profiles: profiles.items,
         });
+        await restoreLastRun();
       } catch (error) {
         if (cancelled) return;
         setApiStatus("offline");
         setApiMessage(`Using mock data: ${errorMessage(error)}`);
+        await restoreLastRun();
       }
     }
 
@@ -718,6 +959,26 @@ export function App() {
         dataSourceLabel,
         metadata,
       });
+      const cachedDetail = makeCachedRunDetail({
+        runId: created.id,
+        graphHash: metadata.graph_hash,
+        strategyId: activeSelection.strategyId,
+        strategyTitle: activeSelection.strategyTitle,
+        scenarioId: activeSelection.scenarioId,
+        scenarioTitle: activeSelection.scenarioTitle,
+        request: {
+          graph: activeGraph,
+          config: activeConfig,
+          policyProfile: workbench.setup.policy,
+          dataSourceMode,
+          marketDataId: selectedMarketDataId,
+        },
+        status,
+        result: serviceResult,
+        metadata,
+        events: events.items,
+        replayMarketData,
+      });
 
       setWorkbench((current) => ({
         ...current,
@@ -737,6 +998,8 @@ export function App() {
       setRunStatus("succeeded");
       setApiStatus("healthy");
       setApiMessage(`Backtest ${created.id} completed / ${dataSourceLabel}`);
+      setLastRunId(created.id);
+      void saveCachedRunDetail(cachedDetail).catch(() => undefined);
       setActiveRoute("result");
     } catch (error) {
       setRunStatus("failed");
@@ -908,16 +1171,18 @@ export function App() {
             <ResultReviewPage graph={workbench.graph} setup={workbench.setup} result={workbench.result} />
           ) : null}
           {activeRoute === "history" ? (
-          <SimulationHistoryPage
-            items={workbench.historyItems}
-            fallbackRows={workbench.runHistory}
-            graph={workbench.graph}
-            setup={workbench.setup}
-            result={workbench.result}
-            replay={workbench.marketReplay.replay}
-            onOpenResult={() => setActiveRoute("result")}
-            onReplayEvents={() => setActiveRoute("replay")}
-          />
+            <SimulationHistoryPage
+              items={workbench.historyItems}
+              fallbackRows={workbench.runHistory}
+              graph={workbench.graph}
+              setup={workbench.setup}
+              result={workbench.result}
+              replay={workbench.marketReplay.replay}
+              selectedRunId={workbench.setup.runId}
+              onSelectRun={(id) => void loadRunDetail(id)}
+              onOpenResult={() => setActiveRoute("result")}
+              onReplayEvents={() => setActiveRoute("replay")}
+            />
           ) : null}
         </main>
       </div>
