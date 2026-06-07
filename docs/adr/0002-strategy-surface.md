@@ -1,6 +1,6 @@
 # ADR 0002 — Strategy surface: observable-parameterized signals, firing control, composition
 
-- **Status:** Accepted — steps 1 & 4 implemented (steps 2–3 pending)
+- **Status:** Accepted — steps 1–4 implemented
 - **Builds on:** ADR 0001 (Rust owns the run/service path)
 - **Relates to:** #28 (compiler now single-source in Rust), reviewer feedback on
   "any runnable graph" support (more signal types, repeat/cooldown, variables)
@@ -225,10 +225,44 @@ stays scoped to the existing `price_threshold` golden graphs.
 - Schema (`graph`) gains the three subtypes; a `graph.threshold-composed.json`
   example is round-trip validated cross-language.
 
-Steps 2 (relative sizing — execution-models + portfolio valuation) and 3
-(derived sources `sma`/`ema`/`rolling_high|low`/`roc` + warmup/lookback
-propagation through the loader) remain; both open cross-cutting surfaces beyond
-the signal layer.
+**Step 2 (relative action sizing) is also implemented:**
+
+- `Amount` is now `Absolute` (a decimal string, or `"all"`) or `Relative
+  { basis, value }`; bare strings still deserialize as `Absolute`, so existing
+  graphs are unchanged. `SwapConfig.amount`, `YieldConfig.amount`, and
+  `PerpOrderConfig.size_usd` use it.
+- The engine resolves a relative amount to absolute in `execute_action` (before
+  both market and resting-limit dispatch), against ledger-derived bases:
+  `pct_balance` (swap from-asset / yield asset / perp cash) and `pct_position`
+  (perp notional / yield principal+accrued). This unlocks stop-loss,
+  take-profit, and rebalancing.
+- **`pct_portfolio`** sizes against total portfolio equity: the engine computes
+  tick-start equity (`compute_equity`) once per tick and threads it into
+  `execute_action`, which resolves `value/100 × equity`, converting the USD slice
+  to asset units via the action asset's price for unit-denominated swaps/yields
+  (perp `size_usd` is already USD). Sampled at tick start (documented; slightly
+  stale within a multi-action chain).
+- Schema gains `amountOrPct`; a `graph.relative-sizing.json` example
+  (take-profit: sell 50% on a price spike) is round-trip validated.
+
+**Step 3 (derived sources + warmup) is also implemented:**
+
+- `Source::Derived { of, transform, window }` with `transform` ∈
+  `sma`/`ema`/`rolling_high`/`rolling_low`/`roc`. A `Reference::Source` can wrap a
+  derived source, so "price < its 20-bar SMA" and breakout/momentum signals are
+  expressible.
+- The engine samples the underlying source at the last `window` grid bars
+  (newest-first) and applies the transform; it requires a **full window of warmup
+  history** before the signal is valid (returns no value until then).
+- The compiler records the max **`lookback_bars`** on `DataRequirements`, and the
+  service worker loads `start − lookback_bars × interval` from the store so
+  derived signals are warm from the first tick. `ticks()` still starts at the
+  run's `start`, so pre-`start` bars feed indicators without creating ticks.
+- Schema gains the `derived` source; a `graph.ma-cross.json` example
+  (price < 20-bar SMA → buy 25% of balance) is round-trip validated.
+
+All four ADR-0002 steps are now implemented, including `pct_portfolio` sizing.
+Nothing outstanding for the signal/sizing surface.
 
 ## Open decisions
 

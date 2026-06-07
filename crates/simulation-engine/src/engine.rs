@@ -5,7 +5,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use rust_decimal::Decimal;
 use serde_json::{json, Value};
 
-use catalyst_contracts::graph::{PerpOrderConfig, Reference, Source, SwapConfig};
+use catalyst_contracts::graph::{
+    Amount, AmountBasis, PerpOrderConfig, Reference, Source, SwapConfig, Transform, YieldConfig,
+};
 use catalyst_contracts::trace::{Event, Portfolio, SimulationTrace, Snapshot};
 use catalyst_contracts::{BacktestConfig, Graph, MarketDataBundle, SimulationPolicy};
 use catalyst_execution_models::{
@@ -174,10 +176,14 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
         accrue_yield(&mut ledger, &index, ts, interval_secs, &ts_iso, &mut events);
         check_liquidations(&mut ledger, &index, ts, &ts_iso, &policy, &mut events);
 
+        // Tick-start equity, used to resolve pct_portfolio sizing for any action
+        // this tick (snapshots below recompute it post-action).
+        let tick_equity = compute_equity(&ledger, &index, ts);
+
         // Resting orders placed on earlier bars get a chance to fill/expire first.
         fill_resting_orders(
-            tick_index, ts, &ts_iso, &exec_graph, &mut ledger, &index, &policy, &mut events,
-            &mut resting, &mut order_seq,
+            tick_index, ts, &ts_iso, &exec_graph, &mut ledger, &index, &policy, tick_equity,
+            &mut events, &mut resting, &mut order_seq,
         );
 
         let ctx = TickContext { index: &index, ts };
@@ -186,7 +192,7 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
             for action_id in &exec_graph.initial_actions {
                 run_action_chain(
                     action_id, &exec_graph, &mut ledger, &ctx, &policy, &ts_iso, tick_index,
-                    &mut events, &mut resting, &mut order_seq,
+                    tick_equity, &mut events, &mut resting, &mut order_seq,
                 );
             }
             initial_done = true;
@@ -200,6 +206,8 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
             ts,
             &ts_iso,
             tick_index,
+            interval_secs,
+            tick_equity,
             &policy,
             &mut events,
             &mut signal_state,
@@ -266,6 +274,8 @@ fn evaluate_signals(
     ts: i64,
     ts_iso: &str,
     tick_index: usize,
+    interval_secs: i64,
+    equity: Decimal,
     policy: &ResolvedPolicy,
     events: &mut Vec<Event>,
     signal_state: &mut HashMap<String, bool>,
@@ -286,8 +296,8 @@ fn evaluate_signals(
         let cond = match &signal.def {
             SignalDef::Threshold { source, operator, reference } => {
                 match (
-                    source_value(source, index, ts),
-                    reference_value(reference, index, ts, variables),
+                    source_value(source, index, ts, interval_secs),
+                    reference_value(reference, index, ts, interval_secs, variables),
                 ) {
                     (Some(lhs), Some(rhs)) => {
                         leaf_values.insert(signal.id.as_str(), (lhs, rhs));
@@ -379,15 +389,20 @@ fn evaluate_signals(
         });
         for target in &signal.targets {
             run_action_chain(
-                target, exec_graph, ledger, ctx, policy, ts_iso, tick_index, events, resting,
-                order_seq,
+                target, exec_graph, ledger, ctx, policy, ts_iso, tick_index, equity, events,
+                resting, order_seq,
             );
         }
     }
 }
 
 /// The per-tick scalar a [`Source`] observes, from the indexed market data.
-fn source_value(source: &Source, index: &BundleIndex, ts: i64) -> Option<Decimal> {
+fn source_value(
+    source: &Source,
+    index: &BundleIndex,
+    ts: i64,
+    interval_secs: i64,
+) -> Option<Decimal> {
     match source {
         Source::Price { symbol, venue } => match venue {
             Some(v) => index.bar_at(v, symbol, ts).map(|b| b.close),
@@ -399,6 +414,53 @@ fn source_value(source: &Source, index: &BundleIndex, ts: i64) -> Option<Decimal
             index.apr_at(&key, ts)
         }
         Source::Gas { chain } => index.gas_at(chain, ts),
+        Source::Derived { of, transform, window } => {
+            let w = (*window).max(1) as i64;
+            // Sample the underlying source at the last `window` grid bars,
+            // newest first; stop at the first gap.
+            let mut samples: Vec<Decimal> = Vec::with_capacity(w as usize);
+            for k in 0..w {
+                match source_value(of, index, ts - k * interval_secs, interval_secs) {
+                    Some(v) => samples.push(v),
+                    None => break,
+                }
+            }
+            // Require a full window of warmup history before the signal is valid.
+            if (samples.len() as u32) < *window {
+                return None;
+            }
+            Some(apply_transform(transform, &samples))
+        }
+    }
+}
+
+/// Apply a [`Transform`] to samples ordered newest-first.
+fn apply_transform(transform: &Transform, samples: &[Decimal]) -> Decimal {
+    match transform {
+        Transform::Sma => {
+            samples.iter().copied().sum::<Decimal>() / Decimal::from(samples.len() as u64)
+        }
+        Transform::RollingHigh => samples.iter().copied().max().unwrap_or(Decimal::ZERO),
+        Transform::RollingLow => samples.iter().copied().min().unwrap_or(Decimal::ZERO),
+        Transform::Roc => {
+            let current = samples[0];
+            let oldest = *samples.last().unwrap();
+            if oldest.is_zero() {
+                Decimal::ZERO
+            } else {
+                (current - oldest) / oldest
+            }
+        }
+        Transform::Ema => {
+            // Fold oldest -> newest with alpha = 2 / (n + 1).
+            let alpha = Decimal::from(2) / Decimal::from(samples.len() as u64 + 1);
+            let mut iter = samples.iter().rev();
+            let mut ema = *iter.next().unwrap();
+            for &v in iter {
+                ema = alpha * v + (Decimal::ONE - alpha) * ema;
+            }
+            ema
+        }
     }
 }
 
@@ -407,11 +469,12 @@ fn reference_value(
     reference: &Reference,
     index: &BundleIndex,
     ts: i64,
+    interval_secs: i64,
     variables: &HashMap<String, Decimal>,
 ) -> Option<Decimal> {
     match reference {
         Reference::Const { value } => value.parse::<Decimal>().ok(),
-        Reference::Source { source } => source_value(source, index, ts),
+        Reference::Source { source } => source_value(source, index, ts, interval_secs),
         Reference::Var { var } => variables.get(var).copied(),
     }
 }
@@ -495,6 +558,7 @@ fn run_action_chain(
     policy: &ResolvedPolicy,
     ts_iso: &str,
     tick_index: usize,
+    equity: Decimal,
     events: &mut Vec<Event>,
     resting: &mut Vec<RestingOrder>,
     order_seq: &mut u64,
@@ -513,7 +577,7 @@ fn run_action_chain(
         // yield deposit whose gas can't be covered — leaves the real ledger
         // untouched, so individual models don't need to hand-roll rollbacks.
         let mut trial = ledger.clone();
-        match execute_action(action, &mut trial, ctx, policy) {
+        match execute_action(action, &mut trial, ctx, policy, equity) {
             ActionOutcome::Executed(fill) => {
                 *ledger = trial; // commit the trial copy
                 events.push(Event {
@@ -587,6 +651,7 @@ fn fill_resting_orders(
     ledger: &mut Ledger,
     index: &BundleIndex,
     policy: &ResolvedPolicy,
+    equity: Decimal,
     events: &mut Vec<Event>,
     resting: &mut Vec<RestingOrder>,
     order_seq: &mut u64,
@@ -653,8 +718,8 @@ fn fill_resting_orders(
                 // The order's downstream chain runs now, at the fill bar.
                 for target in &order.downstream {
                     run_action_chain(
-                        target, exec_graph, ledger, &ctx, policy, ts_iso, tick_index, events,
-                        resting, order_seq,
+                        target, exec_graph, ledger, &ctx, policy, ts_iso, tick_index, equity,
+                        events, resting, order_seq,
                     );
                 }
             }
@@ -680,42 +745,147 @@ fn execute_action(
     ledger: &mut Ledger,
     ctx: &dyn MarketContext,
     policy: &ResolvedPolicy,
+    equity: Decimal,
 ) -> ActionOutcome {
     match action.subtype.as_str() {
         "swap" => match serde_json::from_value::<SwapConfig>(action.config.clone()) {
-            Ok(cfg) if is_limit(&cfg.order_type) => match place_swap_limit(&cfg) {
-                LimitPlacement::Placed(placed) => ActionOutcome::Resting(RestingSpec {
-                    placed,
-                    expire_after_bars: resolve_expiry(&cfg.time_in_force, cfg.expire_after_bars),
-                    kind: RestingKind::Swap(cfg),
-                }),
-                LimitPlacement::Rejected(e) => ActionOutcome::Rejected(e),
-            },
-            Ok(cfg) => execute_swap(ledger, ctx, policy, &cfg).into(),
+            Ok(mut cfg) => {
+                // A swap has no distinct "position"; both balance/position bases
+                // resolve against the from-asset balance. pct_portfolio converts
+                // the USD slice back into from-asset units via its price.
+                let bal = ledger.balance(&cfg.chain, &cfg.from_asset);
+                let unit_price = asset_price(ctx, &cfg.chain, &cfg.from_asset);
+                match resolve_amount(&cfg.amount, bal, bal, equity, unit_price) {
+                    Ok(a) => cfg.amount = a,
+                    Err(e) => return ActionOutcome::Rejected(e),
+                }
+                if is_limit(&cfg.order_type) {
+                    match place_swap_limit(&cfg) {
+                        LimitPlacement::Placed(placed) => ActionOutcome::Resting(RestingSpec {
+                            placed,
+                            expire_after_bars: resolve_expiry(
+                                &cfg.time_in_force,
+                                cfg.expire_after_bars,
+                            ),
+                            kind: RestingKind::Swap(cfg),
+                        }),
+                        LimitPlacement::Rejected(e) => ActionOutcome::Rejected(e),
+                    }
+                } else {
+                    execute_swap(ledger, ctx, policy, &cfg).into()
+                }
+            }
             Err(e) => ActionOutcome::Rejected(format!("bad swap config: {e}")),
         },
         "perp_order" => match serde_json::from_value::<PerpOrderConfig>(action.config.clone()) {
-            Ok(cfg) if is_limit(&cfg.order_type) => match place_perp_limit(ledger, &cfg) {
-                LimitPlacement::Placed(placed) => ActionOutcome::Resting(RestingSpec {
-                    placed,
-                    expire_after_bars: resolve_expiry(&cfg.time_in_force, cfg.expire_after_bars),
-                    kind: RestingKind::Perp(cfg),
-                }),
-                LimitPlacement::Rejected(e) => ActionOutcome::Rejected(e),
-            },
-            Ok(cfg) => execute_perp(ledger, ctx, policy, &cfg).into(),
+            Ok(mut cfg) => {
+                let bal = ledger.balance(&cfg.chain, "USDC");
+                let position = ledger
+                    .perp(&cfg.chain, &cfg.symbol)
+                    .map(|p| (p.size * p.entry_price).abs())
+                    .unwrap_or(Decimal::ZERO);
+                // size_usd is already USD, so pct_portfolio needs no conversion.
+                match resolve_amount(&cfg.size_usd, bal, position, equity, Decimal::ONE) {
+                    Ok(a) => cfg.size_usd = a,
+                    Err(e) => return ActionOutcome::Rejected(e),
+                }
+                if is_limit(&cfg.order_type) {
+                    match place_perp_limit(ledger, &cfg) {
+                        LimitPlacement::Placed(placed) => ActionOutcome::Resting(RestingSpec {
+                            placed,
+                            expire_after_bars: resolve_expiry(
+                                &cfg.time_in_force,
+                                cfg.expire_after_bars,
+                            ),
+                            kind: RestingKind::Perp(cfg),
+                        }),
+                        LimitPlacement::Rejected(e) => ActionOutcome::Rejected(e),
+                    }
+                } else {
+                    execute_perp(ledger, ctx, policy, &cfg).into()
+                }
+            }
             Err(e) => ActionOutcome::Rejected(format!("bad perp config: {e}")),
         },
-        "yield_deposit" => match serde_json::from_value(action.config.clone()) {
-            Ok(cfg) => execute_yield_deposit(ledger, ctx, policy, &cfg).into(),
+        "yield_deposit" => match serde_json::from_value::<YieldConfig>(action.config.clone()) {
+            Ok(mut cfg) => match resolve_yield_amount(&mut cfg, ledger, ctx, equity) {
+                Ok(()) => execute_yield_deposit(ledger, ctx, policy, &cfg).into(),
+                Err(e) => ActionOutcome::Rejected(e),
+            },
             Err(e) => ActionOutcome::Rejected(format!("bad yield config: {e}")),
         },
-        "yield_withdraw" => match serde_json::from_value(action.config.clone()) {
-            Ok(cfg) => execute_yield_withdraw(ledger, ctx, policy, &cfg).into(),
+        "yield_withdraw" => match serde_json::from_value::<YieldConfig>(action.config.clone()) {
+            Ok(mut cfg) => match resolve_yield_amount(&mut cfg, ledger, ctx, equity) {
+                Ok(()) => execute_yield_withdraw(ledger, ctx, policy, &cfg).into(),
+                Err(e) => ActionOutcome::Rejected(e),
+            },
             Err(e) => ActionOutcome::Rejected(format!("bad yield config: {e}")),
         },
         other => ActionOutcome::rejected_subtype(other),
     }
+}
+
+/// Mark price of `asset` on `venue` for unit conversion (1 for stables).
+fn asset_price(ctx: &dyn MarketContext, venue: &str, asset: &str) -> Decimal {
+    if is_stable(asset) {
+        Decimal::ONE
+    } else {
+        ctx.bar(venue, asset).map(|b| b.close).unwrap_or(Decimal::ZERO)
+    }
+}
+
+/// Resolve a relative [`Amount`] to an absolute decimal string against the
+/// supplied bases. `pct_portfolio` is a USD slice of total equity; for
+/// unit-denominated actions (swap/yield) it is converted to asset units via
+/// `unit_price` (1 for USD-denominated perp size).
+fn resolve_amount(
+    amount: &Amount,
+    balance: Decimal,
+    position: Decimal,
+    equity: Decimal,
+    unit_price: Decimal,
+) -> Result<Amount, String> {
+    match amount {
+        Amount::Absolute(_) => Ok(amount.clone()),
+        Amount::Relative { basis, value } => {
+            let pct = value.parse::<Decimal>().unwrap_or(Decimal::ZERO) / Decimal::from(100);
+            let resolved = match basis {
+                AmountBasis::PctBalance => pct * balance,
+                AmountBasis::PctPosition => pct * position,
+                AmountBasis::PctPortfolio => {
+                    if unit_price.is_zero() {
+                        return Err(
+                            "pct_portfolio sizing needs a price for the action asset".to_string()
+                        );
+                    }
+                    pct * equity / unit_price
+                }
+            };
+            Ok(Amount::Absolute(resolved.normalize().to_string()))
+        }
+    }
+}
+
+fn resolve_yield_amount(
+    cfg: &mut YieldConfig,
+    ledger: &Ledger,
+    ctx: &dyn MarketContext,
+    equity: Decimal,
+) -> Result<(), String> {
+    let balance = ledger.balance(&cfg.chain, &cfg.asset);
+    let position = ledger
+        .yields()
+        .find(|y| {
+            y.protocol == cfg.protocol
+                && y.asset == cfg.asset
+                && y.chain == cfg.chain
+                && y.pool == cfg.pool
+        })
+        .map(|y| y.principal + y.accrued)
+        .unwrap_or(Decimal::ZERO);
+    let unit_price = asset_price(ctx, &cfg.chain, &cfg.asset);
+    cfg.amount = resolve_amount(&cfg.amount, balance, position, equity, unit_price)?;
+    Ok(())
 }
 
 impl ActionOutcome {
