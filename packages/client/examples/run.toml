@@ -1,0 +1,31 @@
+# Example run file for `catalyst-bt`.
+#
+# A run = graph + config + policy. The graph lives in its own JSON file and is
+# referenced here by path (relative to this file). Everything the graph alone
+# doesn't express — the period, interval, starting portfolio, policy, and
+# execution overrides — lives below.
+#
+# Market data is intentionally absent: the service loads it from its own store
+# for the [config] window. Pass `--market-data bundle.json` to send one inline.
+#
+#   catalyst-bt run packages/client/examples/run.toml --wait
+
+graph = "../../../strategies/graphs/g05_hl_perp_open_long.json"
+policy = "strict_v1"   # strict_v1 | conservative_v1 | research_v1
+
+[config]
+# HL-native 1h candles only reach back to ~2025-12-31 (the API's 5,000-candle
+# cap); for a longer window use interval = "4h" (reaches ~2024-02). See
+# docs/market-data-intervals.md.
+start = "2026-01-01T00:00:00Z"
+end = "2026-06-01T00:00:00Z"
+interval = "1h"
+
+# venue -> asset -> decimal-string amount
+[config.initial_portfolio.hyperliquid]
+USDC = "10000"
+
+# Optional execution overrides (all optional; omit to use the policy defaults).
+[config.execution]
+slippage_bps = "10"
+gas_model = "none"   # hyperliquid is gasless

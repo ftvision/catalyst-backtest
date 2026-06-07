@@ -17,6 +17,7 @@ dev = [
   "catalyst-market-data",
   "catalyst-market-data-dune",
   "catalyst-market-data-bigquery",
+  "catalyst-client",
 ]
 
 [tool.uv.workspace]
@@ -30,6 +31,7 @@ catalyst-market-data-core = { workspace = true }
 catalyst-market-data = { workspace = true }
 catalyst-market-data-dune = { workspace = true }
 catalyst-market-data-bigquery = { workspace = true }
+catalyst-client = { workspace = true }
 
 [tool.ruff]
 line-length = 100
