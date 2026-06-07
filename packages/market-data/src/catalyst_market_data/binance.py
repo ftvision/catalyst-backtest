@@ -16,7 +16,7 @@ from typing import Any, Callable
 
 from catalyst_contracts import Candle
 
-from .parquet_store import ParquetStore
+from catalyst_market_data_core import ParquetStore
 
 # Public market-data mirror: same API shape as api.binance.com but keyless and
 # not geo-restricted (api.binance.com returns 451 from many regions).

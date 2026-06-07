@@ -31,7 +31,8 @@ from .evm_gas import (
     ingest_constant_gas,
     ingest_recent_gas,
 )
-from .parquet_store import ParquetSource, ParquetStore
+from catalyst_market_data_core import ParquetSource, ParquetStore
+
 from .sources import FixtureSource, MarketDataSource
 
 __version__ = "0.1.0"

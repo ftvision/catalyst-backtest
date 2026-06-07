@@ -23,7 +23,7 @@ from typing import Any, Callable
 
 from catalyst_contracts.market_data import GasPoint
 
-from .parquet_store import ParquetStore
+from catalyst_market_data_core import ParquetStore
 
 # transport(rpc_url, method, params) -> JSON-RPC "result"
 RpcTransport = Callable[[str, str, list], Any]
