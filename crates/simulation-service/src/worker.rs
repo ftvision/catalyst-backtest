@@ -36,7 +36,13 @@ pub async fn run_job(state: &AppState, id: &str) {
         None => match state.store_root() {
             Some(root) => {
                 let reference = support::bundle_ref(root, &compiled);
-                match load_bundle(&reference, &req.config.start, &req.config.end, &req.config.interval)
+                // Load extra history before `start` so derived signals warm up.
+                let load_start = support::warmup_start(
+                    &req.config.start,
+                    &req.config.interval,
+                    compiled.data_requirements.lookback_bars,
+                );
+                match load_bundle(&reference, &load_start, &req.config.end, &req.config.interval)
                     .await
                 {
                     Ok(b) => b,
