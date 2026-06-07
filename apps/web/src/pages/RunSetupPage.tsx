@@ -208,6 +208,7 @@ export function RunSetupPage({
               onSelect={onSelectMarketData}
               disabled={selectorDisabled}
               warnings={activeMarketWarnings}
+              requiredKinds={setup.coverage.map((item) => item.kind)}
             />
           </SetupModule>
 

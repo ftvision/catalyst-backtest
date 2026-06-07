@@ -71,7 +71,10 @@ export interface MarketDataCatalogItem {
   venue?: string;
   symbol?: string;
   quote?: string;
+  protocol?: string;
+  asset?: string;
   chain?: string;
+  pool?: string;
   interval?: string;
   start?: string | null;
   end?: string | null;

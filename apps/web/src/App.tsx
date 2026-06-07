@@ -124,34 +124,106 @@ function stringConfig(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
-function requiredCandlePairs(graph: CatalystGraph): Array<{ venue: string; symbol: string }> {
-  const pairs = new Map<string, { venue: string; symbol: string }>();
+function objectConfig(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+type MarketRequirement =
+  | { kind: "candles"; venue: string; symbol: string }
+  | { kind: "funding"; venue: string; symbol: string }
+  | { kind: "gas"; chain: string }
+  | { kind: "yields"; protocol: string; asset: string; chain: string; pool?: string };
+
+function requirementKey(req: MarketRequirement) {
+  if (req.kind === "candles" || req.kind === "funding") return `${req.kind}:${req.venue}:${req.symbol}`;
+  if (req.kind === "gas") return `${req.kind}:${req.chain}`;
+  return `${req.kind}:${req.protocol}:${req.asset}:${req.chain}:${req.pool ?? ""}`;
+}
+
+function requiredMarketData(graph: CatalystGraph): MarketRequirement[] {
+  const requirements = new Map<string, MarketRequirement>();
   const stableAssets = new Set(["USD", "USDC", "USDT", "DAI"]);
+
+  const add = (req: MarketRequirement) => {
+    requirements.set(requirementKey(req), req);
+  };
+  const addCandle = (venue: string, symbol: string) => {
+    const req: MarketRequirement = { kind: "candles", venue, symbol };
+    add(req);
+  };
+  const addGas = (chain: string) => {
+    if (chain !== "hyperliquid") add({ kind: "gas", chain });
+  };
+  const addYield = (config: Record<string, unknown>) => {
+    const protocol = stringConfig(config.protocol);
+    const asset = stringConfig(config.asset);
+    const chain = stringConfig(config.chain);
+    if (!protocol || !asset || !chain) return;
+    add({ kind: "yields", protocol, asset, chain, pool: stringConfig(config.pool) });
+    addGas(chain);
+  };
+  const addThresholdSource = (source: unknown) => {
+    const config = objectConfig(source);
+    if (config?.kind === "yield") addYield(config);
+    if (config?.kind === "funding") {
+      const venue = stringConfig(config.venue);
+      const symbol = stringConfig(config.symbol);
+      if (venue && symbol) add({ kind: "funding", venue, symbol });
+    }
+    if (config?.kind === "price") {
+      const venue = stringConfig(config.venue);
+      const symbol = stringConfig(config.symbol);
+      if (venue && symbol) addCandle(venue, symbol);
+    }
+  };
 
   graph.nodes.forEach((node) => {
     const config = node.config ?? {};
     if (node.subtype === "perp_order") {
       const venue = stringConfig(config.chain);
       const symbol = stringConfig(config.symbol);
-      if (venue && symbol) pairs.set(`${venue}:${symbol}`, { venue, symbol });
+      if (venue && symbol) {
+        addCandle(venue, symbol);
+        add({ kind: "funding", venue, symbol });
+      }
     }
     if (node.subtype === "swap") {
       const venue = stringConfig(config.chain);
       [stringConfig(config.from_asset), stringConfig(config.to_asset)].forEach((asset) => {
-        if (venue && asset && !stableAssets.has(asset)) pairs.set(`${venue}:${asset}`, { venue, symbol: asset });
+        if (venue && asset && !stableAssets.has(asset)) addCandle(venue, asset);
       });
+      if (venue) addGas(venue);
+    }
+    if (node.subtype === "yield_deposit" || node.subtype === "yield_withdraw") addYield(config);
+    if (node.subtype === "threshold") {
+      addThresholdSource(config.source);
+      const reference = objectConfig(config.reference);
+      if (reference?.source) addThresholdSource(reference.source);
     }
   });
 
-  return Array.from(pairs.values());
+  return Array.from(requirements.values());
 }
 
 function compatibleMarketItem(graph: CatalystGraph, catalog: MarketDataCatalogItem[]) {
-  const required = requiredCandlePairs(graph);
-  const candleItems = catalog.filter((item) => item.kind === "candles");
-  if (required.length === 0) return candleItems[0];
-  return candleItems.find((item) =>
-    required.some((req) => item.venue === req.venue && item.symbol === req.symbol),
+  const required = requiredMarketData(graph);
+  if (required.length === 0) return catalog.find((item) => item.kind === "candles") ?? catalog[0];
+  return catalog.find((item) =>
+    required.some((req) => {
+      if (req.kind !== item.kind) return false;
+      if (req.kind === "candles" || req.kind === "funding") {
+        return item.venue === req.venue && item.symbol === req.symbol;
+      }
+      if (req.kind === "gas") return item.chain === req.chain;
+      return (
+        item.protocol === req.protocol &&
+        item.asset === req.asset &&
+        item.chain === req.chain &&
+        (item.pool ?? undefined) === req.pool
+      );
+    }),
   );
 }
 
