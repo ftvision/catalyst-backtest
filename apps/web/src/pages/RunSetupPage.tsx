@@ -17,6 +17,7 @@ import { Play, ShieldAlert } from "lucide-react";
 import { DataTable } from "../components/DataTable";
 import { SectionHeader } from "../components/SectionHeader";
 import { StatusBadge } from "../components/StatusBadge";
+import type { StrategyListItem, StrategyScenarioListItem } from "../api/client";
 import type { GraphSummary, SetupData } from "../types";
 
 export function RunSetupPage({
@@ -27,6 +28,13 @@ export function RunSetupPage({
   runLabel = "Run backtest",
   runDisabled = false,
   dataSourceLabel = "Parquet store",
+  strategies = [],
+  selectedStrategyId,
+  onSelectStrategy,
+  scenarios = [],
+  selectedScenarioId,
+  onSelectScenario,
+  selectorDisabled = false,
 }: {
   graph: GraphSummary;
   setup: SetupData;
@@ -35,7 +43,23 @@ export function RunSetupPage({
   runLabel?: string;
   runDisabled?: boolean;
   dataSourceLabel?: string;
+  strategies?: StrategyListItem[];
+  selectedStrategyId?: string;
+  onSelectStrategy?: (id: string) => void;
+  scenarios?: StrategyScenarioListItem[];
+  selectedScenarioId?: string;
+  onSelectScenario?: (id: string) => void;
+  selectorDisabled?: boolean;
 }) {
+  const strategyOptions = strategies.map((strategy) => ({
+    value: strategy.id,
+    label: strategy.title,
+  }));
+  const scenarioOptions = scenarios.map((scenario) => ({
+    value: scenario.id,
+    label: scenario.title,
+  }));
+
   return (
     <Stack gap="md">
       <SectionHeader
@@ -63,6 +87,25 @@ export function RunSetupPage({
               </Stack>
               <StatusBadge status={graph.status} />
             </Group>
+
+            <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
+              <Select
+                label="Strategy"
+                value={selectedStrategyId}
+                data={strategyOptions}
+                onChange={(value) => value && onSelectStrategy?.(value)}
+                disabled={selectorDisabled || strategyOptions.length === 0}
+                searchable
+              />
+              <Select
+                label="Market scenario"
+                value={selectedScenarioId}
+                data={scenarioOptions}
+                onChange={(value) => value && onSelectScenario?.(value)}
+                disabled={selectorDisabled || scenarioOptions.length === 0}
+                searchable
+              />
+            </SimpleGrid>
 
             <SimpleGrid cols={3} spacing="xs">
               <Paper className="panel-muted" p="xs">

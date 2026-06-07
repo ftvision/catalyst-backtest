@@ -5,11 +5,15 @@
 //!   (local path, `file://`, `s3://...`, `gs://...`); optional.
 //! - Worker pool size (queue drainers): `CATALYST_SIM_WORKERS` (default 4).
 //! - Job queue capacity: `CATALYST_SIM_QUEUE` (default 1024).
+//! - Strategy dataset root: `CATALYST_STRATEGY_ROOT` (default repo `strategies/`).
 
 use catalyst_simulation_service::{app, AppState};
 
 fn env_usize(key: &str, default: usize) -> usize {
-    std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
 }
 
 #[tokio::main]
@@ -26,5 +30,7 @@ async fn main() {
         .await
         .unwrap_or_else(|e| panic!("failed to bind {bind}: {e}"));
     println!("catalyst-backtest-service listening on http://{bind} ({workers} workers)");
-    axum::serve(listener, app(state)).await.expect("server error");
+    axum::serve(listener, app(state))
+        .await
+        .expect("server error");
 }
