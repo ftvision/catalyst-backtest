@@ -82,5 +82,7 @@ Backend integration targets:
 - `GET /backtests/{id}/metadata`
 - `GET /backtests?graph_hash=...`
 - `POST /backtests/preview`
+- `GET /market-data/catalog`
 - `POST /market-data/coverage`
+- `POST /market-data/window`
 - `GET /policy-profiles`

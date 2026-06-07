@@ -19,6 +19,7 @@ import {
   Download,
   FileChartColumn,
   Gauge,
+  History,
   Play,
 } from "lucide-react";
 import {
@@ -34,8 +35,10 @@ import {
   ApiError,
   catalystApi,
   type BacktestConfig,
+  type BacktestListItem,
   type BacktestStatus,
   type CatalystGraph,
+  type MarketDataCatalogItem,
   type MarketDataBundle,
   type StrategyListItem,
   type StrategyScenarioListItem,
@@ -46,15 +49,18 @@ import { EventLensPage } from "./pages/EventLensPage";
 import { MarketReplayPage } from "./pages/MarketReplayPage";
 import { ResultReviewPage } from "./pages/ResultReviewPage";
 import { RunSetupPage } from "./pages/RunSetupPage";
+import { SimulationHistoryPage } from "./pages/SimulationHistoryPage";
+import { marketCatalogId } from "./components/MarketDataSelector";
 import type { AuditData, GraphSummary, MarketReplayData, ResultData, SetupData } from "./types";
 
-type RouteId = "setup" | "replay" | "lens" | "result";
+type RouteId = "setup" | "replay" | "lens" | "result" | "history";
 
 const routes: Array<{ id: RouteId; label: string; icon: React.ReactNode }> = [
   { id: "setup", label: "Run Setup", icon: <Gauge size={14} /> },
   { id: "replay", label: "Market Replay", icon: <CandlestickChart size={14} /> },
   { id: "lens", label: "Event Lens", icon: <Activity size={14} /> },
   { id: "result", label: "Result Review", icon: <FileChartColumn size={14} /> },
+  { id: "history", label: "History", icon: <History size={14} /> },
 ];
 
 type ApiStatus = "checking" | "healthy" | "offline" | "running" | "failed";
@@ -68,6 +74,7 @@ interface WorkbenchState {
   result: ResultData;
   audit: AuditData;
   runHistory: Array<Record<string, string>>;
+  historyItems: BacktestListItem[];
 }
 
 interface ActiveSelection {
@@ -97,6 +104,9 @@ export function App() {
   const [strategyLoading, setStrategyLoading] = useState(false);
   const [strategies, setStrategies] = useState<StrategyListItem[]>([]);
   const [scenarios, setScenarios] = useState<StrategyScenarioListItem[]>([]);
+  const [marketCatalog, setMarketCatalog] = useState<MarketDataCatalogItem[]>([]);
+  const [marketWarnings, setMarketWarnings] = useState<string[]>([]);
+  const [selectedMarketDataId, setSelectedMarketDataId] = useState<string>();
   const [activeGraph, setActiveGraph] = useState<CatalystGraph>(demoGraph);
   const [activeConfig, setActiveConfig] = useState<BacktestConfig>(demoConfig);
   const [activeMarketData, setActiveMarketData] = useState<MarketDataBundle>(demoMarketData);
@@ -113,6 +123,7 @@ export function App() {
     result,
     audit,
     runHistory,
+    historyItems: [],
   });
   const clipboard = useClipboard({ timeout: 900 });
 
@@ -122,7 +133,16 @@ export function App() {
   );
 
   const dataSourceLabel =
-    dataSourceMode === "store" ? "Parquet store" : `Scenario: ${activeSelection.scenarioTitle}`;
+    dataSourceMode === "store" ? "Parquet store" : "Inline fallback";
+
+  function configFromMarketItem(base: BacktestConfig, item?: MarketDataCatalogItem): BacktestConfig {
+    return {
+      ...base,
+      start: item?.start ?? base.start,
+      end: item?.end ?? base.end,
+      interval: item?.interval ?? base.interval,
+    };
+  }
 
   async function hydrateWorkbench(input: {
     graph: CatalystGraph;
@@ -135,9 +155,9 @@ export function App() {
     scenarioTitle: string;
     sourceMode: DataSourceMode;
     profiles?: Array<{ id: string; label?: string }>;
+    marketDataId?: string;
   }) {
-    const sourceLabel =
-      input.sourceMode === "store" ? "Parquet store" : `Scenario: ${input.scenarioTitle}`;
+    const sourceLabel = input.sourceMode === "store" ? "Parquet store" : "Inline fallback";
     const [profiles, preview, coverage] = await Promise.all([
       input.profiles ? Promise.resolve({ items: input.profiles }) : catalystApi.listPolicyProfiles(),
       catalystApi.previewGraph(input.graph, { profile: input.policyProfile }),
@@ -155,6 +175,7 @@ export function App() {
     setActiveGraph(input.graph);
     setActiveConfig(input.config);
     setActiveMarketData(input.marketData);
+    setSelectedMarketDataId(input.marketDataId);
     setActiveSelection({
       strategyId: input.strategyId,
       strategyTitle: input.strategyTitle,
@@ -179,34 +200,99 @@ export function App() {
         profiles: profiles.items,
       }),
       runHistory: history.items.length ? runHistoryFromApi(history.items) : current.runHistory,
+      historyItems: history.items,
     }));
     setApiStatus("healthy");
     setApiMessage(`Connected to ${catalystApi.baseUrl} / ${sourceLabel}`);
   }
 
-  async function loadStrategySelection(strategyId: string, scenarioId = activeSelection.scenarioId) {
+  async function hydrateWithMarketItem(input: {
+    graph: CatalystGraph;
+    baseConfig: BacktestConfig;
+    policyProfile: string;
+    strategyId: string;
+    strategyTitle: string;
+    marketItem?: MarketDataCatalogItem;
+    profiles?: Array<{ id: string; label?: string }>;
+  }) {
+    const config = configFromMarketItem(input.baseConfig, input.marketItem);
+    if (input.marketItem) {
+      const marketData = await catalystApi.loadMarketDataWindow({
+        graph: input.graph,
+        start: config.start,
+        end: config.end,
+        interval: config.interval,
+      });
+      await hydrateWorkbench({
+        graph: input.graph,
+        config,
+        marketData,
+        policyProfile: input.policyProfile,
+        strategyId: input.strategyId,
+        strategyTitle: input.strategyTitle,
+        scenarioId: "local-market-data",
+        scenarioTitle: "Local market data",
+        sourceMode: "store",
+        profiles: input.profiles,
+        marketDataId: input.marketItem ? marketCatalogId(input.marketItem) : undefined,
+      });
+      return;
+    }
+    await hydrateWorkbench({
+      graph: input.graph,
+      config: input.baseConfig,
+      marketData: demoMarketData,
+      policyProfile: input.policyProfile,
+      strategyId: input.strategyId,
+      strategyTitle: input.strategyTitle,
+      scenarioId: "inline-fallback",
+      scenarioTitle: "Inline fallback",
+      sourceMode: "inline",
+      profiles: input.profiles,
+    });
+  }
+
+  async function loadStrategySelection(strategyId: string) {
     try {
       setStrategyLoading(true);
       setApiStatus("checking");
       setApiMessage(`Loading ${strategyId}`);
-      const [strategy, scenario] = await Promise.all([
-        catalystApi.getStrategy(strategyId),
-        catalystApi.getStrategyScenario(scenarioId),
-      ]);
-      await hydrateWorkbench({
+      const strategy = await catalystApi.getStrategy(strategyId);
+      const marketItem = marketCatalog.find((item) => marketCatalogId(item) === selectedMarketDataId) ?? marketCatalog.find((item) => item.kind === "candles");
+      await hydrateWithMarketItem({
         graph: strategy.graph,
-        config: scenario.scenario.config,
-        marketData: scenario.scenario.market_data,
-        policyProfile: scenario.scenario.policy?.profile ?? workbench.setup.policy,
+        baseConfig: activeConfig,
+        policyProfile: workbench.setup.policy,
         strategyId: strategy.id,
         strategyTitle: strategy.title,
-        scenarioId: scenario.id,
-        scenarioTitle: scenario.title,
-        sourceMode: "inline",
+        marketItem,
       });
       setSelectedEventId((current) => {
         const stillExists = workbench.marketReplay.events.some((event) => event.id === current);
         return stillExists ? current : marketReplay.selectedEventId;
+      });
+    } catch (error) {
+      setApiStatus("failed");
+      setApiMessage(errorMessage(error));
+    } finally {
+      setStrategyLoading(false);
+    }
+  }
+
+  async function loadMarketSelection(id: string) {
+    const marketItem = marketCatalog.find((item) => marketCatalogId(item) === id);
+    if (!marketItem) return;
+    try {
+      setStrategyLoading(true);
+      setApiStatus("checking");
+      setApiMessage(`Loading ${marketItem.venue ?? marketItem.chain ?? "market"} ${marketItem.symbol ?? ""}`);
+      await hydrateWithMarketItem({
+        graph: activeGraph,
+        baseConfig: activeConfig,
+        policyProfile: workbench.setup.policy,
+        strategyId: activeSelection.strategyId,
+        strategyTitle: activeSelection.strategyTitle,
+        marketItem,
       });
     } catch (error) {
       setApiStatus("failed");
@@ -224,10 +310,11 @@ export function App() {
         setApiStatus("checking");
         setApiMessage(`Checking ${catalystApi.baseUrl}`);
         await catalystApi.health();
-        const [profiles, strategyList, scenarioList] = await Promise.all([
+        const [profiles, strategyList, scenarioList, catalog] = await Promise.all([
           catalystApi.listPolicyProfiles(),
           catalystApi.listStrategies(),
           catalystApi.listStrategyScenarios(),
+          catalystApi.listMarketDataCatalog().catch(() => ({ source: "parquet-store", items: [], warnings: ["Market data catalog unavailable."] })),
         ]);
         const selectedStrategy = strategyList.items[0];
         const selectedScenario = scenarioList.items[0];
@@ -241,6 +328,21 @@ export function App() {
 
         setStrategies(strategyList.items);
         setScenarios(scenarioList.items);
+        setMarketCatalog(catalog.items);
+        setMarketWarnings(catalog.warnings ?? []);
+        const marketItem = catalog.items.find((item) => item.kind === "candles");
+        if (marketItem) {
+          await hydrateWithMarketItem({
+            graph: strategy.graph,
+            baseConfig: scenario.scenario.config,
+            policyProfile: scenario.scenario.policy?.profile ?? setup.policy,
+            strategyId: strategy.id,
+            strategyTitle: strategy.title,
+            marketItem,
+            profiles: profiles.items,
+          });
+          return;
+        }
         await hydrateWorkbench({
           graph: strategy.graph,
           config: scenario.scenario.config,
@@ -342,6 +444,7 @@ export function App() {
         result: review,
         audit: auditData,
         runHistory: history.items.length ? runHistoryFromApi(history.items) : current.runHistory,
+        historyItems: history.items,
       }));
       setSelectedEventId(replay.selectedEventId);
       setRunStatus("succeeded");
@@ -439,14 +542,14 @@ export function App() {
             onRun={runBacktest}
             runLabel={runLabel}
             runDisabled={isRunning}
-            dataSourceLabel={dataSourceLabel}
             strategies={strategies}
             selectedStrategyId={activeSelection.strategyId}
-            onSelectStrategy={(id) => void loadStrategySelection(id, activeSelection.scenarioId)}
-            scenarios={scenarios}
-            selectedScenarioId={activeSelection.scenarioId}
-            onSelectScenario={(id) => void loadStrategySelection(activeSelection.strategyId, id)}
+            onSelectStrategy={(id) => void loadStrategySelection(id)}
             selectorDisabled={isRunning}
+            marketCatalog={marketCatalog}
+            selectedMarketDataId={selectedMarketDataId}
+            onSelectMarketData={(id) => void loadMarketSelection(id)}
+            marketWarnings={marketWarnings}
           />
         ) : null}
         {activeRoute === "replay" ? (
@@ -473,6 +576,16 @@ export function App() {
         ) : null}
         {activeRoute === "result" ? (
           <ResultReviewPage graph={workbench.graph} setup={workbench.setup} result={workbench.result} />
+        ) : null}
+        {activeRoute === "history" ? (
+          <SimulationHistoryPage
+            items={workbench.historyItems}
+            fallbackRows={workbench.runHistory}
+            setup={workbench.setup}
+            result={workbench.result}
+            onOpenResult={() => setActiveRoute("result")}
+            onReplayEvents={() => setActiveRoute("replay")}
+          />
         ) : null}
       </main>
     </div>
