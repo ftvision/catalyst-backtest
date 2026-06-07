@@ -43,7 +43,8 @@ Put it entirely on one side; let the other side call across a thin seam.
 4. **The only permitted cross-language overlap is data *shapes*** — the
    JSON-Schema contracts in `schemas/`, projected to Rust `serde` and Python
    `pydantic`, single-sourced and guarded by round-trip fixtures. Python
-   `catalyst-contracts` survives solely to deserialize results in notebooks.
+   `catalyst-contracts` survives to deserialize results (notebooks/analysis) and
+   to back the `catalyst-bt` CLI client (`packages/client`).
 
 ## Consequences
 

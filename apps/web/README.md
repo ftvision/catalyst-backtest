@@ -86,3 +86,19 @@ Backend integration targets:
 - `POST /market-data/coverage`
 - `POST /market-data/window`
 - `GET /policy-profiles`
+- `GET /strategies`, `GET /strategies/{id}`
+- `GET /strategy-scenarios`, `GET /strategy-scenarios/{id}`
+
+## Deployment
+
+Deployed to **Cloudflare Pages** at
+<https://catalyst-backtest-web.pages.dev>. Config is in `wrangler.toml`
+(`name = "catalyst-backtest-web"`, build output `dist/`). Production points at the
+deployed API via `.env.production` (see `.env.production.example`:
+`VITE_CATALYST_API_BASE=https://catalyst-backtest-api.fly.dev`).
+
+```bash
+npm run build                 # -> dist/
+# deploy from the repo root (wraps wrangler):
+./scripts/deploy-web-cloudflare.sh   # or: make deploy-web
+```

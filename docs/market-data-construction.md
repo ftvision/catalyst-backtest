@@ -123,7 +123,8 @@ uv run python scripts/validate_market_data.py \
     --venue base --symbol ETH --interval 1h --ref-venue binance --write
 ```
 
-`--write` records the report in `_quality.json`'s sibling `_validation.json`.
+`--write` records the report in a `_validation.json` sidecar at the store root
+(next to `_quality.json`).
 
 **Interpreting results.** A 2% tolerance is strict; a handful of candles over it
 on a DEX-vs-feed comparison is expected (genuine cross-venue basis during

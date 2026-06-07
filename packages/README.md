@@ -4,10 +4,10 @@ Python packages are managed with `uv`.
 
 Per [ADR 0001](../docs/adr/0001-language-boundary.md) the deterministic run path
 (compile → run → summarize) is Rust. Python's role is **data ingestion** and
-**analysis**; the boundary between the two is the Parquet store and the Rust
-service's HTTP API. The run-path packages (`graph-compiler`, `result-reporter`,
-`backtest-worker`, `backtest-api`) were retired once their Rust equivalents
-landed.
+**clients** (a CLI + analysis/notebooks); the boundary between the two is the
+Parquet store and the Rust service's HTTP API. The run-path packages
+(`graph-compiler`, `result-reporter`, `backtest-worker`, `backtest-api`) were
+retired once their Rust equivalents landed.
 
 Packages:
 
@@ -21,6 +21,9 @@ Packages:
   (`catalyst-ingest-dune`).
 - `market-data-bigquery` — ingestion vendor: Google BigQuery public crypto
   datasets (`catalyst-ingest-bigquery`).
+- `client` — `catalyst-client`: the `catalyst-bt` CLI client for the Rust
+  service (submit/poll/fetch a backtest, inspect coverage/catalog), reusing the
+  `contracts` models. See [`client/README.md`](client/README.md).
 
 Each market-data **vendor** is its own package (its own CLI + credentials), all
 sharing `market-data-core` so the store format and fetch seam are single-sourced.

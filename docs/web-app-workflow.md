@@ -1,9 +1,20 @@
 # Web App — First Workflow & Screen IA
 
-This document settles the **first workflow** for the web app (issue #12) so a UI
-implementation issue can be filed against it. It is grounded in the contracts and
-API that already exist in this repo (`POST /backtests`, the policy profiles, and
-`backtest-result.schema.json`).
+> **Status: superseded by the shipped app (kept for the original v1 framing).**
+> The workbench has since been built and grown past this spec — see
+> [`apps/web/`](../apps/web/) and its [README](../apps/web/README.md). What
+> changed: the two screens below became **six views** across a 4-route nav
+> (Run Setup, Market Data, History, and a Run Details view with Result Review /
+> Market Replay / Event Lens tabs); the "deferred" tech stack is decided
+> (React 19 + Vite + TypeScript + Mantine + Storybook); and graphs arrive from a
+> **bundled strategy repository** (`GET /strategies`) selected in-app with
+> editable variables, rather than being passed in from Catalyst. The product
+> thesis below (separate workbench, result-review-first, no freeform graph
+> canvas) still holds.
+
+This document settled the **first workflow** for the web app (issue #12). It is
+grounded in the contracts and API that already exist in this repo (`POST
+/backtests`, the policy profiles, and `backtest-result.schema.json`).
 
 ## Decisions (answers to the open questions)
 
