@@ -7,6 +7,7 @@ import { HelpCircle } from "lucide-react";
 import type { BacktestConfig, MarketDataCatalogItem, StrategyListItem } from "../api/client";
 import { DataTable } from "../components/DataTable";
 import { GraphTopologyPreview } from "../components/GraphTopologyPreview";
+import { InitialPortfolioEditor } from "../components/InitialPortfolioEditor";
 import { MarketDataSelector } from "../components/MarketDataSelector";
 import { ParametersPanel } from "../components/ParametersPanel";
 import { RunReadinessRail } from "../components/RunReadinessRail";
@@ -48,6 +49,8 @@ export function RunSetupPage({
   policyProfiles = [],
   onConfigChange,
   onPolicyChange,
+  initialPortfolio,
+  onPortfolioChange,
   variables = {},
   resolvedVariables,
   onVariablesChange,
@@ -71,6 +74,8 @@ export function RunSetupPage({
   policyProfiles?: Array<{ id: string; label?: string }>;
   onConfigChange?: (patch: Partial<Pick<BacktestConfig, "start" | "end" | "interval">>) => void;
   onPolicyChange?: (profile: string) => void;
+  initialPortfolio?: BacktestConfig["initial_portfolio"];
+  onPortfolioChange?: (portfolio: BacktestConfig["initial_portfolio"]) => void;
   variables?: Record<string, string | number | boolean>;
   resolvedVariables?: Record<string, unknown>;
   onVariablesChange?: (vars: Record<string, string>) => void;
@@ -121,7 +126,7 @@ export function RunSetupPage({
         detail: hasMarketData ? `${setup.interval} / ${setup.start}` : "No local series",
         status: hasMarketData ? coverageStatus : "danger",
       },
-      { id: "portfolio", label: "Portfolio", detail: `${setup.portfolio.length} balances`, status: setup.portfolio.length ? "success" : "danger" },
+      { id: "portfolio", label: "Balances", detail: `${setup.portfolio.length} rows`, status: setup.portfolio.length ? "success" : "danger" },
       { id: "configuration", label: "Configuration", detail: setup.policy, status: setup.policy ? "success" : "danger" },
     ],
     [coverageStatus, graph.hash, graph.nodeCount, graphStatus, hasMarketData, setup.interval, setup.policy, setup.portfolio.length, setup.start],
@@ -133,7 +138,7 @@ export function RunSetupPage({
     <Stack gap="md">
       <SectionHeader
         title="Run Setup"
-        subtitle="Confirm graph, local market data, portfolio, and policy before creating a run."
+        subtitle="Confirm graph, local market data, initial balances, and policy before creating a run."
       />
 
       <SetupStepStrip steps={steps} />
@@ -212,16 +217,24 @@ export function RunSetupPage({
             />
           </SetupModule>
 
-          <SetupModule title="Initial portfolio" subtitle="Starting balances passed into the simulator." status={setup.portfolio.length ? "success" : "danger"}>
-            <DataTable
-              columns={["Venue", "Asset", "Amount", "Weight"]}
-              rows={setup.portfolio.map((item) => [
-                item.venue,
-                item.asset,
-                <span className="mono">{item.amount}</span>,
-                item.percent,
-              ])}
-            />
+          <SetupModule title="Initial balances" subtitle="Starting balances passed into the simulator." status={setup.portfolio.length ? "success" : "danger"}>
+            {initialPortfolio && onPortfolioChange ? (
+              <InitialPortfolioEditor
+                portfolio={initialPortfolio}
+                onApply={onPortfolioChange}
+                disabled={selectorDisabled}
+              />
+            ) : (
+              <DataTable
+                columns={["Venue", "Asset", "Amount", "Weight"]}
+                rows={setup.portfolio.map((item) => [
+                  item.venue,
+                  item.asset,
+                  <span className="mono">{item.amount}</span>,
+                  item.percent,
+                ])}
+              />
+            )}
           </SetupModule>
 
           <SetupModule

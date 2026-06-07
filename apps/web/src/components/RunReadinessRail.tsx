@@ -43,7 +43,7 @@ export function RunReadinessRail({
   const checks = [
     { label: "Graph validated", value: graphStatus === "validated", detail: graphStatus },
     { label: "Market data coverage", value: marketDataReady, detail: marketDataDetail },
-    { label: "Portfolio present", value: setup.portfolio.length > 0, detail: `${setup.portfolio.length} balance rows` },
+    { label: "Initial balances present", value: setup.portfolio.length > 0, detail: `${setup.portfolio.length} balance rows` },
     { label: "Policy configured", value: Boolean(setup.policy), detail: setup.policy },
   ];
 

@@ -123,6 +123,26 @@ function mergeWarnings(...groups: Array<string[] | undefined>) {
   return Array.from(new Set(groups.flatMap((group) => group ?? [])));
 }
 
+function compactPortfolioAmount(value: string) {
+  const parsed = Number(value.replace(/,/g, ""));
+  if (!Number.isFinite(parsed)) return value;
+  return new Intl.NumberFormat("en-US", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 4,
+  }).format(parsed);
+}
+
+function portfolioRowsFromConfig(config: BacktestConfig) {
+  return Object.entries(config.initial_portfolio).flatMap(([venue, assets]) =>
+    Object.entries(assets).map(([asset, amount]) => ({
+      venue,
+      asset,
+      amount: compactPortfolioAmount(amount),
+      percent: "-",
+    })),
+  );
+}
+
 function stringConfig(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
@@ -298,6 +318,21 @@ export function App() {
       return next;
     });
     setApiMessage(`Configuration updated / ${dataSourceLabel}`);
+  }
+
+  function updatePortfolioConfig(initialPortfolio: BacktestConfig["initial_portfolio"]) {
+    setActiveConfig((current) => {
+      const next = { ...current, initial_portfolio: initialPortfolio };
+      setWorkbench((workbenchState) => ({
+        ...workbenchState,
+        setup: {
+          ...workbenchState.setup,
+          portfolio: portfolioRowsFromConfig(next),
+        },
+      }));
+      return next;
+    });
+    setApiMessage(`Initial balances updated / ${dataSourceLabel}`);
   }
 
   async function hydrateWorkbench(input: {
@@ -820,6 +855,8 @@ export function App() {
               policyProfiles={policyProfiles}
               onConfigChange={updateRunConfig}
               onPolicyChange={(profile) => void loadPolicySelection(profile)}
+              initialPortfolio={activeConfig.initial_portfolio}
+              onPortfolioChange={updatePortfolioConfig}
               variables={activeGraph.variables ?? {}}
               resolvedVariables={resolvedVariables}
               onVariablesChange={(vars) => void applyVariables(vars)}
