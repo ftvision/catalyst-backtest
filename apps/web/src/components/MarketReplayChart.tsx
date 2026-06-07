@@ -39,13 +39,20 @@ const paneStretch = {
 const compactLeadBars = 4;
 const compactTrailingBars = 24;
 const secondsPerDay = 86_400;
-const overviewGranularityThresholdSeconds = secondsPerDay * 35;
-const overviewGranularityMinCandles = 720;
+const wideGranularityThresholdSeconds = secondsPerDay * 35;
+const mediumGranularityThresholdSeconds = secondsPerDay * 10;
+const adaptiveGranularityMinCandles = 240;
+const granularitySeconds = {
+  "1h": 3_600,
+  "4h": 14_400,
+  "1d": secondsPerDay,
+};
 
-type ChartGranularity = "1h" | "1d";
+type ChartGranularity = keyof typeof granularitySeconds;
 
-function dayStart(time: UTCTimestamp): UTCTimestamp {
-  return (Math.floor(Number(time) / secondsPerDay) * secondsPerDay) as UTCTimestamp;
+function bucketStart(time: UTCTimestamp, granularity: ChartGranularity): UTCTimestamp {
+  const bucketSeconds = granularitySeconds[granularity];
+  return (Math.floor(Number(time) / bucketSeconds) * bucketSeconds) as UTCTimestamp;
 }
 
 function timeToSeconds(time: Time): number {
@@ -59,10 +66,18 @@ function rangeSeconds(range: IRange<Time> | null) {
   return Math.max(0, timeToSeconds(range.to) - timeToSeconds(range.from));
 }
 
-function aggregateCandlesByDay(candles: CandlePoint[]) {
+function granularityForRange(visibleSeconds: number): ChartGranularity {
+  if (visibleSeconds > wideGranularityThresholdSeconds) return "1d";
+  if (visibleSeconds > mediumGranularityThresholdSeconds) return "4h";
+  return "1h";
+}
+
+function aggregateCandles(candles: CandlePoint[], granularity: ChartGranularity) {
+  if (granularity === "1h") return candles;
+
   const buckets = new Map<number, CandlePoint>();
   for (const candle of candles) {
-    const bucketTime = dayStart(candle.time);
+    const bucketTime = bucketStart(candle.time, granularity);
     const bucket = buckets.get(bucketTime);
     if (!bucket) {
       buckets.set(bucketTime, { ...candle, time: bucketTime });
@@ -81,11 +96,13 @@ function alignReplayToCandles(replay: ReplayPoint[], candles: CandlePoint[]) {
   return replay.slice(0, candles.length).map((point, index) => ({ ...point, time: candles[index]?.time }));
 }
 
-function aggregateReplayByDay(replay: ReplayPoint[]) {
+function aggregateReplay(replay: ReplayPoint[], granularity: ChartGranularity) {
+  if (granularity === "1h") return replay;
+
   const buckets = new Map<number, ReplayPoint>();
   for (const point of replay) {
     if (point.time === undefined) continue;
-    const bucketTime = dayStart(point.time);
+    const bucketTime = bucketStart(point.time, granularity);
     const bucket = buckets.get(bucketTime);
     if (!bucket) {
       buckets.set(bucketTime, { ...point, time: bucketTime });
@@ -137,23 +154,32 @@ export function MarketReplayChart({
     if (!containerRef.current) return;
 
     const container = containerRef.current;
-    const dailyCandles = aggregateCandlesByDay(candles);
+    const candlesByGranularity: Record<ChartGranularity, CandlePoint[]> = {
+      "1h": candles,
+      "4h": aggregateCandles(candles, "4h"),
+      "1d": aggregateCandles(candles, "1d"),
+    };
     const hourlyReplay = alignReplayToCandles(replay, candles);
-    const dailyReplay = aggregateReplayByDay(hourlyReplay);
+    const replayByGranularity: Record<ChartGranularity, ReplayPoint[]> = {
+      "1h": hourlyReplay,
+      "4h": aggregateReplay(hourlyReplay, "4h"),
+      "1d": aggregateReplay(hourlyReplay, "1d"),
+    };
     const shouldUseAdaptiveGranularity =
       !compact &&
-      candles.length >= overviewGranularityMinCandles &&
-      candles.length > dailyCandles.length &&
-      Number(candles.at(-1)?.time ?? 0) - Number(candles[0]?.time ?? 0) > overviewGranularityThresholdSeconds;
-    let activeGranularity: ChartGranularity = shouldUseAdaptiveGranularity ? "1d" : "1h";
+      candles.length >= adaptiveGranularityMinCandles &&
+      candles.length > candlesByGranularity["4h"].length &&
+      Number(candles.at(-1)?.time ?? 0) - Number(candles[0]?.time ?? 0) > mediumGranularityThresholdSeconds;
+    const fullRangeSeconds = Number(candles.at(-1)?.time ?? 0) - Number(candles[0]?.time ?? 0);
+    let activeGranularity: ChartGranularity = shouldUseAdaptiveGranularity ? granularityForRange(fullRangeSeconds) : "1h";
     let applyingGranularity = false;
 
     const candlesForGranularity = (granularity: ChartGranularity) =>
-      granularity === "1d" && shouldUseAdaptiveGranularity ? dailyCandles : candles;
+      shouldUseAdaptiveGranularity ? candlesByGranularity[granularity] : candles;
     const replayForGranularity = (granularity: ChartGranularity) =>
-      granularity === "1d" && shouldUseAdaptiveGranularity ? dailyReplay : hourlyReplay;
+      shouldUseAdaptiveGranularity ? replayByGranularity[granularity] : hourlyReplay;
     const eventTimeForGranularity = (event: MarketEvent) =>
-      activeGranularity === "1d" && shouldUseAdaptiveGranularity ? dayStart(event.time) : event.time;
+      shouldUseAdaptiveGranularity ? bucketStart(event.time, activeGranularity) : event.time;
     const fallbackCandlesForGranularity = () => candlesForGranularity(activeGranularity);
 
     const chart: IChartApi = createChart(container, {
@@ -294,7 +320,8 @@ export function MarketReplayChart({
 
     const desiredGranularity = (range: IRange<Time> | null): ChartGranularity => {
       if (!shouldUseAdaptiveGranularity) return "1h";
-      return rangeSeconds(range) > overviewGranularityThresholdSeconds ? "1d" : "1h";
+      if (!range) return activeGranularity;
+      return granularityForRange(rangeSeconds(range));
     };
 
     const applyGranularity = (nextGranularity: ChartGranularity, visibleRange: IRange<Time> | null) => {
