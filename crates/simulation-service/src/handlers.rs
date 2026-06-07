@@ -242,6 +242,7 @@ pub async fn preview(Json(body): Json<Value>) -> Response {
             "graph_hash": gh, "valid": true,
             "graph_summary": support::graph_summary(&req.graph, &c),
             "data_requirements": serde_json::to_value(&c.data_requirements).unwrap_or(Value::Null),
+            "resolved_variables": c.resolved_variables,
             "resolved_policy": resolved, "warnings": c.warnings,
         }))
         .into_response(),

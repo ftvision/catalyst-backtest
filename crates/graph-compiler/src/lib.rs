@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Map, Value};
 
 use catalyst_contracts::graph::{
     Graph, Node, NodeKind, NodeSubtype, PerpOrderConfig, PriceThresholdConfig, Reference, Source,
@@ -146,6 +146,9 @@ pub struct CompiledGraph {
     pub signals: Vec<CompiledSignal>,
     pub data_requirements: DataRequirements,
     pub warnings: Vec<String>,
+    /// Graph variables that were defined and used, resolved to concrete values.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub resolved_variables: BTreeMap<String, Value>,
 }
 
 // --- typed configs of enabled nodes (validated) ---
@@ -208,6 +211,130 @@ fn validate_node(node: &Node) -> Result<Typed, CompileError> {
     }
 }
 
+/// If `s` is exactly a `$name` variable token, return `name`.
+fn var_token(s: &str) -> Option<&str> {
+    let name = s.strip_prefix('$')?;
+    let mut chars = name.chars();
+    let first = chars.next()?;
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return None;
+    }
+    name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_').then_some(name)
+}
+
+/// A variable value coerced to a string (config fields are decimal/strings).
+fn scalar_string(val: &Value) -> Option<String> {
+    match val {
+        Value::String(s) => Some(s.clone()),
+        Value::Number(n) => Some(n.to_string()),
+        Value::Bool(b) => Some(b.to_string()),
+        _ => None,
+    }
+}
+
+/// `{ "var": "name" }` (a signal-reference variable) -> the variable name.
+fn var_object(map: &Map<String, Value>) -> Option<&str> {
+    if map.len() == 1 {
+        if let Some(Value::String(name)) = map.get("var") {
+            return Some(name.as_str());
+        }
+    }
+    None
+}
+
+/// Substitute `$name` string tokens and `{ "var": "name" }` references in a
+/// config value against `vars`, recording used names. Undefined or non-scalar
+/// references are a compile error.
+fn substitute(
+    v: &mut Value,
+    vars: &BTreeMap<String, Value>,
+    used: &mut BTreeSet<String>,
+    node_id: &str,
+) -> Result<(), CompileError> {
+    let resolve = |name: &str| -> Result<String, CompileError> {
+        let val = vars.get(name).ok_or_else(|| {
+            CompileError::new(format!("undefined variable {name:?}"), Some(node_id.to_string()))
+        })?;
+        scalar_string(val).ok_or_else(|| {
+            CompileError::new(
+                format!("variable {name:?} must be a scalar (string/number/bool)"),
+                Some(node_id.to_string()),
+            )
+        })
+    };
+
+    match v {
+        Value::String(s) => {
+            if let Some(name) = var_token(s) {
+                let name = name.to_string();
+                *v = Value::String(resolve(&name)?);
+                used.insert(name);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                substitute(item, vars, used, node_id)?;
+            }
+        }
+        Value::Object(map) => {
+            if let Some(name) = var_object(map).map(str::to_string) {
+                *v = json!({ "const": resolve(&name)? });
+                used.insert(name);
+            } else {
+                for item in map.values_mut() {
+                    substitute(item, vars, used, node_id)?;
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Resolve graph variables into concrete node configs and validate `settings`.
+/// Returns the substituted nodes plus the resolved variable map.
+fn resolve_variables(
+    graph: &Graph,
+    warnings: &mut Vec<String>,
+) -> Result<(Vec<Node>, BTreeMap<String, Value>), CompileError> {
+    let vars: BTreeMap<String, Value> = match &graph.variables {
+        Value::Object(m) => m.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+        Value::Null => BTreeMap::new(),
+        _ => return Err(CompileError::new("graph variables must be an object", None)),
+    };
+
+    // `settings` is reserved: validated as an object, but no keys are honored yet
+    // (request config/policy always take precedence). Surface ignored keys.
+    match &graph.settings {
+        Value::Object(m) if !m.is_empty() => {
+            let keys: Vec<&str> = m.keys().map(String::as_str).collect();
+            warnings.push(format!("graph settings are not yet honored and were ignored: {keys:?}"));
+        }
+        Value::Object(_) | Value::Null => {}
+        _ => return Err(CompileError::new("graph settings must be an object", None)),
+    }
+
+    let mut used: BTreeSet<String> = BTreeSet::new();
+    let mut nodes = Vec::with_capacity(graph.nodes.len());
+    for node in &graph.nodes {
+        let mut node = node.clone();
+        if node.enabled {
+            substitute(&mut node.config, &vars, &mut used, &node.id)?;
+        }
+        nodes.push(node);
+    }
+
+    for name in vars.keys() {
+        if !used.contains(name) {
+            warnings.push(format!("graph variable {name:?} is defined but never used"));
+        }
+    }
+
+    let resolved: BTreeMap<String, Value> =
+        vars.into_iter().filter(|(k, _)| used.contains(k)).collect();
+    Ok((nodes, resolved))
+}
+
 /// Compile and validate a graph into a [`CompiledGraph`].
 pub fn compile(graph: &Graph) -> Result<CompiledGraph, CompileError> {
     if graph.nodes.is_empty() {
@@ -224,11 +351,16 @@ pub fn compile(graph: &Graph) -> Result<CompiledGraph, CompileError> {
         }
     }
 
-    let all_ids: HashSet<&str> = graph.nodes.iter().map(|n| n.id.as_str()).collect();
+    // Resolve graph variables into concrete node configs before any typed
+    // validation or data-requirement extraction, so everything downstream sees
+    // concrete values.
+    let (nodes, resolved_variables) = resolve_variables(graph, &mut warnings)?;
+
+    let all_ids: HashSet<&str> = nodes.iter().map(|n| n.id.as_str()).collect();
     let mut kind_of: HashMap<&str, &NodeKind> = HashMap::new();
     let mut subtype_of: HashMap<&str, &NodeSubtype> = HashMap::new();
     let mut enabled: HashSet<&str> = HashSet::new();
-    for node in &graph.nodes {
+    for node in &nodes {
         if node.enabled {
             enabled.insert(node.id.as_str());
             kind_of.insert(node.id.as_str(), &node.kind);
@@ -240,7 +372,7 @@ pub fn compile(graph: &Graph) -> Result<CompiledGraph, CompileError> {
 
     // Validate enabled node kind/subtype + config.
     let mut typed: HashMap<&str, Typed> = HashMap::new();
-    for node in graph.nodes.iter().filter(|n| n.enabled) {
+    for node in nodes.iter().filter(|n| n.enabled) {
         typed.insert(node.id.as_str(), validate_node(node)?);
     }
 
@@ -293,7 +425,7 @@ pub fn compile(graph: &Graph) -> Result<CompiledGraph, CompileError> {
 
     // Actions with triggers (graph order).
     let mut actions = Vec::new();
-    for node in &graph.nodes {
+    for node in &nodes {
         if !enabled.contains(node.id.as_str()) || !matches!(node.kind, NodeKind::Action) {
             continue;
         }
@@ -325,7 +457,7 @@ pub fn compile(graph: &Graph) -> Result<CompiledGraph, CompileError> {
     // Signals: action targets (outgoing -> action) and combinator inputs
     // (incoming <- signal).
     let mut signals = Vec::new();
-    for node in &graph.nodes {
+    for node in &nodes {
         if !enabled.contains(node.id.as_str()) || !matches!(node.kind, NodeKind::Signal) {
             continue;
         }
@@ -379,7 +511,7 @@ pub fn compile(graph: &Graph) -> Result<CompiledGraph, CompileError> {
     // order (inputs before dependents); reject cycles.
     signals = topo_order_signals(signals)?;
 
-    let data_requirements = data_requirements(&graph.nodes, &enabled, &typed, &symbol_venues);
+    let data_requirements = data_requirements(&nodes, &enabled, &typed, &symbol_venues);
 
     Ok(CompiledGraph {
         schema_version: "catalyst.backtest.compiled_graph.v1".to_string(),
@@ -387,6 +519,7 @@ pub fn compile(graph: &Graph) -> Result<CompiledGraph, CompileError> {
         signals,
         data_requirements,
         warnings,
+        resolved_variables,
     })
 }
 
