@@ -1,0 +1,127 @@
+{
+  "nodes": [
+    {
+      "id": "build-initial-eth-inventory",
+      "kind": "action",
+      "subtype": "swap",
+      "config": {
+        "from_asset": "USDC",
+        "to_asset": "ETH",
+        "amount": "300",
+        "chain": "base"
+      },
+      "enabled": true
+    },
+    {
+      "id": "eth-below-1850",
+      "kind": "signal",
+      "subtype": "price_threshold",
+      "config": {
+        "symbol": "ETH",
+        "operator": "<",
+        "threshold": "1850"
+      },
+      "enabled": true
+    },
+    {
+      "id": "buy-eth-on-base-100",
+      "kind": "action",
+      "subtype": "swap",
+      "config": {
+        "from_asset": "USDC",
+        "to_asset": "ETH",
+        "amount": "100",
+        "chain": "base"
+      },
+      "enabled": true
+    },
+    {
+      "id": "eth-below-1650",
+      "kind": "signal",
+      "subtype": "price_threshold",
+      "config": {
+        "symbol": "ETH",
+        "operator": "<",
+        "threshold": "1650"
+      },
+      "enabled": true
+    },
+    {
+      "id": "buy-eth-on-base-200",
+      "kind": "action",
+      "subtype": "swap",
+      "config": {
+        "from_asset": "USDC",
+        "to_asset": "ETH",
+        "amount": "200",
+        "chain": "base"
+      },
+      "enabled": true
+    },
+    {
+      "id": "eth-above-2300",
+      "kind": "signal",
+      "subtype": "price_threshold",
+      "config": {
+        "symbol": "ETH",
+        "operator": ">",
+        "threshold": "2300"
+      },
+      "enabled": true
+    },
+    {
+      "id": "sell-eth-on-base-005",
+      "kind": "action",
+      "subtype": "swap",
+      "config": {
+        "from_asset": "ETH",
+        "to_asset": "USDC",
+        "amount": "0.05",
+        "chain": "base"
+      },
+      "enabled": true
+    },
+    {
+      "id": "eth-above-2600",
+      "kind": "signal",
+      "subtype": "price_threshold",
+      "config": {
+        "symbol": "ETH",
+        "operator": ">",
+        "threshold": "2600"
+      },
+      "enabled": true
+    },
+    {
+      "id": "sell-eth-on-base-005-more",
+      "kind": "action",
+      "subtype": "swap",
+      "config": {
+        "from_asset": "ETH",
+        "to_asset": "USDC",
+        "amount": "0.05",
+        "chain": "base"
+      },
+      "enabled": true
+    }
+  ],
+  "edges": [
+    {
+      "from": "eth-below-1850",
+      "to": "buy-eth-on-base-100"
+    },
+    {
+      "from": "eth-below-1650",
+      "to": "buy-eth-on-base-200"
+    },
+    {
+      "from": "eth-above-2300",
+      "to": "sell-eth-on-base-005"
+    },
+    {
+      "from": "eth-above-2600",
+      "to": "sell-eth-on-base-005-more"
+    }
+  ],
+  "schema_version": "catalyst.graph.definition.v1"
+}

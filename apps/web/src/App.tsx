@@ -30,14 +30,17 @@ import {
   runHistoryFromApi,
   setupFromService,
 } from "./api/adapters";
-import { ApiError, catalystApi, type BacktestStatus, type MarketDataBundle } from "./api/client";
 import {
-  buildDemoBacktestRequest,
-  buildStoreBacktestRequest,
-  demoConfig,
-  demoGraph,
-  demoMarketData,
-} from "./data/demoRequest";
+  ApiError,
+  catalystApi,
+  type BacktestConfig,
+  type BacktestStatus,
+  type CatalystGraph,
+  type MarketDataBundle,
+  type StrategyListItem,
+  type StrategyScenarioListItem,
+} from "./api/client";
+import { demoConfig, demoGraph, demoMarketData } from "./data/demoRequest";
 import { audit, graph, marketReplay, result, runHistory, setup } from "./data/mockData";
 import { EventLensPage } from "./pages/EventLensPage";
 import { MarketReplayPage } from "./pages/MarketReplayPage";
@@ -67,6 +70,13 @@ interface WorkbenchState {
   runHistory: Array<Record<string, string>>;
 }
 
+interface ActiveSelection {
+  strategyId: string;
+  strategyTitle: string;
+  scenarioId: string;
+  scenarioTitle: string;
+}
+
 function sleep(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
@@ -84,7 +94,18 @@ export function App() {
   const [apiMessage, setApiMessage] = useState(`Checking ${catalystApi.baseUrl}`);
   const [runStatus, setRunStatus] = useState<RunStatus>("idle");
   const [dataSourceMode, setDataSourceMode] = useState<DataSourceMode>("store");
+  const [strategyLoading, setStrategyLoading] = useState(false);
+  const [strategies, setStrategies] = useState<StrategyListItem[]>([]);
+  const [scenarios, setScenarios] = useState<StrategyScenarioListItem[]>([]);
+  const [activeGraph, setActiveGraph] = useState<CatalystGraph>(demoGraph);
+  const [activeConfig, setActiveConfig] = useState<BacktestConfig>(demoConfig);
   const [activeMarketData, setActiveMarketData] = useState<MarketDataBundle>(demoMarketData);
+  const [activeSelection, setActiveSelection] = useState<ActiveSelection>({
+    strategyId: "g_inline_service_demo",
+    strategyTitle: "ETH service backtest",
+    scenarioId: "inline_demo",
+    scenarioTitle: "Inline demo fallback",
+  });
   const [workbench, setWorkbench] = useState<WorkbenchState>({
     graph,
     setup,
@@ -100,6 +121,101 @@ export function App() {
     [selectedEventId, workbench.marketReplay.events],
   );
 
+  const dataSourceLabel =
+    dataSourceMode === "store" ? "Parquet store" : `Scenario: ${activeSelection.scenarioTitle}`;
+
+  async function hydrateWorkbench(input: {
+    graph: CatalystGraph;
+    config: BacktestConfig;
+    marketData: MarketDataBundle;
+    policyProfile: string;
+    strategyId: string;
+    strategyTitle: string;
+    scenarioId: string;
+    scenarioTitle: string;
+    sourceMode: DataSourceMode;
+    profiles?: Array<{ id: string; label?: string }>;
+  }) {
+    const sourceLabel =
+      input.sourceMode === "store" ? "Parquet store" : `Scenario: ${input.scenarioTitle}`;
+    const [profiles, preview, coverage] = await Promise.all([
+      input.profiles ? Promise.resolve({ items: input.profiles }) : catalystApi.listPolicyProfiles(),
+      catalystApi.previewGraph(input.graph, { profile: input.policyProfile }),
+      catalystApi.checkCoverage({
+        graph: input.graph,
+        start: input.config.start,
+        end: input.config.end,
+        interval: input.config.interval,
+        ...(input.sourceMode === "inline" ? { market_data: input.marketData } : {}),
+      }),
+    ]);
+    const history = await catalystApi.listBacktests(preview.graph_hash);
+
+    setDataSourceMode(input.sourceMode);
+    setActiveGraph(input.graph);
+    setActiveConfig(input.config);
+    setActiveMarketData(input.marketData);
+    setActiveSelection({
+      strategyId: input.strategyId,
+      strategyTitle: input.strategyTitle,
+      scenarioId: input.scenarioId,
+      scenarioTitle: input.scenarioTitle,
+    });
+    setWorkbench((current) => ({
+      ...current,
+      graph: graphFromPreview(input.graph, preview, {
+        id: input.strategyId,
+        name: input.strategyTitle,
+        version: input.scenarioId,
+      }),
+      marketReplay: marketReplayWithMarketData(current.marketReplay, input.marketData),
+      setup: setupFromService({
+        graph: input.graph,
+        config: input.config,
+        policyProfile: input.policyProfile,
+        dataSourceLabel: sourceLabel,
+        coverage,
+        preview,
+        profiles: profiles.items,
+      }),
+      runHistory: history.items.length ? runHistoryFromApi(history.items) : current.runHistory,
+    }));
+    setApiStatus("healthy");
+    setApiMessage(`Connected to ${catalystApi.baseUrl} / ${sourceLabel}`);
+  }
+
+  async function loadStrategySelection(strategyId: string, scenarioId = activeSelection.scenarioId) {
+    try {
+      setStrategyLoading(true);
+      setApiStatus("checking");
+      setApiMessage(`Loading ${strategyId}`);
+      const [strategy, scenario] = await Promise.all([
+        catalystApi.getStrategy(strategyId),
+        catalystApi.getStrategyScenario(scenarioId),
+      ]);
+      await hydrateWorkbench({
+        graph: strategy.graph,
+        config: scenario.scenario.config,
+        marketData: scenario.scenario.market_data,
+        policyProfile: scenario.scenario.policy?.profile ?? workbench.setup.policy,
+        strategyId: strategy.id,
+        strategyTitle: strategy.title,
+        scenarioId: scenario.id,
+        scenarioTitle: scenario.title,
+        sourceMode: "inline",
+      });
+      setSelectedEventId((current) => {
+        const stillExists = workbench.marketReplay.events.some((event) => event.id === current);
+        return stillExists ? current : marketReplay.selectedEventId;
+      });
+    } catch (error) {
+      setApiStatus("failed");
+      setApiMessage(errorMessage(error));
+    } finally {
+      setStrategyLoading(false);
+    }
+  }
+
   useEffect(() => {
     let cancelled = false;
 
@@ -108,62 +224,35 @@ export function App() {
         setApiStatus("checking");
         setApiMessage(`Checking ${catalystApi.baseUrl}`);
         await catalystApi.health();
-        let sourceMode: DataSourceMode = "store";
-        let sourceLabel = "Parquet store";
-        let marketData: MarketDataBundle;
-        try {
-          marketData = await catalystApi.loadMarketDataWindow({
-            graph: demoGraph,
-            start: demoConfig.start,
-            end: demoConfig.end,
-            interval: demoConfig.interval,
-          });
-        } catch (error) {
-          sourceMode = "inline";
-          sourceLabel = "Inline demo fallback";
-          marketData = await catalystApi.loadMarketDataWindow({
-            graph: demoGraph,
-            start: demoConfig.start,
-            end: demoConfig.end,
-            interval: demoConfig.interval,
-            market_data: demoMarketData,
-          });
-          console.warn("Fell back to inline market-data demo", error);
-        }
-        const [profiles, preview, coverage] = await Promise.all([
+        const [profiles, strategyList, scenarioList] = await Promise.all([
           catalystApi.listPolicyProfiles(),
-          catalystApi.previewGraph(demoGraph, { profile: setup.policy }),
-          catalystApi.checkCoverage({
-            graph: demoGraph,
-            start: demoConfig.start,
-            end: demoConfig.end,
-            interval: demoConfig.interval,
-            ...(sourceMode === "inline" ? { market_data: marketData } : {}),
-          }),
+          catalystApi.listStrategies(),
+          catalystApi.listStrategyScenarios(),
         ]);
-        const history = await catalystApi.listBacktests(preview.graph_hash);
+        const selectedStrategy = strategyList.items[0];
+        const selectedScenario = scenarioList.items[0];
+        if (!selectedStrategy || !selectedScenario) throw new Error("Strategy catalog is empty");
+        const [strategy, scenario] = await Promise.all([
+          catalystApi.getStrategy(selectedStrategy.id),
+          catalystApi.getStrategyScenario(selectedScenario.id),
+        ]);
 
         if (cancelled) return;
 
-        setDataSourceMode(sourceMode);
-        setActiveMarketData(marketData);
-        setWorkbench((current) => ({
-          ...current,
-          graph: graphFromPreview(demoGraph, preview),
-          marketReplay: marketReplayWithMarketData(current.marketReplay, marketData),
-          setup: setupFromService({
-            graph: demoGraph,
-            config: demoConfig,
-            policyProfile: setup.policy,
-            dataSourceLabel: sourceLabel,
-            coverage,
-            preview,
-            profiles: profiles.items,
-          }),
-          runHistory: history.items.length ? runHistoryFromApi(history.items) : current.runHistory,
-        }));
-        setApiStatus("healthy");
-        setApiMessage(`Connected to ${catalystApi.baseUrl} / ${sourceLabel}`);
+        setStrategies(strategyList.items);
+        setScenarios(scenarioList.items);
+        await hydrateWorkbench({
+          graph: strategy.graph,
+          config: scenario.scenario.config,
+          marketData: scenario.scenario.market_data,
+          policyProfile: scenario.scenario.policy?.profile ?? setup.policy,
+          strategyId: strategy.id,
+          strategyTitle: strategy.title,
+          scenarioId: scenario.id,
+          scenarioTitle: scenario.title,
+          sourceMode: "inline",
+          profiles: profiles.items,
+        });
       } catch (error) {
         if (cancelled) return;
         setApiStatus("offline");
@@ -206,10 +295,12 @@ export function App() {
       setRunStatus("submitting");
       setApiStatus("running");
       setApiMessage("Submitting run to Rust service");
-      const request =
-        dataSourceMode === "store"
-          ? buildStoreBacktestRequest(workbench.setup.policy)
-          : buildDemoBacktestRequest(workbench.setup.policy);
+      const request = {
+        graph: activeGraph,
+        config: activeConfig,
+        policy: { profile: workbench.setup.policy },
+        ...(dataSourceMode === "inline" ? { market_data: activeMarketData } : {}),
+      };
       const created = await catalystApi.createBacktest(request);
       setRunStatus("queued");
       setWorkbench((current) => ({
@@ -233,10 +324,10 @@ export function App() {
       const auditData = auditFromApi(events.items, serviceResult, replay);
       const serviceSetup = setupFromService({
         runId: created.id,
-        graph: demoGraph,
-        config: demoConfig,
+        graph: activeGraph,
+        config: activeConfig,
         policyProfile: workbench.setup.policy,
-        dataSourceLabel: dataSourceMode === "store" ? "Parquet store" : "Inline demo fallback",
+        dataSourceLabel,
         metadata,
       });
 
@@ -255,7 +346,7 @@ export function App() {
       setSelectedEventId(replay.selectedEventId);
       setRunStatus("succeeded");
       setApiStatus("healthy");
-      setApiMessage(`Backtest ${created.id} completed / ${dataSourceMode === "store" ? "Parquet store" : "Inline demo fallback"}`);
+      setApiMessage(`Backtest ${created.id} completed / ${dataSourceLabel}`);
       setActiveRoute("result");
     } catch (error) {
       setRunStatus("failed");
@@ -265,14 +356,16 @@ export function App() {
   }
 
   const runLabel =
-    runStatus === "submitting"
+    strategyLoading
+      ? "Loading strategy"
+      : runStatus === "submitting"
       ? "Submitting"
       : runStatus === "queued"
         ? "Queued"
         : runStatus === "running"
           ? "Running"
           : "Run backtest";
-  const isRunning = runStatus === "submitting" || runStatus === "queued" || runStatus === "running";
+  const isRunning = strategyLoading || runStatus === "submitting" || runStatus === "queued" || runStatus === "running";
 
   return (
     <div className="app-shell">
@@ -346,7 +439,14 @@ export function App() {
             onRun={runBacktest}
             runLabel={runLabel}
             runDisabled={isRunning}
-            dataSourceLabel={dataSourceMode === "store" ? "Parquet store" : "Inline demo fallback"}
+            dataSourceLabel={dataSourceLabel}
+            strategies={strategies}
+            selectedStrategyId={activeSelection.strategyId}
+            onSelectStrategy={(id) => void loadStrategySelection(id, activeSelection.scenarioId)}
+            scenarios={scenarios}
+            selectedScenarioId={activeSelection.scenarioId}
+            onSelectScenario={(id) => void loadStrategySelection(activeSelection.strategyId, id)}
+            selectorDisabled={isRunning}
           />
         ) : null}
         {activeRoute === "replay" ? (

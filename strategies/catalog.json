@@ -1,0 +1,112 @@
+{
+  "schema_version": "catalyst.strategy_catalog.v1",
+  "strategies": [
+    {
+      "id": "g01_evm_swap_buy_eth_base",
+      "title": "EVM swap - buy $100 of ETH on Base",
+      "graph": "graphs/g01_evm_swap_buy_eth_base.json",
+      "source": "pasted_graph_1"
+    },
+    {
+      "id": "g02_hl_spot_buy_eth",
+      "title": "Hyperliquid spot - buy $100 of ETH",
+      "graph": "graphs/g02_hl_spot_buy_eth.json",
+      "source": "pasted_graph_2"
+    },
+    {
+      "id": "g03_hl_spot_buy_then_sell",
+      "title": "Hyperliquid spot - buy $100 of ETH, then sell 0.04 ETH",
+      "graph": "graphs/g03_hl_spot_buy_then_sell.json",
+      "source": "pasted_graph_3"
+    },
+    {
+      "id": "g04_hl_spot_ladder",
+      "title": "Hyperliquid spot - repeating multi-level ETH buy and sell ladder",
+      "graph": "graphs/g04_hl_spot_ladder.json",
+      "source": "pasted_graph_4"
+    },
+    {
+      "id": "g05_hl_perp_open_long",
+      "title": "Hyperliquid perp - open a 5x ETH long",
+      "graph": "graphs/g05_hl_perp_open_long.json",
+      "source": "pasted_graph_5"
+    },
+    {
+      "id": "g06_hl_perp_open_close",
+      "title": "Hyperliquid perp - open a 5x ETH long, then close it",
+      "graph": "graphs/g06_hl_perp_open_close.json",
+      "source": "pasted_graph_6"
+    },
+    {
+      "id": "g07_hl_perp_round_trips",
+      "title": "Hyperliquid perp - repeating 5x ETH long round trips",
+      "graph": "graphs/g07_hl_perp_round_trips.json",
+      "source": "pasted_graph_7"
+    },
+    {
+      "id": "g08_evm_yield_deposit",
+      "title": "EVM yield - deposit 250 USDC into Aave",
+      "graph": "graphs/g08_evm_yield_deposit.json",
+      "source": "pasted_graph_8"
+    },
+    {
+      "id": "g09_evm_yield_deposit_withdraw_partial",
+      "title": "EVM yield - deposit 250 USDC, then withdraw 100 USDC",
+      "graph": "graphs/g09_evm_yield_deposit_withdraw_partial.json",
+      "source": "pasted_graph_9"
+    },
+    {
+      "id": "g10_evm_yield_deposit_withdraw_all",
+      "title": "EVM yield - deposit 250 USDC, then withdraw it",
+      "graph": "graphs/g10_evm_yield_deposit_withdraw_all.json",
+      "source": "pasted_graph_10"
+    },
+    {
+      "id": "g11_evm_swap_if_below",
+      "title": "EVM swap - buy $100 of ETH on Base if ETH is below $1800",
+      "graph": "graphs/g11_evm_swap_if_below.json",
+      "source": "pasted_graph_11"
+    },
+    {
+      "id": "g12_evm_swap_dca_ladder",
+      "title": "EVM swap - repeating Base ETH DCA and take-profit ladder",
+      "graph": "graphs/g12_evm_swap_dca_ladder.json",
+      "source": "pasted_graph_12"
+    },
+    {
+      "id": "g13_hl_perp_long_short_swings",
+      "title": "Hyperliquid perp - repeating alternating 2x long and 3x short swings",
+      "graph": "graphs/g13_hl_perp_long_short_swings.json",
+      "source": "pasted_graph_13"
+    },
+    {
+      "id": "g14_hl_perp_add_close",
+      "title": "Hyperliquid perp - start 3x short, add 10x above $2400, close below $1900",
+      "graph": "graphs/g14_hl_perp_add_close.json",
+      "source": "pasted_graph_14"
+    },
+    {
+      "id": "g15_evm_yield_add_withdraw",
+      "title": "EVM yield - start deposited, add below $1800, withdraw above $2400",
+      "graph": "graphs/g15_evm_yield_add_withdraw.json",
+      "source": "pasted_graph_15"
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "eth_flat_2000",
+      "title": "ETH flat at $2,000",
+      "scenario": "scenarios/eth_flat_2000.json"
+    },
+    {
+      "id": "eth_dip_then_rally",
+      "title": "ETH dips below ladder buys, then rallies through sells",
+      "scenario": "scenarios/eth_dip_then_rally.json"
+    },
+    {
+      "id": "eth_selloff_liquidation",
+      "title": "ETH selloff that can liquidate a 5x long",
+      "scenario": "scenarios/eth_selloff_liquidation.json"
+    }
+  ]
+}

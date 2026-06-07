@@ -1,5 +1,7 @@
 //! HTTP handlers: async run lifecycle + workbench setup + low-level simulate.
 
+use std::path::{Path as FsPath, PathBuf};
+
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -91,16 +93,23 @@ pub async fn create_backtest(State(state): State<AppState>, Json(body): Json<Val
     let id = state.next_run_id();
     let job = Job::queued(id.clone(), stored);
     match state.submit(job) {
-        Ok(()) => {
-            (StatusCode::ACCEPTED, Json(json!({ "id": id, "status": "queued" }))).into_response()
-        }
-        Err(SubmitError::QueueFull) => {
-            error(StatusCode::SERVICE_UNAVAILABLE, "queue_full", "backtest queue is full; retry later")
-        }
+        Ok(()) => (
+            StatusCode::ACCEPTED,
+            Json(json!({ "id": id, "status": "queued" })),
+        )
+            .into_response(),
+        Err(SubmitError::QueueFull) => error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "queue_full",
+            "backtest queue is full; retry later",
+        ),
     }
 }
 
-pub async fn list_backtests(State(state): State<AppState>, Query(q): Query<ListQuery>) -> Json<Value> {
+pub async fn list_backtests(
+    State(state): State<AppState>,
+    Query(q): Query<ListQuery>,
+) -> Json<Value> {
     let items: Vec<Value> = state
         .list(q.graph_hash.as_deref())
         .into_iter()
@@ -133,13 +142,23 @@ pub async fn get_backtest(State(state): State<AppState>, Path(id): Path<String>)
 }
 
 pub async fn get_result(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    let Some(j) = state.get(&id) else { return not_found(&id) };
+    let Some(j) = state.get(&id) else {
+        return not_found(&id);
+    };
     match j.status.as_str() {
         "succeeded" => match j.result {
             Some(result) => Json(result).into_response(),
-            None => error(StatusCode::CONFLICT, "no_result", format!("backtest {id:?} has no result")),
+            None => error(
+                StatusCode::CONFLICT,
+                "no_result",
+                format!("backtest {id:?} has no result"),
+            ),
         },
-        "failed" => error(StatusCode::UNPROCESSABLE_ENTITY, "backtest_failed", j.error.unwrap_or_default()),
+        "failed" => error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "backtest_failed",
+            j.error.unwrap_or_default(),
+        ),
         other => error_with(
             StatusCode::CONFLICT,
             "not_ready",
@@ -168,7 +187,9 @@ pub async fn get_events(
     Path(id): Path<String>,
     Query(q): Query<EventQuery>,
 ) -> Response {
-    let Some(job) = state.get(&id) else { return not_found(&id) };
+    let Some(job) = state.get(&id) else {
+        return not_found(&id);
+    };
     let events = job
         .trace
         .as_ref()
@@ -187,9 +208,10 @@ pub async fn get_events(
     let filtered: Vec<Value> = events
         .into_iter()
         .filter(|e| {
-            wanted_type.map(|t| e.get("type").and_then(|v| v.as_str()) == Some(t)).unwrap_or(true)
-                && q
-                    .node_id
+            wanted_type
+                .map(|t| e.get("type").and_then(|v| v.as_str()) == Some(t))
+                .unwrap_or(true)
+                && q.node_id
                     .as_deref()
                     .map(|n| e.get("node_id").and_then(|v| v.as_str()) == Some(n))
                     .unwrap_or(true)
@@ -198,7 +220,11 @@ pub async fn get_events(
 
     let total = filtered.len();
     let page: Vec<Value> = filtered.into_iter().skip(q.cursor).take(q.limit).collect();
-    let next = if q.cursor + q.limit < total { Some(q.cursor + q.limit) } else { None };
+    let next = if q.cursor + q.limit < total {
+        Some(q.cursor + q.limit)
+    } else {
+        None
+    };
     Json(json!({ "items": page, "next_cursor": next, "total": total })).into_response()
 }
 
@@ -239,7 +265,10 @@ pub async fn coverage(State(state): State<AppState>, Json(body): Json<Value>) ->
     Json(support::coverage_response(&bundle)).into_response()
 }
 
-pub async fn market_data_window(State(state): State<AppState>, Json(body): Json<Value>) -> Response {
+pub async fn market_data_window(
+    State(state): State<AppState>,
+    Json(body): Json<Value>,
+) -> Response {
     let req: CoverageBody = match serde_json::from_value(body) {
         Ok(r) => r,
         Err(e) => return error(StatusCode::BAD_REQUEST, "invalid_request", e.to_string()),
@@ -254,16 +283,165 @@ pub async fn policy_profiles() -> Json<Value> {
     Json(json!({ "items": support::list_profiles() }))
 }
 
+// --- bundled strategy repository ---
+
+#[derive(Debug, Deserialize)]
+struct StrategyCatalog {
+    strategies: Vec<StrategyCatalogItem>,
+    scenarios: Vec<ScenarioCatalogItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StrategyCatalogItem {
+    id: String,
+    title: String,
+    graph: PathBuf,
+    source: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ScenarioCatalogItem {
+    id: String,
+    title: String,
+    scenario: PathBuf,
+}
+
+fn strategy_root() -> PathBuf {
+    std::env::var("CATALYST_STRATEGY_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../strategies"))
+}
+
+fn load_json_file(path: &FsPath) -> Result<Value, String> {
+    let body = std::fs::read_to_string(path).map_err(|e| format!("read {path:?}: {e}"))?;
+    serde_json::from_str(&body).map_err(|e| format!("parse {path:?}: {e}"))
+}
+
+fn load_strategy_catalog(root: &FsPath) -> Result<StrategyCatalog, String> {
+    let body = std::fs::read_to_string(root.join("catalog.json"))
+        .map_err(|e| format!("read strategy catalog: {e}"))?;
+    serde_json::from_str(&body).map_err(|e| format!("parse strategy catalog: {e}"))
+}
+
+fn strategy_repo_error(message: impl Into<String>) -> Response {
+    error(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "strategy_repository_error",
+        message.into(),
+    )
+}
+
+pub async fn list_strategies() -> Response {
+    let root = strategy_root();
+    let catalog = match load_strategy_catalog(&root) {
+        Ok(c) => c,
+        Err(e) => return strategy_repo_error(e),
+    };
+    let items: Vec<Value> = catalog
+        .strategies
+        .into_iter()
+        .map(|strategy| {
+            json!({
+                "id": strategy.id,
+                "title": strategy.title,
+                "source": strategy.source,
+                "graph_path": strategy.graph,
+            })
+        })
+        .collect();
+    Json(json!({ "items": items })).into_response()
+}
+
+pub async fn get_strategy(Path(id): Path<String>) -> Response {
+    let root = strategy_root();
+    let catalog = match load_strategy_catalog(&root) {
+        Ok(c) => c,
+        Err(e) => return strategy_repo_error(e),
+    };
+    let Some(strategy) = catalog.strategies.into_iter().find(|s| s.id == id) else {
+        return error(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            format!("no strategy {id:?}"),
+        );
+    };
+    let graph = match load_json_file(&root.join(&strategy.graph)) {
+        Ok(g) => g,
+        Err(e) => return strategy_repo_error(e),
+    };
+    Json(json!({
+        "id": strategy.id,
+        "title": strategy.title,
+        "source": strategy.source,
+        "graph": graph,
+    }))
+    .into_response()
+}
+
+pub async fn list_strategy_scenarios() -> Response {
+    let root = strategy_root();
+    let catalog = match load_strategy_catalog(&root) {
+        Ok(c) => c,
+        Err(e) => return strategy_repo_error(e),
+    };
+    let items: Vec<Value> = catalog
+        .scenarios
+        .into_iter()
+        .map(|scenario| {
+            json!({
+                "id": scenario.id,
+                "title": scenario.title,
+                "scenario_path": scenario.scenario,
+            })
+        })
+        .collect();
+    Json(json!({ "items": items })).into_response()
+}
+
+pub async fn get_strategy_scenario(Path(id): Path<String>) -> Response {
+    let root = strategy_root();
+    let catalog = match load_strategy_catalog(&root) {
+        Ok(c) => c,
+        Err(e) => return strategy_repo_error(e),
+    };
+    let Some(scenario) = catalog.scenarios.into_iter().find(|s| s.id == id) else {
+        return error(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            format!("no strategy scenario {id:?}"),
+        );
+    };
+    let payload = match load_json_file(&root.join(&scenario.scenario)) {
+        Ok(g) => g,
+        Err(e) => return strategy_repo_error(e),
+    };
+    Json(json!({
+        "id": scenario.id,
+        "title": scenario.title,
+        "scenario": payload,
+    }))
+    .into_response()
+}
+
 fn not_found(id: &str) -> Response {
-    error(StatusCode::NOT_FOUND, "not_found", format!("no backtest {id:?}"))
+    error(
+        StatusCode::NOT_FOUND,
+        "not_found",
+        format!("no backtest {id:?}"),
+    )
 }
 
 async fn load_market_data_for_window(
     state: &AppState,
     req: CoverageBody,
 ) -> Result<MarketDataBundle, Response> {
-    let compiled = compile(&req.graph)
-        .map_err(|e| error(StatusCode::UNPROCESSABLE_ENTITY, "invalid_graph", e.to_string()))?;
+    let compiled = compile(&req.graph).map_err(|e| {
+        error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_graph",
+            e.to_string(),
+        )
+    })?;
     match req.market_data {
         Some(bundle) => Ok(bundle),
         None => match state.store_root() {
@@ -271,7 +449,13 @@ async fn load_market_data_for_window(
                 let reference: BundleRef = support::bundle_ref(root, &compiled);
                 load_bundle(&reference, &req.start, &req.end, &req.interval)
                     .await
-                    .map_err(|e| error(StatusCode::UNPROCESSABLE_ENTITY, "data_load_error", e.to_string()))
+                    .map_err(|e| {
+                        error(
+                            StatusCode::UNPROCESSABLE_ENTITY,
+                            "data_load_error",
+                            e.to_string(),
+                        )
+                    })
             }
             None => Err(error(
                 StatusCode::BAD_REQUEST,
@@ -313,7 +497,13 @@ pub async fn simulate(Json(body): Json<Value>) -> Response {
         .await
         {
             Ok(bundle) => bundle,
-            Err(e) => return error(StatusCode::UNPROCESSABLE_ENTITY, "data_load_error", e.to_string()),
+            Err(e) => {
+                return error(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "data_load_error",
+                    e.to_string(),
+                )
+            }
         },
         (Some(_), Some(_)) => {
             return error(
@@ -339,7 +529,15 @@ pub async fn simulate(Json(body): Json<Value>) -> Response {
     };
     match tokio::task::spawn_blocking(move || run(&input)).await {
         Ok(Ok(trace)) => (StatusCode::OK, Json(trace)).into_response(),
-        Ok(Err(e)) => error(StatusCode::UNPROCESSABLE_ENTITY, "simulation_error", e.to_string()),
-        Err(join) => error(StatusCode::INTERNAL_SERVER_ERROR, "internal", join.to_string()),
+        Ok(Err(e)) => error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "simulation_error",
+            e.to_string(),
+        ),
+        Err(join) => error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal",
+            join.to_string(),
+        ),
     }
 }

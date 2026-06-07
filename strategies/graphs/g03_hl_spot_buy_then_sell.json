@@ -1,0 +1,35 @@
+{
+  "nodes": [
+    {
+      "id": "buy-eth-spot",
+      "kind": "action",
+      "subtype": "swap",
+      "config": {
+        "from_asset": "USDC",
+        "to_asset": "ETH",
+        "amount": "100",
+        "chain": "hyperliquid"
+      },
+      "enabled": true
+    },
+    {
+      "id": "sell-eth-spot",
+      "kind": "action",
+      "subtype": "swap",
+      "config": {
+        "from_asset": "ETH",
+        "to_asset": "USDC",
+        "amount": "0.04",
+        "chain": "hyperliquid"
+      },
+      "enabled": true
+    }
+  ],
+  "edges": [
+    {
+      "from": "buy-eth-spot",
+      "to": "sell-eth-spot"
+    }
+  ],
+  "schema_version": "catalyst.graph.definition.v1"
+}
