@@ -1040,6 +1040,13 @@ export function App() {
     setActiveRoute("details");
   }
 
+  async function openHistoryRunDetail(runId: string | undefined, tab: DetailTabId) {
+    if (runId && runId !== workbench.setup.runId) {
+      await loadRunDetail(runId);
+    }
+    openRunDetails(tab);
+  }
+
   const renderedDetailTabs = {
     result: visitedDetailTabs.result || activeDetailTab === "result",
     replay: visitedDetailTabs.replay || activeDetailTab === "replay",
@@ -1171,14 +1178,10 @@ export function App() {
             <SimulationHistoryPage
               items={workbench.historyItems}
               fallbackRows={workbench.runHistory}
-              graph={workbench.graph}
-              setup={workbench.setup}
-              result={workbench.result}
-              replay={workbench.marketReplay.replay}
               selectedRunId={workbench.setup.runId}
               onSelectRun={(id) => void loadRunDetail(id)}
-              onOpenResult={() => openRunDetails("result")}
-              onReplayEvents={() => openRunDetails("replay")}
+              onOpenResult={(id) => void openHistoryRunDetail(id, "result")}
+              onReplayEvents={(id) => void openHistoryRunDetail(id, "replay")}
             />
           ) : null}
           {activeRoute === "details" ? (
