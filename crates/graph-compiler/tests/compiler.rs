@@ -259,3 +259,27 @@ fn combinator_cycle_is_rejected() {
     let err = compile(&g).unwrap_err();
     assert!(err.to_string().contains("cycle"));
 }
+
+// --- ADR 0002 step 3: derived sources + warmup ---
+
+#[test]
+fn derived_reference_sets_lookback_and_requires_candles() {
+    let g = graph(&serde_json::json!({
+        "nodes": [
+            {"id": "below-ma", "kind": "signal", "subtype": "threshold",
+             "config": {
+                 "source": {"kind": "price", "symbol": "ETH", "venue": "base"},
+                 "operator": "<",
+                 "reference": {"source": {"kind": "derived",
+                     "of": {"kind": "price", "symbol": "ETH", "venue": "base"},
+                     "transform": "sma", "window": 20}}
+             }},
+            {"id": "buy", "kind": "action", "subtype": "swap",
+             "config": {"from_asset": "USDC", "to_asset": "ETH", "amount": "10", "chain": "base"}}
+        ],
+        "edges": [{"from": "below-ma", "to": "buy"}]
+    }));
+    let c = compile(&g).unwrap();
+    assert_eq!(c.data_requirements.lookback_bars, 20);
+    assert!(c.data_requirements.candles.iter().any(|cd| cd.symbol == "ETH" && cd.venue == "base"));
+}

@@ -110,3 +110,32 @@ pub fn bundle_ref(root: String, compiled: &CompiledGraph) -> BundleRef {
     .unwrap_or_default();
     BundleRef { root, data_requirements: dr }
 }
+
+fn interval_secs(interval: &str) -> Option<i64> {
+    Some(match interval {
+        "1m" => 60,
+        "5m" => 300,
+        "15m" => 900,
+        "1h" => 3600,
+        "4h" => 14_400,
+        "1d" => 86_400,
+        _ => return None,
+    })
+}
+
+/// The earliest timestamp to load so derived signals have `lookback_bars` of
+/// warmup history before the run's `start`. Returns `start` unchanged when no
+/// warmup is needed or the inputs can't be parsed.
+pub fn warmup_start(start: &str, interval: &str, lookback_bars: u32) -> String {
+    if lookback_bars == 0 {
+        return start.to_string();
+    }
+    let Some(secs) = interval_secs(interval) else { return start.to_string() };
+    match chrono::DateTime::parse_from_rfc3339(start) {
+        Ok(dt) => {
+            let earlier = dt - chrono::Duration::seconds(secs * lookback_bars as i64);
+            earlier.with_timezone(&chrono::Utc).format("%Y-%m-%dT%H:%M:%SZ").to_string()
+        }
+        Err(_) => start.to_string(),
+    }
+}

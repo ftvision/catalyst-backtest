@@ -1,0 +1,36 @@
+{
+  "schema_version": "catalyst.graph.definition.v1",
+  "nodes": [
+    {
+      "id": "price-below-20ma",
+      "kind": "signal",
+      "subtype": "threshold",
+      "config": {
+        "source": { "kind": "price", "symbol": "ETH", "venue": "base" },
+        "operator": "<",
+        "reference": {
+          "source": {
+            "kind": "derived",
+            "of": { "kind": "price", "symbol": "ETH", "venue": "base" },
+            "transform": "sma",
+            "window": 20
+          }
+        }
+      },
+      "enabled": true
+    },
+    {
+      "id": "buy-the-dip",
+      "kind": "action",
+      "subtype": "swap",
+      "config": {
+        "from_asset": "USDC",
+        "to_asset": "ETH",
+        "amount": { "basis": "pct_balance", "value": "25" },
+        "chain": "base"
+      },
+      "enabled": true
+    }
+  ],
+  "edges": [{ "from": "price-below-20ma", "to": "buy-the-dip" }]
+}

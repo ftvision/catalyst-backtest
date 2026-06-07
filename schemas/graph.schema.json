@@ -217,6 +217,16 @@
           },
           "required": ["kind", "chain"],
           "additionalProperties": false
+        },
+        {
+          "properties": {
+            "kind": { "const": "derived" },
+            "of": { "$ref": "#/$defs/source" },
+            "transform": { "type": "string", "enum": ["sma", "ema", "rolling_high", "rolling_low", "roc"] },
+            "window": { "type": "integer", "minimum": 1 }
+          },
+          "required": ["kind", "of", "transform", "window"],
+          "additionalProperties": false
         }
       ]
     },

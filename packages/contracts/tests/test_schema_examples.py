@@ -20,6 +20,7 @@ CASES = [
     ("graph.threshold-funding.json", "graph"),
     ("graph.threshold-composed.json", "graph"),
     ("graph.relative-sizing.json", "graph"),
+    ("graph.ma-cross.json", "graph"),
     ("backtest-request.json", "backtest-request"),
     ("simulation-policy.strict_v1.json", "simulation-policy"),
     ("market-data-bundle.json", "market-data-bundle"),

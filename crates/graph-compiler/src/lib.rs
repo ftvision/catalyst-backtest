@@ -133,6 +133,10 @@ pub struct DataRequirements {
     pub funding: Vec<FundingReq>,
     pub gas: Vec<GasReq>,
     pub yields: Vec<YieldReq>,
+    /// Max warmup history (in bars) any derived signal source needs before the
+    /// run's start, so the data layer can fetch `start - lookback_bars * interval`.
+    #[serde(default)]
+    pub lookback_bars: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -465,6 +469,8 @@ fn data_requirements(
     let mut gas: BTreeMap<String, GasReq> = BTreeMap::new();
     let mut yields: BTreeMap<(String, String, String, Option<String>), YieldReq> = BTreeMap::new();
 
+    let mut lookback_bars: u32 = 0;
+
     let mut add_candle = |venue: &str, symbol: &str| {
         candles.insert(
             (venue.to_string(), symbol.to_string()),
@@ -515,6 +521,7 @@ fn data_requirements(
                     &mut yields,
                     symbol_venues,
                 );
+                lookback_bars = lookback_bars.max(source_lookback(&t.source));
                 if let Reference::Source { source } = &t.reference {
                     add_threshold_source(
                         source,
@@ -524,6 +531,7 @@ fn data_requirements(
                         &mut yields,
                         symbol_venues,
                     );
+                    lookback_bars = lookback_bars.max(source_lookback(source));
                 }
             }
             // Combinators read other signals, not market data.
@@ -537,6 +545,7 @@ fn data_requirements(
         funding: funding.into_values().collect(),
         gas: gas.into_values().collect(),
         yields: yields.into_values().collect(),
+        lookback_bars,
     }
 }
 
@@ -579,5 +588,17 @@ fn add_threshold_source(
         Source::Gas { chain } => {
             gas.insert(chain.clone(), GasReq { chain: chain.clone() });
         }
+        // A derived source needs whatever its underlying source needs.
+        Source::Derived { of, .. } => {
+            add_threshold_source(of, add_candle, funding, gas, yields, symbol_venues);
+        }
+    }
+}
+
+/// Total warmup bars a source needs (sum of windows along any nested derivation).
+fn source_lookback(source: &Source) -> u32 {
+    match source {
+        Source::Derived { of, window, .. } => window.saturating_add(source_lookback(of)),
+        _ => 0,
     }
 }
