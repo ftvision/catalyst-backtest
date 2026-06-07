@@ -53,6 +53,12 @@ export interface ResultData {
   metrics: MetricItem[];
   equity: number[];
   drawdown: number[];
+  trend?: Array<{
+    time: UTCTimestamp;
+    label: string;
+    equity: number;
+    drawdown: number;
+  }>;
   portfolio: Array<{
     venue: string;
     total: string;

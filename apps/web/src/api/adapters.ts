@@ -59,6 +59,8 @@ function isoLabel(iso?: string): string {
     day: "numeric",
     hour: "2-digit",
     minute: "2-digit",
+    timeZone: "UTC",
+    timeZoneName: "short",
   });
 }
 
@@ -240,8 +242,16 @@ export function runHistoryFromApi(items: BacktestListItem[]): Array<Record<strin
 
 export function resultFromApi(result: BacktestResult, status?: string): ResultData {
   const summary = result.summary;
-  const equity = result.equity_curve?.map((point) => numberValue(point.equity_usd)) ?? [];
-  const drawdown = result.drawdown_curve?.map((point) => numberValue(point.drawdown_pct)) ?? [];
+  const equityCurve = result.equity_curve ?? [];
+  const drawdownCurve = result.drawdown_curve ?? [];
+  const equity = equityCurve.map((point) => numberValue(point.equity_usd));
+  const drawdown = drawdownCurve.map((point) => numberValue(point.drawdown_pct));
+  const trend = equityCurve.map((point, index) => ({
+    time: unixTime(point.ts, index),
+    label: isoLabel(point.ts),
+    equity: numberValue(point.equity_usd),
+    drawdown: numberValue(drawdownCurve[index]?.drawdown_pct, numberValue(drawdownCurve.at(-1)?.drawdown_pct)),
+  }));
   const finalValue = numberValue(summary.final_value_usd);
   const startValue = numberValue(summary.starting_value_usd);
   const pnl = numberValue(summary.pnl_usd);
@@ -274,6 +284,7 @@ export function resultFromApi(result: BacktestResult, status?: string): ResultDa
     ],
     equity,
     drawdown,
+    trend,
     portfolio: portfolioFromResult(result, finalValue),
     timeline: (result.trades ?? []).slice(-8).reverse().map((trade) => ({
       time: isoLabel(trade.ts),

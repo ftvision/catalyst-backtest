@@ -8,6 +8,11 @@ import { StatusBadge } from "../components/StatusBadge";
 import type { GraphSummary, ResultData, SetupData } from "../types";
 import type { UTCTimestamp } from "lightweight-charts";
 
+function shortDate(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toISOString().slice(0, 10);
+}
+
 export function ResultReviewPage({
   graph,
   setup,
@@ -17,9 +22,9 @@ export function ResultReviewPage({
   setup: SetupData;
   result: ResultData;
 }) {
-  const trend = result.equity.map((value, index) => ({
-    time: (Date.UTC(2024, 4, 11, index * 8, 0, 0) / 1000) as UTCTimestamp,
-    label: `R${String(index + 1).padStart(2, "0")}`,
+  const trend = result.trend ?? result.equity.map((value, index) => ({
+    time: (Date.UTC(2024, 0, 1, index, 0, 0) / 1000) as UTCTimestamp,
+    label: `T${String(index + 1).padStart(2, "0")}`,
     equity: value,
     drawdown: result.drawdown[index],
   }));
@@ -44,7 +49,12 @@ export function ResultReviewPage({
       <SimpleGrid cols={{ base: 1, lg: 2 }} spacing="md">
         <Paper className="panel" p="md" radius="sm">
           <Stack gap="xs">
-            <Text fw={650}>Equity and drawdown</Text>
+            <Group justify="space-between">
+              <Text fw={650}>Equity and drawdown</Text>
+              <Text size="xs" c="dimmed" className="mono">
+                {shortDate(setup.start)} - {shortDate(setup.end)} / {setup.interval}
+              </Text>
+            </Group>
             <EquityDrawdownChart data={trend} />
           </Stack>
         </Paper>
