@@ -13,6 +13,14 @@ function shortDate(value: string) {
   return Number.isNaN(date.getTime()) ? value : date.toISOString().slice(0, 10);
 }
 
+function initialPortfolioByVenue(portfolio: SetupData["portfolio"]) {
+  const grouped = new Map<string, SetupData["portfolio"]>();
+  portfolio.forEach((row) => {
+    grouped.set(row.venue, [...(grouped.get(row.venue) ?? []), row]);
+  });
+  return Array.from(grouped.entries()).map(([venue, assets]) => ({ venue, assets }));
+}
+
 export function ResultReviewPage({
   graph,
   setup,
@@ -28,6 +36,7 @@ export function ResultReviewPage({
     equity: value,
     drawdown: result.drawdown[index],
   }));
+  const initialPortfolio = initialPortfolioByVenue(setup.portfolio);
 
   return (
     <Stack gap="md">
@@ -71,6 +80,29 @@ export function ResultReviewPage({
         <Paper className="panel" p="md" radius="sm">
           <Stack gap="sm">
             <Group justify="space-between">
+              <Text fw={650}>Initial portfolio</Text>
+              <Text size="xs" c="dimmed">
+                Run config
+              </Text>
+            </Group>
+            {initialPortfolio.map((venue) => (
+              <Stack key={venue.venue} gap="xs">
+                <Text fw={650}>{venue.venue}</Text>
+                <DataTable
+                  columns={["Asset", "Starting balance"]}
+                  rows={venue.assets.map((asset) => [
+                    asset.asset,
+                    <span className="mono">{asset.amount}</span>,
+                  ])}
+                />
+              </Stack>
+            ))}
+          </Stack>
+        </Paper>
+
+        <Paper className="panel" p="md" radius="sm">
+          <Stack gap="sm">
+            <Group justify="space-between">
               <Text fw={650}>Final portfolio</Text>
               <Text size="xs" c="dimmed">
                 Graph {graph.hash}
@@ -96,7 +128,9 @@ export function ResultReviewPage({
             ))}
           </Stack>
         </Paper>
+      </SimpleGrid>
 
+      <SimpleGrid cols={{ base: 1 }} spacing="md">
         <Paper className="panel" p="md" radius="sm">
           <Stack gap="sm">
             <Text fw={650}>Recent trace timeline</Text>
