@@ -1,8 +1,10 @@
-"""One-off: create the gas + prices queries on Dune, run them, write the store.
+"""Fetch venue-native Base data from Dune: gas (base.blocks) + DEX ETH price.
 
-Reads DUNE_API_KEY from the environment. Creates two saved queries (so they're
-reusable), executes each for a small window, and writes results to the Parquet
-store via the real ingester path.
+Creates/updates two public Dune queries and writes:
+- gas    -> chain=base               (base L1 fee -> USD via ETH price)
+- candles-> venue=base/symbol=ETH    (Base DEX WETH price, provenance=native)
+
+Reads DUNE_API_KEY from the env. Reuses query ids via BASE_GAS_ID / BASE_PX_ID.
 """
 
 from __future__ import annotations
@@ -21,10 +23,11 @@ API = "https://api.dune.com/api/v1"
 KEY = os.environ["DUNE_API_KEY"]
 ROOT = "data/market-data"
 
-GAS_SQL = """
+# Base L1 gas (base.blocks base fee) converted to USD via the ETH price feed.
+BASE_GAS_SQL = """
 WITH gas AS (
   SELECT date_trunc('hour', time) AS ts, avg(base_fee_per_gas) AS base_fee_wei
-  FROM ethereum.blocks
+  FROM base.blocks
   WHERE time >= TIMESTAMP '{{start}}' AND time < TIMESTAMP '{{end}}'
   GROUP BY 1
 ),
@@ -40,27 +43,32 @@ FROM gas JOIN px ON gas.ts = px.ts
 ORDER BY gas.ts
 """
 
-PRICES_SQL = """
-SELECT date_trunc('hour', minute) AS ts,
-       (array_agg(price ORDER BY minute ASC))[1]  AS open,
-       max(price)                                 AS high,
-       min(price)                                 AS low,
-       (array_agg(price ORDER BY minute DESC))[1] AS close
-FROM prices.usd
-WHERE blockchain = 'ethereum' AND symbol = 'WETH'
-  AND minute >= TIMESTAMP '{{start}}' AND minute < TIMESTAMP '{{end}}'
+# Native Base DEX WETH price: hourly OHLC from dex.trades on Base.
+BASE_DEX_SQL = """
+WITH t AS (
+  SELECT block_time, amount_usd / token_bought_amount AS price
+  FROM dex.trades
+  WHERE blockchain = 'base' AND token_bought_symbol = 'WETH'
+    AND amount_usd > 1 AND token_bought_amount > 0
+    AND block_time >= TIMESTAMP '{{start}}' AND block_time < TIMESTAMP '{{end}}'
+)
+SELECT date_trunc('hour', block_time) AS ts,
+       (array_agg(price ORDER BY block_time ASC))[1]  AS open,
+       max(price)                                     AS high,
+       min(price)                                     AS low,
+       (array_agg(price ORDER BY block_time DESC))[1] AS close
+FROM t
 GROUP BY 1
 ORDER BY 1
 """
 
 PARAMS = [
     {"key": "start", "type": "datetime", "value": "2024-01-01 00:00:00"},
-    {"key": "end", "type": "datetime", "value": "2024-01-08 00:00:00"},
+    {"key": "end", "type": "datetime", "value": "2024-02-01 00:00:00"},
 ]
 
 
 def upsert_query(name: str, sql: str, existing: str | None) -> int:
-    """PATCH an existing query's SQL if its id is given, else create a public one."""
     h = {"X-Dune-API-Key": KEY}
     if existing:
         resp = httpx.patch(
@@ -90,11 +98,7 @@ _INTERVAL_SECS = {"1h": 3600, "4h": 14400, "1d": 86400}
 
 
 def bucketize(sql: str, interval: str) -> str:
-    """Rewrite the SQL's hourly `date_trunc` buckets to the chosen interval.
-
-    Replaces `date_trunc('hour', X)` with an epoch-aligned floor bucket so the
-    aggregation actually matches the stored interval (not just the path label).
-    """
+    """Rewrite hourly `date_trunc` buckets to an epoch-aligned floor at `interval`."""
     secs = _INTERVAL_SECS[interval]
     if secs == 3600:
         return sql
@@ -107,12 +111,9 @@ def bucketize(sql: str, interval: str) -> str:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(prog="fetch_dune")
+    ap = argparse.ArgumentParser(prog="fetch_dune_base")
     ap.add_argument("--start", type=_dt, default=datetime(2024, 1, 1, tzinfo=UTC))
     ap.add_argument("--end", type=_dt, default=datetime(2024, 2, 1, tzinfo=UTC))
-    ap.add_argument("--chain", default="ethereum", help="gas chain label to store under")
-    ap.add_argument("--venue", default="ethereum", help="candle venue to store under")
-    ap.add_argument("--symbol", default="ETH")
     ap.add_argument("--interval", default="1h")
     args = ap.parse_args()
 
@@ -120,24 +121,25 @@ def main() -> int:
     client = DuneClient(KEY, http_transport(), poll_interval=3.0, max_polls=180)
 
     gas_id = upsert_query(
-        f"catalyst: eth L1 gas ({args.interval})", bucketize(GAS_SQL, args.interval),
-        os.environ.get("GAS_ID"),
+        f"catalyst: base L1 gas ({args.interval})", bucketize(BASE_GAS_SQL, args.interval),
+        os.environ.get("BASE_GAS_ID"),
     )
     px_id = upsert_query(
-        f"catalyst: eth OHLC ({args.interval})", bucketize(PRICES_SQL, args.interval),
-        os.environ.get("PX_ID"),
+        f"catalyst: base DEX eth price ({args.interval})", bucketize(BASE_DEX_SQL, args.interval),
+        os.environ.get("BASE_PX_ID"),
     )
 
-    print(f"running gas query {args.start:%Y-%m-%d}..{args.end:%Y-%m-%d} ...")
-    n_gas = ingest_gas(store, client, chain=args.chain, query_id=gas_id, start=args.start, end=args.end)
-    print(f"  wrote {n_gas} gas points -> chain={args.chain}")
+    print(f"running base gas {args.start:%Y-%m-%d}..{args.end:%Y-%m-%d} ({args.interval}) ...")
+    n_gas = ingest_gas(store, client, chain="base", query_id=gas_id, start=args.start, end=args.end)
+    print(f"  wrote {n_gas} gas points -> chain=base")
 
-    print("running prices query ...")
+    print("running base DEX price ...")
     n_px = ingest_candles(
-        store, client, venue=args.venue, symbol=args.symbol, interval=args.interval,
+        store, client, venue="base", symbol="ETH", interval=args.interval,
         query_id=px_id, start=args.start, end=args.end,
     )
-    print(f"  wrote {n_px} candles -> venue={args.venue}/symbol={args.symbol}")
+    store.set_provenance("candles", "base/ETH", "native")
+    print(f"  wrote {n_px} candles -> venue=base/symbol=ETH/{args.interval} [native]")
     return 0
 
 
