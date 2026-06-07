@@ -101,7 +101,7 @@ export function ResultReviewPage({
           <Stack gap="sm">
             <Text fw={650}>Recent trace timeline</Text>
             <DataTable
-              columns={["Time", "Node", "Signal", "Action", "Venue", "Fees", "Gas", "PnL"]}
+              columns={["Time", "Node", "Signal", "Action", "Venue", "Fees", "Gas", "Notional"]}
               rows={result.timeline.map((event) => [
                 event.time,
                 <span className="mono">{event.node}</span>,

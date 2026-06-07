@@ -302,7 +302,7 @@ export function resultFromApi(result: BacktestResult, status?: string): ResultDa
     metrics: [
       { label: "Final value", value: money(finalValue), detail: `Start ${money(startValue)}` },
       { label: "Return", value: percent(numberValue(summary.return_pct)), detail: signedMoney(pnl), tone: toneFor(pnl) },
-      { label: "PnL", value: signedMoney(pnl), detail: "Net after recorded costs", tone: toneFor(pnl) },
+      { label: "Portfolio PnL", value: signedMoney(pnl), detail: "Includes starting positions", tone: toneFor(pnl) },
       { label: "Max DD", value: percent(numberValue(summary.max_drawdown_pct)), detail: "Largest drawdown", tone: "negative" },
       { label: "Trades", value: String(summary.trade_count ?? result.trades?.length ?? 0), detail: "service result" },
       { label: "Rejected", value: String(summary.rejected_count ?? 0), detail: "policy blocked" },
