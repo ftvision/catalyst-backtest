@@ -6,6 +6,8 @@ points). Stores candles under venue=hyperliquid/symbol=<symbol> with
 provenance=native (#38), and funding under the same venue/symbol.
 
     uv run --with httpx python scripts/fetch_hyperliquid_recent.py --days 30 --symbol ETH
+    uv run --with httpx python scripts/fetch_hyperliquid_recent.py \
+        --start 2026-03-01T00:00:00Z --end 2026-06-01T00:00:00Z --symbol ETH
 """
 
 from __future__ import annotations
@@ -31,12 +33,16 @@ class HttpPost:
 def main() -> int:
     ap = argparse.ArgumentParser(prog="fetch_hyperliquid_recent")
     ap.add_argument("--days", type=int, default=30)
+    ap.add_argument("--start", type=lambda v: datetime.fromisoformat(v.replace("Z", "+00:00")).astimezone(UTC))
+    ap.add_argument("--end", type=lambda v: datetime.fromisoformat(v.replace("Z", "+00:00")).astimezone(UTC))
     ap.add_argument("--symbol", default="ETH")
     ap.add_argument("--interval", default="1h")
     args = ap.parse_args()
 
-    end = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
-    start = end - timedelta(days=args.days)
+    end = args.end or datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
+    start = args.start or (end - timedelta(days=args.days))
+    if start >= end:
+        raise SystemExit("--start must be before --end")
     src = HyperliquidSource(start, end, args.interval, transport=HttpPost())
     candles = src.candles("hyperliquid", args.symbol)
     funding = src.funding("hyperliquid", args.symbol)

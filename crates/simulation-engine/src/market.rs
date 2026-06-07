@@ -37,6 +37,7 @@ pub struct BundleIndex {
     gas: HashMap<String, BTreeMap<i64, Decimal>>,
     yields: HashMap<YieldKey, BTreeMap<i64, Decimal>>,
     liquidity: HashMap<(String, String), BTreeMap<i64, (Decimal, Decimal)>>,
+    candle_ts: BTreeSet<i64>,
     all_ts: BTreeSet<i64>,
 }
 
@@ -55,6 +56,7 @@ impl BundleIndex {
                     };
                     idx.candles.entry(key.clone()).or_default().insert(ts, bar);
                     idx.by_symbol.entry(series.symbol.clone()).or_default().insert(ts, bar.close);
+                    idx.candle_ts.insert(ts);
                     idx.all_ts.insert(ts);
                 }
             }
@@ -64,6 +66,7 @@ impl BundleIndex {
             for p in &series.points {
                 if let Some(ts) = parse_ts(&p.ts) {
                     idx.funding.entry(key.clone()).or_default().insert(ts, dec(&p.rate));
+                    idx.all_ts.insert(ts);
                 }
             }
         }
@@ -84,6 +87,7 @@ impl BundleIndex {
             for p in &series.points {
                 if let Some(ts) = parse_ts(&p.ts) {
                     idx.yields.entry(key.clone()).or_default().insert(ts, dec(&p.apr));
+                    idx.all_ts.insert(ts);
                 }
             }
         }
@@ -95,15 +99,29 @@ impl BundleIndex {
                         .entry(key.clone())
                         .or_default()
                         .insert(ts, (dec(&p.reserve_base), dec(&p.reserve_quote)));
+                    idx.all_ts.insert(ts);
                 }
             }
         }
         idx
     }
 
-    /// Sorted unique candle timestamps within `[start, end]` — the tick clock.
+    /// Sorted unique strategy-driving timestamps within `[start, end]`.
+    ///
+    /// Candles remain the preferred simulation clock when present. That keeps
+    /// coarser candle runs, such as 4h candles with hourly funding, on their bar
+    /// grid while accrual functions aggregate finer data inside each bar. For
+    /// non-candle strategies, funding, yields, and liquidity can drive strategy
+    /// state. Gas is intentionally excluded because it is an execution cost input;
+    /// using gas as a clock would make yield/funding-only signals warn on
+    /// unrelated gas timestamps.
     pub fn ticks(&self, start: i64, end: i64) -> Vec<i64> {
-        self.all_ts.range(start..=end).copied().collect()
+        let candle_ticks: Vec<i64> = self.candle_ts.range(start..=end).copied().collect();
+        if candle_ticks.is_empty() {
+            self.all_ts.range(start..=end).copied().collect()
+        } else {
+            candle_ticks
+        }
     }
 
     pub fn has_ticks(&self) -> bool {

@@ -25,6 +25,7 @@ function rowLabel(item: MarketDataCatalogItem) {
   if (item.kind === "candles") return `${item.venue ?? "-"} ${item.symbol ?? "-"} candles`;
   if (item.kind === "gas") return `${item.chain ?? "-"} gas`;
   if (item.kind === "funding") return `${item.venue ?? "-"} ${item.symbol ?? "-"} funding`;
+  if (item.kind === "yields") return `${item.protocol ?? "-"} ${item.asset ?? "-"} ${item.chain ?? "-"} yields`;
   return item.kind;
 }
 
