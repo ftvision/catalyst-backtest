@@ -1,0 +1,31 @@
+name: Deploy API
+
+on:
+  workflow_dispatch:
+    inputs:
+      fly_app_name:
+        description: Fly app name
+        required: true
+        default: catalyst-backtest-api
+      create_app:
+        description: Create the Fly app first if needed
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+jobs:
+  deploy-api:
+    runs-on: ubuntu-latest
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      FLY_APP_NAME: ${{ inputs.fly_app_name }}
+      CREATE_FLY_APP: ${{ inputs.create_app == 'true' && '1' || '0' }}
+      FLY_DEPLOY_REMOTE_ONLY: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Deploy API to Fly
+        run: ./scripts/deploy-api-fly.sh

@@ -1,4 +1,4 @@
-.PHONY: check rust-check python-check test conformance rust-conformance python-conformance
+.PHONY: check rust-check python-check test conformance rust-conformance python-conformance deploy deploy-api deploy-web
 
 check: rust-check python-check
 
@@ -23,3 +23,11 @@ rust-conformance:
 
 python-conformance:
 	uv run pytest tests/conformance
+
+deploy: deploy-api deploy-web
+
+deploy-api:
+	./scripts/deploy-api-fly.sh
+
+deploy-web:
+	./scripts/deploy-web-cloudflare.sh

@@ -18,8 +18,8 @@ The Fly config is in `infra/fly.toml`; the API image is built from
 From the repo root:
 
 ```bash
-fly apps create catalyst-backtest-api
-fly deploy --config infra/fly.toml
+CREATE_FLY_APP=1 ./scripts/deploy-api-fly.sh
+# or: CREATE_FLY_APP=1 make deploy-api
 fly status --app catalyst-backtest-api
 fly logs --app catalyst-backtest-api
 ```
@@ -55,12 +55,22 @@ The Pages config is in `apps/web/wrangler.toml`.
 For a CLI deploy:
 
 ```bash
-cd apps/web
-npm ci
-VITE_CATALYST_API_BASE=https://catalyst-backtest-api.fly.dev npm run build
-wrangler pages project create catalyst-backtest-web --production-branch main
-wrangler pages deploy dist --project-name catalyst-backtest-web
+wrangler login
+CREATE_CF_PAGES_PROJECT=1 ./scripts/deploy-web-cloudflare.sh
+# or: CREATE_CF_PAGES_PROJECT=1 make deploy-web
 ```
+
+After both remote projects exist, `make deploy` deploys API first, then web.
+
+Use the stable project URL for sharing:
+
+```text
+https://catalyst-backtest-web.pages.dev
+```
+
+Wrangler may print a hash-prefixed deployment URL such as
+`https://<hash>.catalyst-backtest-web.pages.dev`. Treat that as a deployment
+preview URL, not the canonical public URL.
 
 For a Git-connected Cloudflare Pages project:
 
@@ -73,6 +83,31 @@ For a Git-connected Cloudflare Pages project:
 
 The frontend bakes `VITE_CATALYST_API_BASE` into the static bundle at build time.
 If the API URL changes, rebuild and redeploy the Pages app.
+
+## GitHub Actions
+
+Two manual deployment workflows are available:
+
+- `.github/workflows/deploy-api.yml`
+- `.github/workflows/deploy-web.yml`
+
+Required repository secrets:
+
+| Secret | Used by | Purpose |
+| --- | --- | --- |
+| `FLY_API_TOKEN` | Deploy API | Authenticates `fly deploy`. |
+| `CLOUDFLARE_API_TOKEN` | Deploy Web | Authenticates `wrangler pages deploy`. |
+| `CLOUDFLARE_ACCOUNT_ID` | Deploy Web | Selects the Cloudflare account for Pages. |
+
+Both workflows call the same scripts used locally:
+
+```bash
+./scripts/deploy-api-fly.sh
+./scripts/deploy-web-cloudflare.sh
+```
+
+This keeps local and CI deploy behavior aligned. The workflows are
+`workflow_dispatch` only, so deploys happen manually from the GitHub Actions tab.
 
 ## Later: R2 Market Data
 
