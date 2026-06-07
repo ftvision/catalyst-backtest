@@ -3,7 +3,6 @@ import {
   Group,
   Paper,
   Progress,
-  SegmentedControl,
   SimpleGrid,
   Stack,
   Table,
@@ -11,16 +10,14 @@ import {
   Title,
 } from "@mantine/core";
 import { AlertTriangle } from "lucide-react";
-import { CostAttribution } from "../components/CostAttribution";
 import { MarketReplayChart } from "../components/MarketReplayChart";
 import { SectionHeader } from "../components/SectionHeader";
 import { StatusBadge } from "../components/StatusBadge";
-import type { AuditData, MarketEvent, MarketReplayData, ResultData, SetupData } from "../types";
+import type { AuditData, MarketEvent, MarketReplayData, SetupData } from "../types";
 
 export function EventLensPage({
   audit,
   replay,
-  result,
   setup,
   selectedEventId,
   selectedReplayEvent,
@@ -28,7 +25,6 @@ export function EventLensPage({
 }: {
   audit: AuditData;
   replay: MarketReplayData;
-  result: ResultData;
   setup: SetupData;
   selectedEventId: string;
   selectedReplayEvent?: MarketEvent;
@@ -43,18 +39,7 @@ export function EventLensPage({
     <Stack gap="md">
       <SectionHeader
         title="Event Lens"
-        subtitle="Explain one event with market evidence, balances, gas, costs, and policy alternatives."
-        action={
-          <SegmentedControl
-            size="xs"
-            value="strict"
-            data={[
-              { label: "Strict", value: "strict" },
-              { label: "Conservative", value: "conservative" },
-              { label: "Research", value: "research" },
-            ]}
-          />
-        }
+        subtitle="Explain one event with market evidence, pricing, balances, and policy reasons."
       />
 
       <div className="event-grid">
@@ -137,8 +122,24 @@ export function EventLensPage({
 
             <Paper className="panel" p="md" radius="sm">
               <Stack gap="sm">
-                <Text fw={650}>Gross to net PnL</Text>
-                <CostAttribution costs={result.costs} compact />
+                <Text fw={650}>Event impact</Text>
+                <SimpleGrid cols={{ base: 2, sm: 3 }} spacing="xs">
+                  {[
+                    ["Status", eventStatus],
+                    ["Observed price", lensEvent?.price ?? "-"],
+                    ["Impact", lensEvent?.impact ?? audit.selected.raw.status ?? "-"],
+                    ...audit.selected.pricing.slice(0, 3),
+                  ].map(([label, value]) => (
+                    <Paper key={label} className="panel-muted" p="xs">
+                      <Text size="xs" c="dimmed">
+                        {label}
+                      </Text>
+                      <Text size="sm" fw={650} className="mono">
+                        {value}
+                      </Text>
+                    </Paper>
+                  ))}
+                </SimpleGrid>
               </Stack>
             </Paper>
           </SimpleGrid>

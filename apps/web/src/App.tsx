@@ -592,7 +592,6 @@ export function App() {
             <EventLensPage
               audit={workbench.audit}
               replay={workbench.marketReplay}
-              result={workbench.result}
               setup={workbench.setup}
               selectedEventId={selectedEventId}
               selectedReplayEvent={selectedEvent}
