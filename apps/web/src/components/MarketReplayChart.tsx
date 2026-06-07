@@ -11,6 +11,7 @@ import {
   type Time,
   type UTCTimestamp,
 } from "lightweight-charts";
+import { ChartInteractionControls } from "./ChartInteractionControls";
 import type { CandlePoint, MarketEvent, ReplayPoint } from "../types";
 import { formatNumber, formatPercent } from "../utils/format";
 
@@ -212,10 +213,16 @@ export function MarketReplayChart({
   compact?: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const resetRangeRef = useRef<() => void>(() => undefined);
   const [eventRails, setEventRails] = useState<EventRail[]>([]);
   const [displayedGranularity, setDisplayedGranularity] = useState<ChartGranularity>("1h");
   const eventsAligned = isEventWindowAligned(candles, events);
   const chartData = useMemo(() => getReplayChartCache(candles, replay), [candles, replay]);
+
+  const resetRange = () => {
+    resetRangeRef.current();
+  };
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -266,6 +273,16 @@ export function MarketReplayChart({
         visible: true,
         borderColor: "#d4dae3",
       },
+      handleScroll: {
+        mouseWheel: false,
+        pressedMouseMove: true,
+        horzTouchDrag: true,
+      },
+      handleScale: {
+        axisPressedMouseMove: true,
+        mouseWheel: false,
+        pinch: true,
+      },
       timeScale: {
         borderColor: "#d4dae3",
         timeVisible: true,
@@ -277,6 +294,7 @@ export function MarketReplayChart({
         horzLine: { color: equityColor, labelBackgroundColor: equityColor },
       },
     });
+    chartRef.current = chart;
 
     const applyPaneLayout = () => {
       if (compact) return;
@@ -475,6 +493,12 @@ export function MarketReplayChart({
       }
       updateEventRails();
     };
+    resetRangeRef.current = () => {
+      const fullGranularity = shouldUseAdaptiveGranularity ? granularityForRange(fullRangeSeconds) : "1h";
+      applyGranularity(fullGranularity, null);
+      chart.timeScale().fitContent();
+      window.requestAnimationFrame(updateEventRails);
+    };
     const handleSizeChange = () => updateEventRails();
     chart.timeScale().subscribeVisibleTimeRangeChange(handleVisibleRangeChange);
     chart.timeScale().subscribeSizeChange(handleSizeChange);
@@ -493,6 +517,8 @@ export function MarketReplayChart({
       chart.timeScale().unsubscribeSizeChange(handleSizeChange);
       resizeObserver.disconnect();
       chart.remove();
+      chartRef.current = null;
+      resetRangeRef.current = () => undefined;
     };
   }, [candles, chartData, compact, events, eventsAligned, selectedEventId]);
 
@@ -500,6 +526,14 @@ export function MarketReplayChart({
     <div className={compact ? "chart-shell compact" : "chart-shell"}>
       <div ref={containerRef} className={compact ? "chart-frame compact" : "chart-frame"} />
       {!compact && candles.length ? <div className="chart-granularity-badge">{displayedGranularity} candles</div> : null}
+      {!compact ? (
+        <ChartInteractionControls
+          ariaLabel="Market replay chart controls"
+          chartRef={chartRef}
+          labelPrefix="market replay"
+          resetRange={resetRange}
+        />
+      ) : null}
       <div className="chart-event-overlay" aria-hidden="true">
         {eventRails.map((rail) => (
           <div
