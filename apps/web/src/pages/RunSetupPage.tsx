@@ -28,6 +28,13 @@ export function RunSetupPage({
   runLabel = "Run backtest",
   runDisabled = false,
   dataSourceLabel = "Parquet store",
+  strategies = [],
+  selectedStrategyId,
+  onSelectStrategy,
+  scenarios = [],
+  selectedScenarioId,
+  onSelectScenario,
+  selectorDisabled = false,
 }: {
   graph: GraphSummary;
   setup: SetupData;
@@ -36,6 +43,13 @@ export function RunSetupPage({
   runLabel?: string;
   runDisabled?: boolean;
   dataSourceLabel?: string;
+  strategies?: StrategyListItem[];
+  selectedStrategyId?: string;
+  onSelectStrategy?: (id: string) => void;
+  scenarios?: StrategyScenarioListItem[];
+  selectedScenarioId?: string;
+  onSelectScenario?: (id: string) => void;
+  selectorDisabled?: boolean;
 }) {
   const strategyOptions = strategies.map((strategy) => ({
     value: strategy.id,
