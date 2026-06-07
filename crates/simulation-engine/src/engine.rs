@@ -212,9 +212,14 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
     check_required_coverage(&compiled, &index, start, end, interval_secs, &policy, &mut warnings)?;
 
     let mut ticks = index.ticks(start, end);
+    if !exec_graph.initial_actions.is_empty() && !ticks.contains(&start) {
+        ticks.push(start);
+        ticks.sort_unstable();
+        ticks.dedup();
+    }
     if ticks.is_empty() {
         ticks.push(start);
-        warnings.push("no candle data in range; ran a single degenerate tick".into());
+        warnings.push("no market data in range; ran a single degenerate tick".into());
     }
     let mut initial_done = false;
     let mut last_ts_iso = input.config.end.clone();

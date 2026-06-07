@@ -46,6 +46,22 @@ fn bundle(venue: &str, closes: &[&str], funding: Value, yields: Value) -> Market
     .unwrap()
 }
 
+fn yield_only_bundle(yields: Value) -> MarketDataBundle {
+    serde_json::from_value(json!({
+        "schema_version": "catalyst.backtest.market_data_bundle.v1",
+        "interval": "1h",
+        "start": ts(0),
+        "end": ts(3),
+        "candles": [],
+        "funding": [],
+        "gas": [],
+        "yields": yields,
+        "providers": [],
+        "warnings": []
+    }))
+    .unwrap()
+}
+
 fn config(venue: &str, usdc: &str, n_ticks: i64) -> BacktestConfig {
     let mut venue_balances = BTreeMap::new();
     venue_balances.insert("USDC".to_string(), usdc.to_string());
@@ -170,6 +186,40 @@ fn yield_source_threshold_reads_apr_and_fires() {
     let trace = run(&input).unwrap();
     // apr >= 5% at ticks 0 and 2.
     assert_eq!(count(&trace, "signal_fired"), 2);
+}
+
+#[test]
+fn yield_source_without_candles_drives_ticks() {
+    let yields = json!([{"protocol": "aave", "asset": "USDC", "chain": "base", "pool": "usdc",
+        "points": [
+            {"ts": ts(0), "apr": "0.06"},
+            {"ts": ts(1), "apr": "0.04"},
+            {"ts": ts(2), "apr": "0.07"}
+        ]}]);
+    let g = json!({
+        "nodes": [
+            {"id": "high-apr", "kind": "signal", "subtype": "threshold",
+             "config": {"source": {"kind": "yield", "protocol": "aave", "asset": "USDC",
+                                   "chain": "base", "pool": "usdc"},
+                        "operator": ">=", "reference": {"const": "0.05"}}},
+            {"id": "deposit", "kind": "action", "subtype": "yield_deposit",
+             "config": {"chain": "base", "protocol": "aave", "pool": "usdc",
+                        "asset": "USDC", "amount": "100"}}
+        ],
+        "edges": [{"from": "high-apr", "to": "deposit"}]
+    });
+    let trace = run(&SimulationInput {
+        graph: graph(g),
+        config: config("base", "1000", 3),
+        policy: policy_with_signals(sig(Some("level"), None, None, None)),
+        market_data: yield_only_bundle(yields),
+    })
+    .unwrap();
+
+    assert_eq!(trace.snapshots.len(), 3);
+    assert_eq!(count(&trace, "signal_fired"), 2);
+    assert_eq!(count(&trace, "action_executed"), 2);
+    assert!(trace.warnings.is_empty(), "warnings: {:?}", trace.warnings);
 }
 
 // --- price_threshold sugar equivalence + variables ---
