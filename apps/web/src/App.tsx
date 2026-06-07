@@ -567,9 +567,11 @@ export function App() {
                   <Download size={16} />
                 </ActionIcon>
               </Tooltip>
-              <Button leftSection={<Play size={14} />} onClick={runBacktest} loading={isRunning}>
-                {runLabel}
-              </Button>
+              {activeRoute !== "setup" ? (
+                <Button leftSection={<Play size={14} />} onClick={runBacktest} loading={isRunning}>
+                  {runLabel}
+                </Button>
+              ) : null}
             </Group>
           </div>
         </header>

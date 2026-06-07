@@ -63,6 +63,14 @@ export const graph: GraphSummary = {
     { id: "base-gas", kind: "data", label: "Base gas", detail: "historical" },
     { id: "hl-funding", kind: "data", label: "Funding", detail: "8h history" },
   ],
+  edges: [
+    { id: "eth-price--eth-below-1800", from: "eth-price", to: "eth-below-1800" },
+    { id: "eth-below-1800--cooldown-15m", from: "eth-below-1800", to: "cooldown-15m" },
+    { id: "cooldown-15m--buy-eth-on-base", from: "cooldown-15m", to: "buy-eth-on-base" },
+    { id: "cooldown-15m--open-eth-long-5x", from: "cooldown-15m", to: "open-eth-long-5x" },
+    { id: "base-gas--buy-eth-on-base", from: "base-gas", to: "buy-eth-on-base" },
+    { id: "hl-funding--open-eth-long-5x", from: "hl-funding", to: "open-eth-long-5x" },
+  ],
 };
 
 export const setup: SetupData = {

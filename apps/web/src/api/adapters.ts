@@ -20,6 +20,10 @@ import type {
   Tone,
 } from "../types";
 
+function stringField(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
 function numberValue(value: unknown, fallback = 0): number {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string") {
@@ -129,6 +133,14 @@ export function graphFromPreview(
       label: node.id,
       detail: node.subtype ?? (actionIds.includes(node.id) ? "action" : signalIds.includes(node.id) ? "signal" : "node"),
     })),
+    edges: graph.edges
+      .map((edge, index) => {
+        const from = stringField(edge.from);
+        const to = stringField(edge.to);
+        if (!from || !to) return undefined;
+        return { id: `${from}--${to}-${index}`, from, to };
+      })
+      .filter((edge): edge is { id: string; from: string; to: string } => Boolean(edge)),
   };
 }
 
