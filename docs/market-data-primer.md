@@ -1,7 +1,9 @@
 # Market Data Primer
 
 This document explains the data we need for crypto backtesting, where that data
-can come from, and why provider choice matters.
+can come from, and why provider choice matters. For the concrete registry of the
+sources we *actually* fetch (endpoints, scripts, store paths, upload), see
+[data-sources.md](data-sources.md).
 
 ## What Is Market Data?
 
