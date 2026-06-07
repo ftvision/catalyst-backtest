@@ -76,11 +76,12 @@ fn swap_at(
         return Execution::rejected(format!("zero price for {base} on {venue}"));
     }
 
-    // Resolve the requested amount (supporting the "all" sentinel).
-    let amount = if cfg.amount == "all" {
+    // Resolve the requested amount (supporting the "all" sentinel). Relative
+    // amounts are resolved to absolute by the engine before execution.
+    let amount = if cfg.amount.is_all() {
         ledger.balance(venue, &cfg.from_asset)
     } else {
-        parse(&cfg.amount)
+        parse(cfg.amount.as_str())
     };
     if amount.is_zero() {
         return Execution::rejected(format!("nothing to swap from {}", cfg.from_asset));

@@ -38,6 +38,21 @@
       "description": "A decimal value carried as a string to avoid float precision loss, e.g. \"100\" or \"0.04\". The literal \"all\" is permitted for full-balance actions.",
       "pattern": "^(all|[0-9]+(\\.[0-9]+)?)$"
     },
+    "amountOrPct": {
+      "description": "An action amount: an absolute decimal (or \"all\"), or a percentage of a basis.",
+      "oneOf": [
+        { "$ref": "#/$defs/decimal" },
+        {
+          "type": "object",
+          "required": ["basis", "value"],
+          "additionalProperties": false,
+          "properties": {
+            "basis": { "type": "string", "enum": ["pct_balance", "pct_position", "pct_portfolio"] },
+            "value": { "$ref": "#/$defs/decimal" }
+          }
+        }
+      ]
+    },
     "node": {
       "type": "object",
       "required": ["id", "kind", "subtype", "config"],
@@ -104,7 +119,7 @@
       "properties": {
         "from_asset": { "type": "string" },
         "to_asset": { "type": "string" },
-        "amount": { "$ref": "#/$defs/decimal" },
+        "amount": { "$ref": "#/$defs/amountOrPct" },
         "chain": { "type": "string", "description": "Venue/chain, e.g. base or hyperliquid." },
         "order_type": { "type": "string", "enum": ["market", "limit"], "default": "market" },
         "limit_price": { "$ref": "#/$defs/decimal", "description": "Worst acceptable price; required when order_type is limit." },
@@ -124,7 +139,7 @@
       "properties": {
         "symbol": { "type": "string" },
         "side": { "type": "string", "enum": ["long", "short"] },
-        "size_usd": { "$ref": "#/$defs/decimal" },
+        "size_usd": { "$ref": "#/$defs/amountOrPct" },
         "leverage": { "$ref": "#/$defs/decimal" },
         "chain": { "type": "string" },
         "order_type": { "type": "string", "enum": ["market", "limit"], "default": "market" },
@@ -148,7 +163,7 @@
         "protocol": { "type": "string", "description": "Yield protocol, e.g. aave." },
         "pool": { "type": "string" },
         "asset": { "type": "string" },
-        "amount": { "$ref": "#/$defs/decimal" }
+        "amount": { "$ref": "#/$defs/amountOrPct" }
       }
     },
     "priceThresholdConfig": {

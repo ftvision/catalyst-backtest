@@ -1,0 +1,29 @@
+{
+  "schema_version": "catalyst.graph.definition.v1",
+  "nodes": [
+    {
+      "id": "eth-spike",
+      "kind": "signal",
+      "subtype": "threshold",
+      "config": {
+        "source": { "kind": "price", "symbol": "ETH", "venue": "base" },
+        "operator": ">=",
+        "reference": { "const": "3000" }
+      },
+      "enabled": true
+    },
+    {
+      "id": "take-half-profit",
+      "kind": "action",
+      "subtype": "swap",
+      "config": {
+        "from_asset": "ETH",
+        "to_asset": "USDC",
+        "amount": { "basis": "pct_balance", "value": "50" },
+        "chain": "base"
+      },
+      "enabled": true
+    }
+  ],
+  "edges": [{ "from": "eth-spike", "to": "take-half-profit" }]
+}

@@ -5,7 +5,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use rust_decimal::Decimal;
 use serde_json::{json, Value};
 
-use catalyst_contracts::graph::{PerpOrderConfig, Reference, Source, SwapConfig};
+use catalyst_contracts::graph::{
+    Amount, AmountBasis, PerpOrderConfig, Reference, Source, SwapConfig, YieldConfig,
+};
 use catalyst_contracts::trace::{Event, Portfolio, SimulationTrace, Snapshot};
 use catalyst_contracts::{BacktestConfig, Graph, MarketDataBundle, SimulationPolicy};
 use catalyst_execution_models::{
@@ -683,39 +685,113 @@ fn execute_action(
 ) -> ActionOutcome {
     match action.subtype.as_str() {
         "swap" => match serde_json::from_value::<SwapConfig>(action.config.clone()) {
-            Ok(cfg) if is_limit(&cfg.order_type) => match place_swap_limit(&cfg) {
-                LimitPlacement::Placed(placed) => ActionOutcome::Resting(RestingSpec {
-                    placed,
-                    expire_after_bars: resolve_expiry(&cfg.time_in_force, cfg.expire_after_bars),
-                    kind: RestingKind::Swap(cfg),
-                }),
-                LimitPlacement::Rejected(e) => ActionOutcome::Rejected(e),
-            },
-            Ok(cfg) => execute_swap(ledger, ctx, policy, &cfg).into(),
+            Ok(mut cfg) => {
+                // A swap has no distinct "position"; both balance/position bases
+                // resolve against the from-asset balance.
+                let bal = ledger.balance(&cfg.chain, &cfg.from_asset);
+                match resolve_amount(&cfg.amount, bal, bal) {
+                    Ok(a) => cfg.amount = a,
+                    Err(e) => return ActionOutcome::Rejected(e),
+                }
+                if is_limit(&cfg.order_type) {
+                    match place_swap_limit(&cfg) {
+                        LimitPlacement::Placed(placed) => ActionOutcome::Resting(RestingSpec {
+                            placed,
+                            expire_after_bars: resolve_expiry(
+                                &cfg.time_in_force,
+                                cfg.expire_after_bars,
+                            ),
+                            kind: RestingKind::Swap(cfg),
+                        }),
+                        LimitPlacement::Rejected(e) => ActionOutcome::Rejected(e),
+                    }
+                } else {
+                    execute_swap(ledger, ctx, policy, &cfg).into()
+                }
+            }
             Err(e) => ActionOutcome::Rejected(format!("bad swap config: {e}")),
         },
         "perp_order" => match serde_json::from_value::<PerpOrderConfig>(action.config.clone()) {
-            Ok(cfg) if is_limit(&cfg.order_type) => match place_perp_limit(ledger, &cfg) {
-                LimitPlacement::Placed(placed) => ActionOutcome::Resting(RestingSpec {
-                    placed,
-                    expire_after_bars: resolve_expiry(&cfg.time_in_force, cfg.expire_after_bars),
-                    kind: RestingKind::Perp(cfg),
-                }),
-                LimitPlacement::Rejected(e) => ActionOutcome::Rejected(e),
-            },
-            Ok(cfg) => execute_perp(ledger, ctx, policy, &cfg).into(),
+            Ok(mut cfg) => {
+                let bal = ledger.balance(&cfg.chain, "USDC");
+                let position = ledger
+                    .perp(&cfg.chain, &cfg.symbol)
+                    .map(|p| (p.size * p.entry_price).abs())
+                    .unwrap_or(Decimal::ZERO);
+                match resolve_amount(&cfg.size_usd, bal, position) {
+                    Ok(a) => cfg.size_usd = a,
+                    Err(e) => return ActionOutcome::Rejected(e),
+                }
+                if is_limit(&cfg.order_type) {
+                    match place_perp_limit(ledger, &cfg) {
+                        LimitPlacement::Placed(placed) => ActionOutcome::Resting(RestingSpec {
+                            placed,
+                            expire_after_bars: resolve_expiry(
+                                &cfg.time_in_force,
+                                cfg.expire_after_bars,
+                            ),
+                            kind: RestingKind::Perp(cfg),
+                        }),
+                        LimitPlacement::Rejected(e) => ActionOutcome::Rejected(e),
+                    }
+                } else {
+                    execute_perp(ledger, ctx, policy, &cfg).into()
+                }
+            }
             Err(e) => ActionOutcome::Rejected(format!("bad perp config: {e}")),
         },
-        "yield_deposit" => match serde_json::from_value(action.config.clone()) {
-            Ok(cfg) => execute_yield_deposit(ledger, ctx, policy, &cfg).into(),
+        "yield_deposit" => match serde_json::from_value::<YieldConfig>(action.config.clone()) {
+            Ok(mut cfg) => match resolve_yield_amount(&mut cfg, ledger) {
+                Ok(()) => execute_yield_deposit(ledger, ctx, policy, &cfg).into(),
+                Err(e) => ActionOutcome::Rejected(e),
+            },
             Err(e) => ActionOutcome::Rejected(format!("bad yield config: {e}")),
         },
-        "yield_withdraw" => match serde_json::from_value(action.config.clone()) {
-            Ok(cfg) => execute_yield_withdraw(ledger, ctx, policy, &cfg).into(),
+        "yield_withdraw" => match serde_json::from_value::<YieldConfig>(action.config.clone()) {
+            Ok(mut cfg) => match resolve_yield_amount(&mut cfg, ledger) {
+                Ok(()) => execute_yield_withdraw(ledger, ctx, policy, &cfg).into(),
+                Err(e) => ActionOutcome::Rejected(e),
+            },
             Err(e) => ActionOutcome::Rejected(format!("bad yield config: {e}")),
         },
         other => ActionOutcome::rejected_subtype(other),
     }
+}
+
+/// Resolve a relative [`Amount`] to an absolute decimal string against the
+/// supplied bases. `pct_portfolio` is not yet wired (needs portfolio valuation
+/// threaded into execution) and is rejected with a clear message.
+fn resolve_amount(amount: &Amount, balance: Decimal, position: Decimal) -> Result<Amount, String> {
+    match amount {
+        Amount::Absolute(_) => Ok(amount.clone()),
+        Amount::Relative { basis, value } => {
+            let pct = value.parse::<Decimal>().unwrap_or(Decimal::ZERO) / Decimal::from(100);
+            let resolved = match basis {
+                AmountBasis::PctBalance => pct * balance,
+                AmountBasis::PctPosition => pct * position,
+                AmountBasis::PctPortfolio => {
+                    return Err("pct_portfolio sizing is not yet supported".to_string());
+                }
+            };
+            Ok(Amount::Absolute(resolved.normalize().to_string()))
+        }
+    }
+}
+
+fn resolve_yield_amount(cfg: &mut YieldConfig, ledger: &Ledger) -> Result<(), String> {
+    let balance = ledger.balance(&cfg.chain, &cfg.asset);
+    let position = ledger
+        .yields()
+        .find(|y| {
+            y.protocol == cfg.protocol
+                && y.asset == cfg.asset
+                && y.chain == cfg.chain
+                && y.pool == cfg.pool
+        })
+        .map(|y| y.principal + y.accrued)
+        .unwrap_or(Decimal::ZERO);
+    cfg.amount = resolve_amount(&cfg.amount, balance, position)?;
+    Ok(())
 }
 
 impl ActionOutcome {

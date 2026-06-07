@@ -79,7 +79,7 @@ fn open_perp(
     let venue = cfg.chain.as_str();
     let side = ledger_side(cfg.side.clone());
 
-    let notional = parse(&cfg.size_usd);
+    let notional = parse(cfg.size_usd.as_str());
     let leverage = cfg.leverage.as_deref().map(parse).filter(|l| !l.is_zero()).unwrap_or(Decimal::ONE);
     let margin = notional / leverage;
     let size_base = notional / price;
@@ -161,7 +161,7 @@ fn close_perp(
     // Size the close by the position's entry price so a reduce-only order whose
     // size_usd matches the opened notional closes the whole position regardless
     // of where the mark has moved (clamped to the open size).
-    let requested_base = parse(&cfg.size_usd) / position.entry_price;
+    let requested_base = parse(cfg.size_usd.as_str()) / position.entry_price;
     let close_base = requested_base.min(position.size);
     let fraction = close_base / position.size;
 
