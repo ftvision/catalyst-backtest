@@ -3,6 +3,7 @@
 
 use std::fmt;
 
+use catalyst_contracts::request::ExecutionOverrides;
 use catalyst_contracts::SimulationPolicy as ContractPolicy;
 use serde::de::DeserializeOwned;
 
@@ -197,6 +198,28 @@ pub fn validate(p: &ResolvedPolicy) -> Result<(), PolicyError> {
 }
 
 impl ResolvedPolicy {
+    /// Apply per-run execution overrides (`BacktestConfig.execution`) onto a
+    /// resolved policy. Each field, when present, wins over the profile's value.
+    /// Lets a single run tune firing/cost knobs without defining a new profile.
+    pub fn apply_execution_overrides(
+        &mut self,
+        overrides: &ExecutionOverrides,
+    ) -> Result<(), PolicyError> {
+        if let Some(v) = &overrides.signal_trigger {
+            self.signal_trigger = parse_enum("execution.signal_trigger", v)?;
+        }
+        if let Some(v) = &overrides.gas_model {
+            self.gas_model = parse_enum("execution.gas_model", v)?;
+        }
+        if let Some(v) = &overrides.slippage_bps {
+            self.slippage_bps = v.clone();
+        }
+        if let Some(v) = &overrides.action_cooldown {
+            self.cooldown = Some(v.clone());
+        }
+        Ok(())
+    }
+
     /// The profile's canonical string name.
     pub fn profile_name(&self) -> &'static str {
         match self.profile {

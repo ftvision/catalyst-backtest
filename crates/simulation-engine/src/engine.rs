@@ -178,7 +178,13 @@ fn interval_seconds(interval: &str) -> Option<i64> {
 
 /// Run a full simulation, returning a deterministic trace.
 pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
-    let policy = resolve_policy(&input.policy).map_err(|e| EngineError::Policy(e.to_string()))?;
+    let mut policy = resolve_policy(&input.policy).map_err(|e| EngineError::Policy(e.to_string()))?;
+    // Per-run execution overrides (config.execution) win over the profile.
+    if let Some(overrides) = &input.config.execution {
+        policy
+            .apply_execution_overrides(overrides)
+            .map_err(|e| EngineError::Policy(e.to_string()))?;
+    }
     let interval = &input.config.interval;
     let interval_secs = interval_seconds(interval)
         .ok_or_else(|| EngineError::Config(format!("unknown interval {interval:?}")))?;
