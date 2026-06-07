@@ -114,6 +114,7 @@ export interface CandlePoint {
 
 export interface ReplayPoint {
   label: string;
+  time?: UTCTimestamp;
   equity: number;
   drawdown: number;
   gas: number;

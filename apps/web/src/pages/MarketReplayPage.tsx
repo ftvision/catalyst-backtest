@@ -5,7 +5,7 @@ import { MarketReplayChart } from "../components/MarketReplayChart";
 import { SectionHeader } from "../components/SectionHeader";
 import { StatusBadge } from "../components/StatusBadge";
 import { MarketEvidencePanel } from "../components/TrendPanel";
-import type { GraphSummary, MarketReplayData, ResultData, SetupData } from "../types";
+import type { GraphSummary, MarketEvent, MarketReplayData, ResultData, SetupData } from "../types";
 
 export function MarketReplayPage({
   graph,
@@ -24,7 +24,19 @@ export function MarketReplayPage({
   onSelectEvent: (eventId: string) => void;
   onInspectEvent: () => void;
 }) {
-  const selectedEvent = replay.events.find((event) => event.id === selectedEventId) ?? replay.events[0];
+  const fallbackEvent: MarketEvent = {
+    id: "event-0",
+    index: 0,
+    time: (replay.replay[0]?.time ?? replay.candles[0]?.time ?? 0) as MarketEvent["time"],
+    labelTime: "-",
+    kind: "no_event",
+    label: "No trace event",
+    node: "-",
+    status: "warning",
+    price: "-",
+    impact: "No trace event fired in this window.",
+  };
+  const selectedEvent = replay.events.find((event) => event.id === selectedEventId) ?? replay.events[0] ?? fallbackEvent;
 
   return (
     <Stack gap="md">
