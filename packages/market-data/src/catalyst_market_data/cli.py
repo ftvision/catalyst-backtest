@@ -11,10 +11,11 @@ from __future__ import annotations
 import argparse
 from datetime import datetime
 
+from catalyst_market_data_core import ParquetStore
+
 from .binance import httpx_transport, ingest_binance
 from .defillama import ingest_aave_yields
 from .evm_gas import httpx_rpc_transport, ingest_constant_gas, ingest_recent_gas
-from .parquet_store import ParquetStore
 
 _INTERVALS = ["1m", "5m", "15m", "1h", "4h", "1d"]
 

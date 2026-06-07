@@ -13,7 +13,10 @@ dev = [
   "referencing>=0.34",
   "httpx>=0.27",
   "catalyst-contracts",
+  "catalyst-market-data-core",
   "catalyst-market-data",
+  "catalyst-market-data-dune",
+  "catalyst-market-data-bigquery",
 ]
 
 [tool.uv.workspace]
@@ -23,7 +26,10 @@ members = [
 
 [tool.uv.sources]
 catalyst-contracts = { workspace = true }
+catalyst-market-data-core = { workspace = true }
 catalyst-market-data = { workspace = true }
+catalyst-market-data-dune = { workspace = true }
+catalyst-market-data-bigquery = { workspace = true }
 
 [tool.ruff]
 line-length = 100

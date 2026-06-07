@@ -1,0 +1,28 @@
+[project]
+name = "catalyst-market-data-bigquery"
+version = "0.1.0"
+description = "Google BigQuery (public crypto datasets) ingester for the Catalyst market-data store"
+requires-python = ">=3.12"
+dependencies = [
+  "catalyst-contracts",
+  "catalyst-market-data-core",
+]
+
+# The BigQuery client is heavy and only needed for the *real* query runner, which
+# imports it lazily. Install with: uv pip install "catalyst-market-data-bigquery[gcp]"
+[project.optional-dependencies]
+gcp = ["google-cloud-bigquery>=3"]
+
+[project.scripts]
+catalyst-ingest-bigquery = "catalyst_market_data_bigquery.cli:main"
+
+[tool.uv.sources]
+catalyst-contracts = { workspace = true }
+catalyst-market-data-core = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/catalyst_market_data_bigquery"]

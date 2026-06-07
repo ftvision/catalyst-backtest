@@ -29,6 +29,8 @@ use arrow::array::{Array, StringArray, TimestampMicrosecondArray};
 use bytes::Bytes;
 use chrono::{DateTime, NaiveDate, Utc};
 use futures::StreamExt;
+use object_store::aws::AmazonS3Builder;
+use object_store::gcp::GoogleCloudStorageBuilder;
 use object_store::{path::Path as StorePath, ObjectStore};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use serde::{Deserialize, Serialize};
@@ -119,6 +121,12 @@ fn micros_to_iso(micros: i64) -> String {
 
 /// Resolve a `root` (local path, `file://`, `s3://`, `gs://`, ...) into an object
 /// store plus the base path within it.
+///
+/// For `s3://` and `gs://`, the store is built from the environment (so custom
+/// endpoints and credentials are honored). This is what makes **S3-compatible
+/// stores like Cloudflare R2** work: set `AWS_ENDPOINT` to the R2 endpoint plus
+/// `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (and `AWS_REGION=auto`), and use
+/// a `s3://<bucket>/<prefix>` root. Local/`file://` roots need no configuration.
 fn resolve_store(root: &str) -> Result<(Arc<dyn ObjectStore>, StorePath), LoaderError> {
     let url = if root.contains("://") {
         Url::parse(root).map_err(|e| LoaderError::Store(format!("bad root url {root:?}: {e}")))?
@@ -128,9 +136,38 @@ fn resolve_store(root: &str) -> Result<(Arc<dyn ObjectStore>, StorePath), Loader
         Url::from_directory_path(&abs)
             .map_err(|_| LoaderError::Store(format!("cannot form file url for {abs:?}")))?
     };
-    let (store, path) =
-        object_store::parse_url(&url).map_err(|e| LoaderError::Store(e.to_string()))?;
-    Ok((Arc::from(store), path))
+
+    match url.scheme() {
+        "s3" => {
+            // from_env reads AWS_ENDPOINT / AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY /
+            // AWS_REGION / AWS_SESSION_TOKEN / AWS_ALLOW_HTTP; with_url supplies the bucket.
+            let store = AmazonS3Builder::from_env()
+                .with_url(url.as_str())
+                .build()
+                .map_err(|e| LoaderError::Store(e.to_string()))?;
+            Ok((
+                Arc::new(store),
+                StorePath::from_url_path(url.path())
+                    .map_err(|e| LoaderError::Store(e.to_string()))?,
+            ))
+        }
+        "gs" => {
+            let store = GoogleCloudStorageBuilder::from_env()
+                .with_url(url.as_str())
+                .build()
+                .map_err(|e| LoaderError::Store(e.to_string()))?;
+            Ok((
+                Arc::new(store),
+                StorePath::from_url_path(url.path())
+                    .map_err(|e| LoaderError::Store(e.to_string()))?,
+            ))
+        }
+        _ => {
+            let (store, path) =
+                object_store::parse_url(&url).map_err(|e| LoaderError::Store(e.to_string()))?;
+            Ok((Arc::from(store), path))
+        }
+    }
 }
 
 fn child(base: &StorePath, parts: &[String]) -> StorePath {
@@ -231,7 +268,13 @@ fn parse_bytes(
             }
             let values = cols
                 .iter()
-                .map(|c| if c.is_null(i) { None } else { Some(c.value(i).to_string()) })
+                .map(|c| {
+                    if c.is_null(i) {
+                        None
+                    } else {
+                        Some(c.value(i).to_string())
+                    }
+                })
                 .collect();
             out.push((t, values));
         }
@@ -275,11 +318,19 @@ pub async fn load_bundle(
                 format!("interval={interval}"),
             ],
         );
-        let rows =
-            read_window(&store, &prefix, &["open", "high", "low", "close", "volume"], start_us, end_us)
-                .await?;
+        let rows = read_window(
+            &store,
+            &prefix,
+            &["open", "high", "low", "close", "volume"],
+            start_us,
+            end_us,
+        )
+        .await?;
         if rows.is_empty() {
-            warnings.push(format!("no candles for {} on {} from 'parquet-store'", r.symbol, r.venue));
+            warnings.push(format!(
+                "no candles for {} on {} from 'parquet-store'",
+                r.symbol, r.venue
+            ));
         }
         candles.push(CandleSeries {
             venue: req(&r.venue),
@@ -299,7 +350,14 @@ pub async fn load_bundle(
         });
     }
     if !reqs.candles.is_empty() {
-        providers.push(provider("candles", &candles.iter().map(|s| !s.points.is_empty()).collect::<Vec<_>>(), &coverage));
+        providers.push(provider(
+            "candles",
+            &candles
+                .iter()
+                .map(|s| !s.points.is_empty())
+                .collect::<Vec<_>>(),
+            &coverage,
+        ));
     }
 
     // funding
@@ -307,23 +365,40 @@ pub async fn load_bundle(
     for r in &reqs.funding {
         let prefix = child(
             &base,
-            &["funding".to_string(), format!("venue={}", r.venue), format!("symbol={}", r.symbol)],
+            &[
+                "funding".to_string(),
+                format!("venue={}", r.venue),
+                format!("symbol={}", r.symbol),
+            ],
         );
         let rows = read_window(&store, &prefix, &["rate"], start_us, end_us).await?;
         if rows.is_empty() {
-            warnings.push(format!("no funding for {} on {} from 'parquet-store'", r.symbol, r.venue));
+            warnings.push(format!(
+                "no funding for {} on {} from 'parquet-store'",
+                r.symbol, r.venue
+            ));
         }
         funding.push(FundingSeries {
             venue: req(&r.venue),
             symbol: req(&r.symbol),
             points: rows
                 .into_iter()
-                .map(|(t, v)| FundingPoint { ts: micros_to_iso(t), rate: v[0].clone().unwrap_or_default() })
+                .map(|(t, v)| FundingPoint {
+                    ts: micros_to_iso(t),
+                    rate: v[0].clone().unwrap_or_default(),
+                })
                 .collect(),
         });
     }
     if !reqs.funding.is_empty() {
-        providers.push(provider("funding", &funding.iter().map(|s| !s.points.is_empty()).collect::<Vec<_>>(), &coverage));
+        providers.push(provider(
+            "funding",
+            &funding
+                .iter()
+                .map(|s| !s.points.is_empty())
+                .collect::<Vec<_>>(),
+            &coverage,
+        ));
     }
 
     // gas
@@ -338,12 +413,19 @@ pub async fn load_bundle(
             chain: req(&r.chain),
             points: rows
                 .into_iter()
-                .map(|(t, v)| GasPoint { ts: micros_to_iso(t), gas_usd: v[0].clone().unwrap_or_default() })
+                .map(|(t, v)| GasPoint {
+                    ts: micros_to_iso(t),
+                    gas_usd: v[0].clone().unwrap_or_default(),
+                })
                 .collect(),
         });
     }
     if !reqs.gas.is_empty() {
-        providers.push(provider("gas", &gas.iter().map(|s| !s.points.is_empty()).collect::<Vec<_>>(), &coverage));
+        providers.push(provider(
+            "gas",
+            &gas.iter().map(|s| !s.points.is_empty()).collect::<Vec<_>>(),
+            &coverage,
+        ));
     }
 
     // yields
@@ -362,7 +444,10 @@ pub async fn load_bundle(
         );
         let rows = read_window(&store, &prefix, &["apr"], start_us, end_us).await?;
         if rows.is_empty() {
-            warnings.push(format!("no yields for {}/{} on {} from 'parquet-store'", r.protocol, r.asset, r.chain));
+            warnings.push(format!(
+                "no yields for {}/{} on {} from 'parquet-store'",
+                r.protocol, r.asset, r.chain
+            ));
         }
         yields.push(YieldSeries {
             protocol: req(&r.protocol),
@@ -371,12 +456,22 @@ pub async fn load_bundle(
             pool: r.pool.clone(),
             points: rows
                 .into_iter()
-                .map(|(t, v)| YieldPoint { ts: micros_to_iso(t), apr: v[0].clone().unwrap_or_default() })
+                .map(|(t, v)| YieldPoint {
+                    ts: micros_to_iso(t),
+                    apr: v[0].clone().unwrap_or_default(),
+                })
                 .collect(),
         });
     }
     if !reqs.yields.is_empty() {
-        providers.push(provider("yields", &yields.iter().map(|s| !s.points.is_empty()).collect::<Vec<_>>(), &coverage));
+        providers.push(provider(
+            "yields",
+            &yields
+                .iter()
+                .map(|s| !s.points.is_empty())
+                .collect::<Vec<_>>(),
+            &coverage,
+        ));
     }
 
     Ok(MarketDataBundle {
@@ -395,5 +490,9 @@ pub async fn load_bundle(
 
 fn provider(kind: &str, non_empty: &[bool], coverage: &dyn Fn(bool) -> Coverage) -> Provider {
     let complete = !non_empty.is_empty() && non_empty.iter().all(|&b| b);
-    Provider { name: "parquet-store".to_string(), kind: kind.to_string(), coverage: Some(coverage(complete)) }
+    Provider {
+        name: "parquet-store".to_string(),
+        kind: kind.to_string(),
+        coverage: Some(coverage(complete)),
+    }
 }

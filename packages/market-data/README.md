@@ -59,10 +59,12 @@ python -m catalyst_market_data.cli ingest-gas \
   --start 2024-01-01T00:00:00Z --end 2024-02-01T00:00:00Z
 ```
 
-> **Gas caveat:** free historical Base gas isn't available (`eth_feeHistory` is
-> recent-only; archival is Dune/BigQuery). `ingest-gas` offers a *real recent*
-> RPC mode and a *flat-estimate* backfill for historical windows. Treat backtest
-> gas as an approximation.
+> **Gas caveat:** free historical gas isn't available from RPC (`eth_feeHistory`
+> is recent-only). `ingest-gas` here offers a *real recent* RPC mode and a
+> *flat-estimate* backfill for historical windows. For **deep historical gas**,
+> use the dedicated vendor packages: `catalyst-market-data-bigquery` (L1 from the
+> public Ethereum `blocks` table) or `catalyst-market-data-dune` (any chain a
+> query covers) — you can cross-reference them against each other.
 
 ## Fetch sources
 

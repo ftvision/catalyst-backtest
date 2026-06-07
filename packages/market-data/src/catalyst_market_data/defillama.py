@@ -18,7 +18,7 @@ from decimal import Decimal
 from catalyst_contracts.market_data import YieldPoint
 
 from .binance import Transport
-from .parquet_store import ParquetStore
+from catalyst_market_data_core import ParquetStore
 
 YIELDS_CHART_URL = "https://yields.llama.fi/chart"
 
