@@ -38,6 +38,7 @@ fn graph_examples_roundtrip() {
     assert_roundtrip::<Graph>("graph.swap.json");
     assert_roundtrip::<Graph>("graph.perp-signal.json");
     assert_roundtrip::<Graph>("graph.yield.json");
+    assert_roundtrip::<Graph>("graph.limit-order.json");
 }
 
 #[test]

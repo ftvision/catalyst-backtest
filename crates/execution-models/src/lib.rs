@@ -13,6 +13,7 @@
 //!   [`execute_yield_withdraw`])
 
 mod context;
+mod limit;
 mod outcome;
 mod perp;
 mod pricing;
@@ -20,10 +21,13 @@ mod swap;
 mod yields;
 
 pub use context::{Bar, MarketContext};
+pub use limit::{
+    limit_fill_price, place_perp_limit, place_swap_limit, LimitPlacement, LimitSide, PlacedLimit,
+};
 pub use outcome::{Execution, Fill};
-pub use perp::execute_perp;
+pub use perp::{execute_perp, execute_perp_at};
 pub use pricing::{is_stable, Direction};
-pub use swap::execute_swap;
+pub use swap::{execute_swap, execute_swap_at};
 pub use yields::{execute_yield_deposit, execute_yield_withdraw};
 
 pub const CRATE_NAME: &str = "catalyst-execution-models";

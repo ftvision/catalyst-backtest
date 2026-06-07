@@ -17,6 +17,10 @@ use catalyst_contracts::SimulationTrace;
 const EXECUTED: &str = "action_executed";
 const REJECTED: &str = "action_rejected";
 const LIQUIDATION: &str = "liquidation";
+const ORDER_PLACED: &str = "order_placed";
+const ORDER_FILLED: &str = "order_filled";
+const ORDER_EXPIRED: &str = "order_expired";
+const ORDER_REJECTED: &str = "order_rejected";
 
 fn dec(s: &str) -> Decimal {
     s.parse().unwrap_or(Decimal::ZERO)
@@ -70,8 +74,18 @@ pub fn summarize(
     let trades = trades(trace);
     let costs = costs(trace);
 
-    let executed = trace.events.iter().filter(|e| e.event_type == EXECUTED).count() as u64;
-    let rejected = trace.events.iter().filter(|e| e.event_type == REJECTED).count() as u64;
+    // A filled limit order is a trade, just as a market action is; a rejected one
+    // counts alongside rejected market actions.
+    let executed = trace
+        .events
+        .iter()
+        .filter(|e| e.event_type == EXECUTED || e.event_type == ORDER_FILLED)
+        .count() as u64;
+    let rejected = trace
+        .events
+        .iter()
+        .filter(|e| e.event_type == REJECTED || e.event_type == ORDER_REJECTED)
+        .count() as u64;
 
     let summary = Summary {
         starting_value_usd: fmt(start_val),
@@ -130,22 +144,11 @@ fn trades(trace: &SimulationTrace) -> Vec<Trade> {
     let mut out = Vec::new();
     for event in &trace.events {
         match event.event_type.as_str() {
-            EXECUTED => out.push(executed_trade(event)),
-            REJECTED => out.push(Trade {
-                ts: event.ts.clone(),
-                node_id: event.node_id.clone().unwrap_or_default(),
-                kind: "rejected".to_string(),
-                status: Some("rejected".to_string()),
-                reason: event.reason.clone(),
-                venue: None,
-                symbol: None,
-                side: None,
-                price: None,
-                amount: None,
-                value_usd: None,
-                fee_usd: None,
-                gas_usd: None,
-            }),
+            EXECUTED | ORDER_FILLED => out.push(executed_trade(event)),
+            REJECTED => out.push(status_trade(event, "rejected", "rejected")),
+            ORDER_PLACED => out.push(status_trade(event, "limit", "placed")),
+            ORDER_EXPIRED => out.push(status_trade(event, "limit", "expired")),
+            ORDER_REJECTED => out.push(status_trade(event, "limit", "rejected")),
             LIQUIDATION => out.push(Trade {
                 ts: event.ts.clone(),
                 node_id: event.node_id.clone().unwrap_or_default(),
@@ -165,6 +168,27 @@ fn trades(trace: &SimulationTrace) -> Vec<Trade> {
         }
     }
     out
+}
+
+/// A non-fill lifecycle row (rejected / order placed / expired). Pulls whatever
+/// descriptive fields the event detail carries; `limit_price` shows as the price.
+fn status_trade(event: &Event, kind: &str, status: &str) -> Trade {
+    let d = &event.detail;
+    Trade {
+        ts: event.ts.clone(),
+        node_id: event.node_id.clone().unwrap_or_default(),
+        kind: detail_str(d, "kind").unwrap_or_else(|| kind.to_string()),
+        status: Some(status.to_string()),
+        reason: event.reason.clone(),
+        venue: detail_str(d, "venue"),
+        symbol: detail_str(d, "symbol"),
+        side: detail_str(d, "side"),
+        price: detail_str(d, "limit_price"),
+        amount: None,
+        value_usd: None,
+        fee_usd: None,
+        gas_usd: None,
+    }
 }
 
 fn executed_trade(event: &Event) -> Trade {
@@ -193,7 +217,7 @@ fn costs(trace: &SimulationTrace) -> Costs {
     let mut yield_ = Decimal::ZERO;
     for event in &trace.events {
         match event.event_type.as_str() {
-            EXECUTED => {
+            EXECUTED | ORDER_FILLED => {
                 fees += detail_dec(&event.detail, "fee_usd");
                 gas += detail_dec(&event.detail, "gas_usd");
             }

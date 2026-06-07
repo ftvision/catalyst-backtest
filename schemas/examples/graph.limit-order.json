@@ -1,0 +1,39 @@
+{
+  "schema_version": "catalyst.graph.definition.v1",
+  "nodes": [
+    {
+      "id": "buy-eth-limit",
+      "kind": "action",
+      "subtype": "swap",
+      "config": {
+        "from_asset": "USDC",
+        "to_asset": "ETH",
+        "amount": "100",
+        "chain": "base",
+        "order_type": "limit",
+        "limit_price": "1900",
+        "time_in_force": "gtc"
+      },
+      "enabled": true
+    },
+    {
+      "id": "open-eth-long-limit",
+      "kind": "action",
+      "subtype": "perp_order",
+      "config": {
+        "symbol": "ETH",
+        "side": "long",
+        "size_usd": "500",
+        "leverage": "2",
+        "chain": "hyperliquid",
+        "order_type": "limit",
+        "limit_price": "1850",
+        "reduce_only": false,
+        "time_in_force": "good_til_bars",
+        "expire_after_bars": 24
+      },
+      "enabled": true
+    }
+  ],
+  "edges": []
+}

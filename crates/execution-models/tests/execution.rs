@@ -5,7 +5,8 @@ use std::str::FromStr;
 
 use catalyst_contracts::graph::{PerpOrderConfig, PerpSide, SwapConfig, YieldConfig};
 use catalyst_execution_models::{
-    execute_perp, execute_swap, execute_yield_deposit, execute_yield_withdraw, Bar, Execution,
+    execute_perp, execute_swap, execute_yield_deposit, execute_yield_withdraw,
+    limit_fill_price, place_perp_limit, place_swap_limit, Bar, Execution, LimitPlacement, LimitSide,
     MarketContext,
 };
 use catalyst_portfolio_ledger::Ledger;
@@ -62,6 +63,10 @@ fn swap(from: &str, to: &str, amount: &str, chain: &str) -> SwapConfig {
         to_asset: to.into(),
         amount: amount.into(),
         chain: chain.into(),
+        order_type: "market".into(),
+        limit_price: None,
+        time_in_force: None,
+        expire_after_bars: None,
     }
 }
 
@@ -133,6 +138,9 @@ fn perp(side: PerpSide, size_usd: &str, leverage: Option<&str>, reduce_only: boo
         chain: "hyperliquid".into(),
         order_type: "market".into(),
         reduce_only,
+        limit_price: None,
+        time_in_force: None,
+        expire_after_bars: None,
     }
 }
 
@@ -261,4 +269,118 @@ fn zero_slippage_zero_fee_policy_fills_at_close() {
     assert_eq!(fill.price, Some(d("2000")));
     assert_eq!(fill.fee_usd, Decimal::ZERO);
     assert_eq!(l.balance("base", "ETH"), d("0.05")); // 100 / 2000
+}
+
+// --- Limit orders: touch logic + placement validation ---
+
+fn bar(open: &str, high: &str, low: &str, close: &str) -> Bar {
+    Bar { open: d(open), high: d(high), low: d(low), close: d(close) }
+}
+
+#[test]
+fn buy_limit_touches_when_low_reaches_it() {
+    let b = bar("1980", "1985", "1850", "1900");
+    // low 1850 <= 1900 -> fills, at the limit (open 1980 is above it)
+    assert_eq!(limit_fill_price(&b, LimitSide::Buy, d("1900")), Some(d("1900")));
+    // a limit below the whole bar's low is not reached
+    assert_eq!(limit_fill_price(&b, LimitSide::Buy, d("1840")), None);
+}
+
+#[test]
+fn buy_limit_gap_through_fills_at_open() {
+    let b = bar("1850", "1860", "1820", "1840");
+    // opens below the 1900 limit -> the better open price, not the limit
+    assert_eq!(limit_fill_price(&b, LimitSide::Buy, d("1900")), Some(d("1850")));
+}
+
+#[test]
+fn sell_limit_touches_when_high_reaches_it() {
+    let b = bar("2100", "2300", "2090", "2250");
+    assert_eq!(limit_fill_price(&b, LimitSide::Sell, d("2200")), Some(d("2200")));
+    // gap up: opens above the limit -> fills at the better open
+    let gap = bar("2250", "2300", "2240", "2280");
+    assert_eq!(limit_fill_price(&gap, LimitSide::Sell, d("2200")), Some(d("2250")));
+    // limit above the bar's high is not reached
+    assert_eq!(limit_fill_price(&b, LimitSide::Sell, d("2400")), None);
+}
+
+fn limit_swap(from: &str, to: &str, limit: Option<&str>) -> SwapConfig {
+    SwapConfig {
+        from_asset: from.into(),
+        to_asset: to.into(),
+        amount: "100".into(),
+        chain: "base".into(),
+        order_type: "limit".into(),
+        limit_price: limit.map(|s| s.to_string()),
+        time_in_force: None,
+        expire_after_bars: None,
+    }
+}
+
+#[test]
+fn place_swap_limit_resolves_side_and_rejects_bad_input() {
+    match place_swap_limit(&limit_swap("USDC", "ETH", Some("1900"))) {
+        LimitPlacement::Placed(p) => {
+            assert_eq!(p.side, LimitSide::Buy);
+            assert_eq!(p.symbol, "ETH");
+            assert_eq!(p.limit, d("1900"));
+        }
+        LimitPlacement::Rejected(e) => panic!("expected placed: {e}"),
+    }
+    // selling the base resolves to a sell
+    assert!(matches!(
+        place_swap_limit(&limit_swap("ETH", "USDC", Some("2100"))),
+        LimitPlacement::Placed(p) if p.side == LimitSide::Sell
+    ));
+    // missing limit_price is rejected
+    assert!(matches!(place_swap_limit(&limit_swap("USDC", "ETH", None)), LimitPlacement::Rejected(_)));
+    // no stable side is rejected
+    assert!(matches!(
+        place_swap_limit(&limit_swap("BTC", "ETH", Some("1"))),
+        LimitPlacement::Rejected(_)
+    ));
+}
+
+fn limit_perp(side: PerpSide, reduce_only: bool, limit: Option<&str>) -> PerpOrderConfig {
+    PerpOrderConfig {
+        symbol: "ETH".into(),
+        side,
+        size_usd: "500".into(),
+        leverage: Some("2".into()),
+        chain: "hyperliquid".into(),
+        order_type: "limit".into(),
+        reduce_only,
+        limit_price: limit.map(|s| s.to_string()),
+        time_in_force: None,
+        expire_after_bars: None,
+    }
+}
+
+#[test]
+fn place_perp_limit_open_long_is_a_buy() {
+    let l = ledger_with("hyperliquid", "USDC", "1000");
+    match place_perp_limit(&l, &limit_perp(PerpSide::Long, false, Some("1900"))) {
+        LimitPlacement::Placed(p) => assert_eq!(p.side, LimitSide::Buy),
+        LimitPlacement::Rejected(e) => panic!("expected placed: {e}"),
+    }
+}
+
+#[test]
+fn place_reduce_only_limit_requires_a_position_and_closes_it() {
+    // no position -> rejected
+    let empty = ledger_with("hyperliquid", "USDC", "1000");
+    assert!(matches!(
+        place_perp_limit(&empty, &limit_perp(PerpSide::Short, true, Some("2200"))),
+        LimitPlacement::Rejected(_)
+    ));
+
+    // open a long via the market path, then a reduce-only limit closes it (a sell)
+    let mut l = ledger_with("hyperliquid", "USDC", "1000");
+    let market = FakeMarket::new().with_bar("hyperliquid", "ETH", "2000");
+    let opened = execute_perp(&mut l, &market, &strict_v1(), &perp(PerpSide::Long, "500", Some("2"), false));
+    assert!(opened.is_executed());
+    assert!(matches!(
+        place_perp_limit(&l, &limit_perp(PerpSide::Short, true, Some("2200"))),
+        LimitPlacement::Placed(p) if p.side == LimitSide::Sell
+    ));
 }

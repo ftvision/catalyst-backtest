@@ -23,6 +23,31 @@ global state directly, and **a rejection leaves the ledger unchanged**.
 - **Gas** = 0 on Hyperliquid; otherwise `historical` gas from the market context
   with the policy's fixed fallback, or a fixed amount.
 
+## Limit orders (resting, fill-when-touched)
+
+Swaps and perps accept `order_type: "limit"` with a `limit_price`. A market order
+(the default) fills at the current bar as above. A **limit** order does not fill
+on placement — it *rests* until a later bar's price touches it. This module
+provides the instrument-independent pieces; the engine owns the resting book,
+time-in-force expiry, and `order_placed`/`order_filled`/`order_expired` events.
+
+- `place_swap_limit` / `place_perp_limit` — validate a placement and resolve its
+  side: buys rest below the market (open long / close short), sells rest above
+  (open short / close long). A reduce-only limit (take-profit) requires an open
+  position.
+- `limit_fill_price(bar, side, limit)` — the touch test and fill price:
+  - **buy** fills when `bar.low <= limit`; **sell** when `bar.high >= limit`.
+  - fills **at the limit**, except a bar that gaps *through* it fills at the
+    **open** (in the trader's favor).
+  - a resting limit is a **maker** order: **no taker slippage** is applied
+    (unlike `price_selection`/`slippage` on market fills). Fees still apply.
+- `execute_swap_at` / `execute_perp_at` — apply a fill at an explicit price (used
+  by the engine when a resting order touches).
+
+Bar-resolution honesty: the engine only makes a resting order eligible from the
+bar *after* it was placed, so a fill never depends on intra-placement-bar path
+information that wasn't knowable when the order was sent.
+
 ## Market context
 
 ```rust
@@ -41,5 +66,7 @@ cargo test -p catalyst-execution-models
 ```
 
 Cover insufficient balance (rejection leaves the ledger untouched), slippage,
-fees, gas, reduce-only validation, perp open/add/close, and yield
-deposit/withdraw basics — including custom policies flowing through.
+fees, gas, reduce-only validation, perp open/add/close, yield deposit/withdraw
+basics, and limit-order touch logic + placement validation — including custom
+policies flowing through. Resting-order lifecycle (rest → fill/expire) is covered
+end-to-end in `simulation-engine`'s `tests/limit_orders.rs`.

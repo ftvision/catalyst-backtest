@@ -97,8 +97,18 @@
         "from_asset": { "type": "string" },
         "to_asset": { "type": "string" },
         "amount": { "$ref": "#/$defs/decimal" },
-        "chain": { "type": "string", "description": "Venue/chain, e.g. base or hyperliquid." }
-      }
+        "chain": { "type": "string", "description": "Venue/chain, e.g. base or hyperliquid." },
+        "order_type": { "type": "string", "enum": ["market", "limit"], "default": "market" },
+        "limit_price": { "$ref": "#/$defs/decimal", "description": "Worst acceptable price; required when order_type is limit." },
+        "time_in_force": { "type": "string", "enum": ["gtc", "good_til_bars"], "default": "gtc" },
+        "expire_after_bars": { "type": "integer", "minimum": 1, "description": "Bars until expiry when time_in_force is good_til_bars." }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "order_type": { "const": "limit" } }, "required": ["order_type"] },
+          "then": { "required": ["limit_price"] }
+        }
+      ]
     },
     "perpOrderConfig": {
       "type": "object",
@@ -110,8 +120,17 @@
         "leverage": { "$ref": "#/$defs/decimal" },
         "chain": { "type": "string" },
         "order_type": { "type": "string", "enum": ["market", "limit"], "default": "market" },
-        "reduce_only": { "type": "boolean", "default": false }
-      }
+        "reduce_only": { "type": "boolean", "default": false },
+        "limit_price": { "$ref": "#/$defs/decimal", "description": "Worst acceptable mark price; required when order_type is limit." },
+        "time_in_force": { "type": "string", "enum": ["gtc", "good_til_bars"], "default": "gtc" },
+        "expire_after_bars": { "type": "integer", "minimum": 1, "description": "Bars until expiry when time_in_force is good_til_bars." }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "order_type": { "const": "limit" } }, "required": ["order_type"] },
+          "then": { "required": ["limit_price"] }
+        }
+      ]
     },
     "yieldConfig": {
       "type": "object",

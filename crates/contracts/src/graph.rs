@@ -71,6 +71,19 @@ pub struct SwapConfig {
     pub to_asset: String,
     pub amount: Decimal,
     pub chain: String,
+    /// `market` (fill at the current bar) or `limit` (rest until touched).
+    #[serde(default = "default_order_type")]
+    pub order_type: String,
+    /// Required when `order_type` is `limit`: the worst acceptable price (in
+    /// quote/USD per base unit). A buy fills at/below it; a sell fills at/above it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit_price: Option<Decimal>,
+    /// `gtc` (default) or `good_til_bars`. Only meaningful for limit orders.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_in_force: Option<String>,
+    /// With `good_til_bars`, the order expires this many bars after placement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expire_after_bars: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -92,6 +105,17 @@ pub struct PerpOrderConfig {
     pub order_type: String,
     #[serde(default)]
     pub reduce_only: bool,
+    /// Required when `order_type` is `limit`: the worst acceptable mark price.
+    /// Opening a long / closing a short fills at/below it; opening a short /
+    /// closing a long fills at/above it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit_price: Option<Decimal>,
+    /// `gtc` (default) or `good_til_bars`. Only meaningful for limit orders.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_in_force: Option<String>,
+    /// With `good_til_bars`, the order expires this many bars after placement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expire_after_bars: Option<u32>,
 }
 
 fn default_order_type() -> String {
