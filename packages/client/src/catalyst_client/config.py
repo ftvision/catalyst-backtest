@@ -47,7 +47,9 @@ class RunSpec:
 
     def body(self) -> dict[str, Any]:
         """The JSON request body for ``POST /backtests`` / ``/simulate``."""
-        body = self.request.model_dump(mode="json", exclude_none=True)
+        # by_alias so aliased fields serialize to the wire contract — notably
+        # edge `from` (the model field is `from_`, since `from` is a keyword).
+        body = self.request.model_dump(mode="json", by_alias=True, exclude_none=True)
         if self.market_data is not None:
             body["market_data"] = self.market_data
         return body
@@ -70,7 +72,7 @@ class RunSpec:
 
     @property
     def graph(self) -> dict[str, Any]:
-        return self.request.graph.model_dump(mode="json", exclude_none=True)
+        return self.request.graph.model_dump(mode="json", by_alias=True, exclude_none=True)
 
 
 def _resolve_graph(raw: Any, base_dir: Path) -> dict[str, Any]:
