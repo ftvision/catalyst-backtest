@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 
 use catalyst_contracts::{BacktestConfig, Graph, MarketDataBundle, SimulationPolicy};
 use catalyst_graph_compiler::compile;
-use catalyst_market_data_loader::{load_bundle, BundleRef};
+use catalyst_market_data_loader::{list_catalog, load_bundle, BundleRef};
 use catalyst_simulation_engine::{run, SimulationInput};
 
 use crate::error::{error, error_with};
@@ -276,15 +276,22 @@ pub async fn market_data_catalog(State(state): State<AppState>) -> Response {
         .into_response();
     };
 
-    let path = local_store_path(&root);
     let mut warnings = Vec::new();
-    let items = match path {
-        Some(path) => catalog_items(&path, &mut warnings),
-        None => {
-            warnings.push(format!("Catalog listing currently supports local store roots only: {root}"));
+    let items = match list_catalog(&root).await {
+        Ok(items) => items,
+        Err(e) => {
+            warnings.push(format!(
+                "Could not list Parquet market-data store {root:?}: {e}"
+            ));
             Vec::new()
         }
     };
+
+    if items.is_empty() && warnings.is_empty() {
+        warnings.push(format!(
+            "No Parquet market-data series found under {root:?}."
+        ));
+    }
 
     Json(json!({
         "source": "parquet-store",
@@ -359,136 +366,6 @@ fn strategy_repo_error(message: impl Into<String>) -> Response {
         "strategy_repository_error",
         message.into(),
     )
-}
-
-fn local_store_path(root: &str) -> Option<PathBuf> {
-    if let Some(path) = root.strip_prefix("file://") {
-        return Some(PathBuf::from(path));
-    }
-    if root.contains("://") {
-        return None;
-    }
-    Some(PathBuf::from(root))
-}
-
-fn partition_value(part: &str, key: &str) -> Option<String> {
-    part.strip_prefix(&format!("{key}=")).map(ToString::to_string)
-}
-
-fn parquet_span(dir: &FsPath) -> (Option<String>, Option<String>, usize) {
-    let mut dates: Vec<String> = Vec::new();
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return (None, None, 0);
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
-            continue;
-        };
-        let Some(date) = name.strip_suffix(".parquet") else {
-            continue;
-        };
-        dates.push(date.to_string());
-    }
-    dates.sort();
-    let start = dates.first().map(|date| format!("{date}T00:00:00Z"));
-    let end = dates.last().map(|date| format!("{date}T23:59:59Z"));
-    (start, end, dates.len())
-}
-
-fn catalog_items(root: &FsPath, warnings: &mut Vec<String>) -> Vec<Value> {
-    let mut items = Vec::new();
-    let candles_root = root.join("candles");
-    if let Ok(venues) = std::fs::read_dir(&candles_root) {
-        for venue_entry in venues.flatten() {
-            let venue_part = venue_entry.file_name().to_string_lossy().to_string();
-            let Some(venue) = partition_value(&venue_part, "venue") else {
-                continue;
-            };
-            if let Ok(symbols) = std::fs::read_dir(venue_entry.path()) {
-                for symbol_entry in symbols.flatten() {
-                    let symbol_part = symbol_entry.file_name().to_string_lossy().to_string();
-                    let Some(symbol) = partition_value(&symbol_part, "symbol") else {
-                        continue;
-                    };
-                    if let Ok(intervals) = std::fs::read_dir(symbol_entry.path()) {
-                        for interval_entry in intervals.flatten() {
-                            let interval_part = interval_entry.file_name().to_string_lossy().to_string();
-                            let Some(interval) = partition_value(&interval_part, "interval") else {
-                                continue;
-                            };
-                            let (start, end, files) = parquet_span(&interval_entry.path());
-                            items.push(json!({
-                                "kind": "candles",
-                                "source": "parquet-store",
-                                "venue": venue,
-                                "symbol": symbol,
-                                "quote": "USD",
-                                "interval": interval,
-                                "start": start,
-                                "end": end,
-                                "files": files,
-                            }));
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    let gas_root = root.join("gas");
-    if let Ok(chains) = std::fs::read_dir(&gas_root) {
-        for chain_entry in chains.flatten() {
-            let chain_part = chain_entry.file_name().to_string_lossy().to_string();
-            let Some(chain) = partition_value(&chain_part, "chain") else {
-                continue;
-            };
-            let (start, end, files) = parquet_span(&chain_entry.path());
-            items.push(json!({
-                "kind": "gas",
-                "source": "parquet-store",
-                "chain": chain,
-                "interval": "1h",
-                "start": start,
-                "end": end,
-                "files": files,
-            }));
-        }
-    }
-
-    let funding_root = root.join("funding");
-    if let Ok(venues) = std::fs::read_dir(&funding_root) {
-        for venue_entry in venues.flatten() {
-            let venue_part = venue_entry.file_name().to_string_lossy().to_string();
-            let Some(venue) = partition_value(&venue_part, "venue") else {
-                continue;
-            };
-            if let Ok(symbols) = std::fs::read_dir(venue_entry.path()) {
-                for symbol_entry in symbols.flatten() {
-                    let symbol_part = symbol_entry.file_name().to_string_lossy().to_string();
-                    let Some(symbol) = partition_value(&symbol_part, "symbol") else {
-                        continue;
-                    };
-                    let (start, end, files) = parquet_span(&symbol_entry.path());
-                    items.push(json!({
-                        "kind": "funding",
-                        "source": "parquet-store",
-                        "venue": venue,
-                        "symbol": symbol,
-                        "interval": "1h",
-                        "start": start,
-                        "end": end,
-                        "files": files,
-                    }));
-                }
-            }
-        }
-    }
-
-    if items.is_empty() {
-        warnings.push(format!("No Parquet market-data series found under {root:?}."));
-    }
-    items
 }
 
 pub async fn list_strategies() -> Response {

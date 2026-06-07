@@ -9,7 +9,9 @@ use arrow::datatypes::{Field, Schema};
 use arrow::record_batch::RecordBatch;
 use parquet::arrow::ArrowWriter;
 
-use catalyst_market_data_loader::{load_bundle, BundleRef, CandleReq, DataRequirements, GasReq};
+use catalyst_market_data_loader::{
+    list_catalog, load_bundle, BundleRef, CandleReq, DataRequirements, GasReq,
+};
 
 const H0: i64 = 1_704_067_200_000_000; // 2024-01-01T00:00:00Z in micros
 const HOUR: i64 = 3_600_000_000;
@@ -251,13 +253,54 @@ fn reads_via_explicit_file_url() {
     assert_eq!(bundle.candles[0].points[0].close, "2000");
 }
 
+#[test]
+fn lists_catalog_via_explicit_file_url() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_candles(
+        tmp.path(),
+        "base",
+        "ETH",
+        "1h",
+        "2024-01-01",
+        &[H0, H0 + HOUR],
+    );
+    let gas_dir = tmp.path().join("gas").join("chain=base");
+    write_parquet(
+        &gas_dir.join("2024-01-01.parquet"),
+        &[("ts", ts_col(&[H0])), ("gas_usd", str_col(&["0.02"]))],
+    );
+
+    let url = url::Url::from_directory_path(tmp.path()).unwrap();
+    let items = pollster::block_on(list_catalog(url.as_str())).unwrap();
+
+    let candle = items.iter().find(|item| item.kind == "candles").unwrap();
+    assert_eq!(candle.source, "parquet-store");
+    assert_eq!(candle.venue.as_deref(), Some("base"));
+    assert_eq!(candle.symbol.as_deref(), Some("ETH"));
+    assert_eq!(candle.interval.as_deref(), Some("1h"));
+    assert_eq!(candle.start.as_deref(), Some("2024-01-01T00:00:00Z"));
+    assert_eq!(candle.end.as_deref(), Some("2024-01-01T23:59:59Z"));
+    assert_eq!(candle.files, 1);
+
+    let gas = items.iter().find(|item| item.kind == "gas").unwrap();
+    assert_eq!(gas.chain.as_deref(), Some("base"));
+    assert_eq!(gas.interval.as_deref(), Some("1h"));
+}
+
 // --- provider provenance (#38) ---
 
 #[test]
 fn candle_providers_carry_provenance_from_manifest() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
-    write_candles(root, "hyperliquid", "ETH", "1h", "2024-01-01", &[H0, H0 + HOUR]);
+    write_candles(
+        root,
+        "hyperliquid",
+        "ETH",
+        "1h",
+        "2024-01-01",
+        &[H0, H0 + HOUR],
+    );
     write_candles(root, "base", "ETH", "1h", "2024-01-01", &[H0, H0 + HOUR]);
     // manifest marks the HL series native; base has no entry -> defaults reference
     fs::write(
@@ -270,8 +313,14 @@ fn candle_providers_carry_provenance_from_manifest() {
         root: root.to_string_lossy().to_string(),
         data_requirements: DataRequirements {
             candles: vec![
-                CandleReq { venue: "hyperliquid".into(), symbol: "ETH".into() },
-                CandleReq { venue: "base".into(), symbol: "ETH".into() },
+                CandleReq {
+                    venue: "hyperliquid".into(),
+                    symbol: "ETH".into(),
+                },
+                CandleReq {
+                    venue: "base".into(),
+                    symbol: "ETH".into(),
+                },
             ],
             ..Default::default()
         },
@@ -316,7 +365,10 @@ fn loads_liquidity_series_for_candle_venue() {
     let bundle_ref = BundleRef {
         root: root.to_string_lossy().to_string(),
         data_requirements: DataRequirements {
-            candles: vec![CandleReq { venue: "base".into(), symbol: "ETH".into() }],
+            candles: vec![CandleReq {
+                venue: "base".into(),
+                symbol: "ETH".into(),
+            }],
             ..Default::default()
         },
     };

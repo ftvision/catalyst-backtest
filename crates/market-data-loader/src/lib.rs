@@ -22,6 +22,7 @@
 //! code path reads all of them. Loading is async (object stores are async); the
 //! parquet decode itself is synchronous over the fetched bytes.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
@@ -87,6 +88,39 @@ pub struct DataRequirements {
 pub struct BundleRef {
     pub root: String,
     pub data_requirements: DataRequirements,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CatalogItem {
+    pub kind: String,
+    pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub venue: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quote: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chain: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub asset: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pool: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interval: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end: Option<String>,
+    pub files: usize,
+}
+
+#[derive(Debug)]
+struct CatalogAcc {
+    item: CatalogItem,
+    dates: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -357,6 +391,187 @@ fn req(s: &str) -> String {
     s.to_string()
 }
 
+fn partition_value(part: &str, key: &str) -> Option<String> {
+    part.strip_prefix(&format!("{key}="))
+        .map(ToString::to_string)
+}
+
+fn catalog_file_date(path: &str) -> Option<String> {
+    let name = path.rsplit('/').next()?;
+    name.strip_suffix(".parquet").map(ToString::to_string)
+}
+
+fn relative_object_path(base: &StorePath, location: &StorePath) -> String {
+    let base = base.to_string();
+    let location = location.to_string();
+    if base.is_empty() {
+        return location;
+    }
+    location
+        .strip_prefix(&format!("{base}/"))
+        .unwrap_or(&location)
+        .to_string()
+}
+
+fn catalog_acc_for_parts(parts: &[&str]) -> Option<(String, CatalogItem)> {
+    match parts {
+        ["candles", venue_part, symbol_part, interval_part, _file] => {
+            let venue = partition_value(venue_part, "venue")?;
+            let symbol = partition_value(symbol_part, "symbol")?;
+            let interval = partition_value(interval_part, "interval")?;
+            let key = format!("candles:{venue}:{symbol}:{interval}");
+            Some((
+                key,
+                CatalogItem {
+                    kind: "candles".to_string(),
+                    source: "parquet-store".to_string(),
+                    venue: Some(venue),
+                    symbol: Some(symbol),
+                    quote: Some("USD".to_string()),
+                    chain: None,
+                    protocol: None,
+                    asset: None,
+                    pool: None,
+                    interval: Some(interval),
+                    start: None,
+                    end: None,
+                    files: 0,
+                },
+            ))
+        }
+        ["funding", venue_part, symbol_part, _file] => {
+            let venue = partition_value(venue_part, "venue")?;
+            let symbol = partition_value(symbol_part, "symbol")?;
+            let key = format!("funding:{venue}:{symbol}");
+            Some((
+                key,
+                CatalogItem {
+                    kind: "funding".to_string(),
+                    source: "parquet-store".to_string(),
+                    venue: Some(venue),
+                    symbol: Some(symbol),
+                    quote: None,
+                    chain: None,
+                    protocol: None,
+                    asset: None,
+                    pool: None,
+                    interval: Some("1h".to_string()),
+                    start: None,
+                    end: None,
+                    files: 0,
+                },
+            ))
+        }
+        ["gas", chain_part, _file] => {
+            let chain = partition_value(chain_part, "chain")?;
+            let key = format!("gas:{chain}");
+            Some((
+                key,
+                CatalogItem {
+                    kind: "gas".to_string(),
+                    source: "parquet-store".to_string(),
+                    venue: None,
+                    symbol: None,
+                    quote: None,
+                    chain: Some(chain),
+                    protocol: None,
+                    asset: None,
+                    pool: None,
+                    interval: Some("1h".to_string()),
+                    start: None,
+                    end: None,
+                    files: 0,
+                },
+            ))
+        }
+        ["yields", protocol_part, asset_part, chain_part, pool_part, _file] => {
+            let protocol = partition_value(protocol_part, "protocol")?;
+            let asset = partition_value(asset_part, "asset")?;
+            let chain = partition_value(chain_part, "chain")?;
+            let pool = partition_value(pool_part, "pool")?;
+            let key = format!("yields:{protocol}:{asset}:{chain}:{pool}");
+            Some((
+                key,
+                CatalogItem {
+                    kind: "yields".to_string(),
+                    source: "parquet-store".to_string(),
+                    venue: None,
+                    symbol: None,
+                    quote: None,
+                    chain: Some(chain),
+                    protocol: Some(protocol),
+                    asset: Some(asset),
+                    pool: Some(pool),
+                    interval: Some("1d".to_string()),
+                    start: None,
+                    end: None,
+                    files: 0,
+                },
+            ))
+        }
+        _ => None,
+    }
+}
+
+/// List available series in the configured store without reading Parquet rows.
+///
+/// This supports local paths and object stores such as R2/S3 by listing object
+/// keys under the root and parsing the documented Hive-style partition layout.
+pub async fn list_catalog(root: &str) -> Result<Vec<CatalogItem>, LoaderError> {
+    let (store, base) = resolve_store(root)?;
+    let mut listing = store.list(Some(&base));
+    let mut accs: BTreeMap<String, CatalogAcc> = BTreeMap::new();
+
+    while let Some(item) = listing.next().await {
+        let meta = match item {
+            Ok(meta) => meta,
+            Err(e) => return Err(LoaderError::Store(e.to_string())),
+        };
+        let path = relative_object_path(&base, &meta.location);
+        let Some(date) = catalog_file_date(&path) else {
+            continue;
+        };
+        let parts: Vec<&str> = path.split('/').collect();
+        let Some((key, item)) = catalog_acc_for_parts(&parts) else {
+            continue;
+        };
+        let acc = accs.entry(key).or_insert_with(|| CatalogAcc {
+            item,
+            dates: Vec::new(),
+        });
+        acc.dates.push(date);
+    }
+
+    let mut items: Vec<CatalogItem> = accs
+        .into_values()
+        .map(|mut acc| {
+            acc.dates.sort();
+            acc.dates.dedup();
+            acc.item.files = acc.dates.len();
+            acc.item.start = acc.dates.first().map(|date| format!("{date}T00:00:00Z"));
+            acc.item.end = acc.dates.last().map(|date| format!("{date}T23:59:59Z"));
+            acc.item
+        })
+        .collect();
+    items.sort_by(|a, b| {
+        (
+            a.kind.as_str(),
+            a.venue.as_deref(),
+            a.chain.as_deref(),
+            a.symbol.as_deref(),
+            a.interval.as_deref(),
+        )
+            .cmp(&(
+                b.kind.as_str(),
+                b.venue.as_deref(),
+                b.chain.as_deref(),
+                b.symbol.as_deref(),
+                b.interval.as_deref(),
+            ))
+    });
+    Ok(items)
+}
+
 /// Load a [`MarketDataBundle`] from the store for the given requirements + window.
 pub async fn load_bundle(
     bundle_ref: &BundleRef,
@@ -424,7 +639,10 @@ pub async fn load_bundle(
     // Per-series candle providers carry provenance (native vs reference proxy).
     for (r, s) in reqs.candles.iter().zip(candles.iter()) {
         let key = format!("candles/{}/{}", r.venue, r.symbol);
-        let prov = provenance.get(&key).cloned().unwrap_or_else(|| "reference".to_string());
+        let prov = provenance
+            .get(&key)
+            .cloned()
+            .unwrap_or_else(|| "reference".to_string());
         providers.push(Provider {
             name: "parquet-store".to_string(),
             kind: "candles".to_string(),
@@ -562,9 +780,14 @@ pub async fn load_bundle(
                 format!("symbol={}", r.symbol),
             ],
         );
-        let rows =
-            read_window(&store, &prefix, &["reserve_base", "reserve_quote"], start_us, end_us)
-                .await?;
+        let rows = read_window(
+            &store,
+            &prefix,
+            &["reserve_base", "reserve_quote"],
+            start_us,
+            end_us,
+        )
+        .await?;
         if rows.is_empty() {
             continue;
         }
