@@ -182,6 +182,7 @@ export interface CoverageResponse {
     status?: string;
     [key: string]: JsonValue | undefined;
   }>;
+  warnings?: string[];
 }
 
 export interface BacktestSummary {

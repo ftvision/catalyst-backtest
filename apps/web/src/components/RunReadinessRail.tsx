@@ -26,9 +26,15 @@ export function RunReadinessRail({
   onRun: () => void;
 }) {
   const status = readinessStatus(setup, hasMarketData);
+  const marketDataReady = hasMarketData && !setup.coverage.some((item) => item.status === "danger");
+  const marketDataDetail = !hasMarketData
+    ? "No local series"
+    : marketDataReady
+      ? setup.assumptions.find(([label]) => label === "Data source")?.[1] ?? "-"
+      : "Missing required coverage";
   const checks = [
     { label: "Graph validated", value: graphStatus === "validated", detail: graphStatus },
-    { label: "Market data selected", value: hasMarketData, detail: setup.assumptions.find(([label]) => label === "Data source")?.[1] ?? "-" },
+    { label: "Market data coverage", value: marketDataReady, detail: marketDataDetail },
     { label: "Portfolio present", value: setup.portfolio.length > 0, detail: `${setup.portfolio.length} balance rows` },
     { label: "Policy configured", value: Boolean(setup.policy), detail: setup.policy },
   ];
