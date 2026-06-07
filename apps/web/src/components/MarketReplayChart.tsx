@@ -6,6 +6,8 @@ import {
   LineSeries,
   createChart,
   type IChartApi,
+  type IRange,
+  type Time,
   type UTCTimestamp,
 } from "lightweight-charts";
 import type { CandlePoint, MarketEvent, ReplayPoint } from "../types";
@@ -36,6 +38,66 @@ const paneStretch = {
 
 const compactLeadBars = 4;
 const compactTrailingBars = 24;
+const secondsPerDay = 86_400;
+const overviewGranularityThresholdSeconds = secondsPerDay * 35;
+const overviewGranularityMinCandles = 720;
+
+type ChartGranularity = "1h" | "1d";
+
+function dayStart(time: UTCTimestamp): UTCTimestamp {
+  return (Math.floor(Number(time) / secondsPerDay) * secondsPerDay) as UTCTimestamp;
+}
+
+function timeToSeconds(time: Time): number {
+  if (typeof time === "number") return time;
+  if (typeof time === "string") return Date.parse(time) / 1000;
+  return Date.UTC(time.year, time.month - 1, time.day) / 1000;
+}
+
+function rangeSeconds(range: IRange<Time> | null) {
+  if (!range) return 0;
+  return Math.max(0, timeToSeconds(range.to) - timeToSeconds(range.from));
+}
+
+function aggregateCandlesByDay(candles: CandlePoint[]) {
+  const buckets = new Map<number, CandlePoint>();
+  for (const candle of candles) {
+    const bucketTime = dayStart(candle.time);
+    const bucket = buckets.get(bucketTime);
+    if (!bucket) {
+      buckets.set(bucketTime, { ...candle, time: bucketTime });
+      continue;
+    }
+    bucket.high = Math.max(bucket.high, candle.high);
+    bucket.low = Math.min(bucket.low, candle.low);
+    bucket.close = candle.close;
+    bucket.volume += candle.volume;
+  }
+  return Array.from(buckets.values());
+}
+
+function alignReplayToCandles(replay: ReplayPoint[], candles: CandlePoint[]) {
+  if (!candles.length) return replay;
+  return replay.slice(0, candles.length).map((point, index) => ({ ...point, time: candles[index]?.time }));
+}
+
+function aggregateReplayByDay(replay: ReplayPoint[]) {
+  const buckets = new Map<number, ReplayPoint>();
+  for (const point of replay) {
+    if (point.time === undefined) continue;
+    const bucketTime = dayStart(point.time);
+    const bucket = buckets.get(bucketTime);
+    if (!bucket) {
+      buckets.set(bucketTime, { ...point, time: bucketTime });
+      continue;
+    }
+    bucket.equity = point.equity;
+    bucket.drawdown = Math.min(bucket.drawdown, point.drawdown);
+    bucket.gas += point.gas;
+    bucket.funding = point.funding;
+  }
+  return Array.from(buckets.values());
+}
 
 function formatChartTime(time: UTCTimestamp) {
   const date = new Date(Number(time) * 1000);
@@ -68,12 +130,32 @@ export function MarketReplayChart({
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [eventRails, setEventRails] = useState<EventRail[]>([]);
+  const [displayedGranularity, setDisplayedGranularity] = useState<ChartGranularity>("1h");
   const eventsAligned = isEventWindowAligned(candles, events);
 
   useEffect(() => {
     if (!containerRef.current) return;
 
     const container = containerRef.current;
+    const dailyCandles = aggregateCandlesByDay(candles);
+    const hourlyReplay = alignReplayToCandles(replay, candles);
+    const dailyReplay = aggregateReplayByDay(hourlyReplay);
+    const shouldUseAdaptiveGranularity =
+      !compact &&
+      candles.length >= overviewGranularityMinCandles &&
+      candles.length > dailyCandles.length &&
+      Number(candles.at(-1)?.time ?? 0) - Number(candles[0]?.time ?? 0) > overviewGranularityThresholdSeconds;
+    let activeGranularity: ChartGranularity = shouldUseAdaptiveGranularity ? "1d" : "1h";
+    let applyingGranularity = false;
+
+    const candlesForGranularity = (granularity: ChartGranularity) =>
+      granularity === "1d" && shouldUseAdaptiveGranularity ? dailyCandles : candles;
+    const replayForGranularity = (granularity: ChartGranularity) =>
+      granularity === "1d" && shouldUseAdaptiveGranularity ? dailyReplay : hourlyReplay;
+    const eventTimeForGranularity = (event: MarketEvent) =>
+      activeGranularity === "1d" && shouldUseAdaptiveGranularity ? dayStart(event.time) : event.time;
+    const fallbackCandlesForGranularity = () => candlesForGranularity(activeGranularity);
+
     const chart: IChartApi = createChart(container, {
       height: container.clientHeight,
       width: container.clientWidth,
@@ -126,7 +208,6 @@ export function MarketReplayChart({
       },
       title: "Market data",
     });
-    candleSeries.setData(candles.map(({ time, open, high, low, close }) => ({ time, open, high, low, close })));
 
     const volumeSeries = chart.addSeries(HistogramSeries, {
       color: "#78909c",
@@ -138,13 +219,6 @@ export function MarketReplayChart({
       lastValueVisible: false,
       title: "Volume",
     });
-    volumeSeries.setData(
-      candles.map((candle) => ({
-        time: candle.time,
-        value: candle.volume,
-        color: candle.close >= candle.open ? "#16847766" : "#bd3f3866",
-      })),
-    );
     chart.priceScale("volume").applyOptions({
       scaleMargins: {
         top: 0.78,
@@ -152,10 +226,9 @@ export function MarketReplayChart({
       },
     });
 
+    let setReplaySeriesData = (_granularity: ChartGranularity) => {};
+
     if (!compact) {
-      const replayWindow = candles.length
-        ? replay.slice(0, candles.length).map((point, index) => ({ ...point, time: candles[index]?.time }))
-        : replay;
       const equitySeries = chart.addSeries(
         LineSeries,
         {
@@ -170,12 +243,6 @@ export function MarketReplayChart({
           lastValueVisible: true,
         },
         1,
-      );
-      equitySeries.setData(
-        replayWindow.map((point) => ({
-          time: point.time,
-          value: point.equity,
-        })).filter((point): point is { time: UTCTimestamp; value: number } => point.time !== undefined),
       );
 
       const drawdownSeries = chart.addSeries(
@@ -192,15 +259,59 @@ export function MarketReplayChart({
         },
         2,
       );
-      drawdownSeries.setData(
-        replayWindow.map((point) => ({
-          time: point.time,
-          value: point.drawdown,
-          color: "#8b5cf680",
-        })).filter((point): point is { time: UTCTimestamp; value: number; color: string } => point.time !== undefined),
-      );
+      setReplaySeriesData = (granularity: ChartGranularity) => {
+        const replayWindow = replayForGranularity(granularity);
+        equitySeries.setData(
+          replayWindow.map((point) => ({
+            time: point.time,
+            value: point.equity,
+          })).filter((point): point is { time: UTCTimestamp; value: number } => point.time !== undefined),
+        );
+        drawdownSeries.setData(
+          replayWindow.map((point) => ({
+            time: point.time,
+            value: point.drawdown,
+            color: "#8b5cf680",
+          })).filter((point): point is { time: UTCTimestamp; value: number; color: string } => point.time !== undefined),
+        );
+      };
 
     }
+
+    const setSeriesData = (granularity: ChartGranularity) => {
+      const displayCandles = candlesForGranularity(granularity);
+      candleSeries.setData(displayCandles.map(({ time, open, high, low, close }) => ({ time, open, high, low, close })));
+      volumeSeries.setData(
+        displayCandles.map((candle) => ({
+          time: candle.time,
+          value: candle.volume,
+          color: candle.close >= candle.open ? "#16847766" : "#bd3f3866",
+        })),
+      );
+      setReplaySeriesData(granularity);
+      setDisplayedGranularity(granularity);
+    };
+
+    const desiredGranularity = (range: IRange<Time> | null): ChartGranularity => {
+      if (!shouldUseAdaptiveGranularity) return "1h";
+      return rangeSeconds(range) > overviewGranularityThresholdSeconds ? "1d" : "1h";
+    };
+
+    const applyGranularity = (nextGranularity: ChartGranularity, visibleRange: IRange<Time> | null) => {
+      if (nextGranularity === activeGranularity) return false;
+      applyingGranularity = true;
+      activeGranularity = nextGranularity;
+      setSeriesData(nextGranularity);
+      if (visibleRange) {
+        chart.timeScale().setVisibleRange(visibleRange);
+      }
+      window.requestAnimationFrame(() => {
+        applyingGranularity = false;
+      });
+      return true;
+    };
+
+    setSeriesData(activeGranularity);
     applyPaneLayout();
 
     const selectedEvent = events.find((event) => event.id === selectedEventId);
@@ -222,10 +333,13 @@ export function MarketReplayChart({
       if (disposed) return;
 
       const nextRails = events.flatMap((event, index) => {
-        const fallbackTime = candles.length
-          ? candles[Math.min(candles.length - 1, Math.round(((index + 1) / (events.length + 1)) * (candles.length - 1)))]?.time
+        const fallbackCandles = fallbackCandlesForGranularity();
+        const fallbackTime = fallbackCandles.length
+          ? fallbackCandles[
+              Math.min(fallbackCandles.length - 1, Math.round(((index + 1) / (events.length + 1)) * (fallbackCandles.length - 1)))
+            ]?.time
           : undefined;
-        const coordinateTime = eventsAligned ? event.time : fallbackTime;
+        const coordinateTime = eventsAligned ? eventTimeForGranularity(event) : fallbackTime;
         if (coordinateTime === undefined) return [];
 
         const coordinate = chart.timeScale().timeToCoordinate(coordinateTime);
@@ -246,7 +360,13 @@ export function MarketReplayChart({
       setEventRails(nextRails);
     };
 
-    const handleVisibleRangeChange = () => updateEventRails();
+    const handleVisibleRangeChange = (range: IRange<Time> | null) => {
+      if (!applyingGranularity && applyGranularity(desiredGranularity(range), range)) {
+        window.requestAnimationFrame(updateEventRails);
+        return;
+      }
+      updateEventRails();
+    };
     const handleSizeChange = () => updateEventRails();
     chart.timeScale().subscribeVisibleTimeRangeChange(handleVisibleRangeChange);
     chart.timeScale().subscribeSizeChange(handleSizeChange);
@@ -271,6 +391,7 @@ export function MarketReplayChart({
   return (
     <div className={compact ? "chart-shell compact" : "chart-shell"}>
       <div ref={containerRef} className={compact ? "chart-frame compact" : "chart-frame"} />
+      {!compact && candles.length ? <div className="chart-granularity-badge">{displayedGranularity} candles</div> : null}
       <div className="chart-event-overlay" aria-hidden="true">
         {eventRails.map((rail) => (
           <div
