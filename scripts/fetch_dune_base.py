@@ -50,9 +50,11 @@ ORDER BY gas.ts
 #     (the symbol is attacker-controllable; scam tokens spoof it).
 #   - amount_usd >= 500: dust trades produce wildly wrong amount/price ratios.
 #   - >= 5 trades per bucket: thin buckets aren't a reliable price.
-#   - per-trade price within +/-20% of the bucket median: a single bad trade
-#     can't set the high/low. (A second, rolling-median pass at ingest time
-#     removes any bucket-level outliers that slip through; see ingest_candles.)
+#   - per-trade price within +/-10% of the bucket median: a single bad trade
+#     can't set open/close/high/low. (The wick-repair pass at ingest time then
+#     collapses any high/low still beyond ~2% of the body; see ingest_candles.
+#     Base dex.trades carries a systematic ~4.5% upper-wick artifact that this
+#     two-stage filter removes — verified against the ethereum reference feed.)
 BASE_WETH = "0x4200000000000000000000000000000000000006"
 BASE_DEX_SQL = """
 WITH raw AS (
@@ -72,7 +74,7 @@ stats AS (
 clean AS (
   SELECT r.ts, r.block_time, r.price
   FROM raw r JOIN stats s ON r.ts = s.ts
-  WHERE s.n >= 5 AND r.price BETWEEN s.med * 0.8 AND s.med * 1.2
+  WHERE s.n >= 5 AND r.price BETWEEN s.med * 0.9 AND s.med * 1.1
 )
 SELECT ts,
        (array_agg(price ORDER BY block_time ASC))[1]  AS open,
@@ -159,7 +161,7 @@ def main() -> int:
     n_px = ingest_candles(
         store, client, venue="base", symbol="ETH", interval=args.interval,
         query_id=px_id, start=args.start, end=args.end,
-        filter_outliers=True, repair_wicks=True,
+        filter_outliers=True, repair_wicks=True, wick_tolerance=0.02,
     )
     store.set_provenance("candles", "base/ETH", "native")
     q = store.read_quality().get(f"candles/base/ETH/{args.interval}", {})
