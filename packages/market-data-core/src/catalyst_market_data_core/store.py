@@ -82,6 +82,32 @@ class ParquetStore:
         self.root.mkdir(parents=True, exist_ok=True)
         self._provenance_path().write_text(json.dumps(manifest, indent=2, sort_keys=True))
 
+    # --- quality manifest ---
+    #
+    # A sidecar (`<root>/_quality.json`) recording, per series, the result of
+    # ingestion-time data cleaning (outliers removed, method, affected ranges).
+    # Keyed like provenance, as ``"<kind>/<key>"``.
+
+    def _quality_path(self) -> Path:
+        return self.root / "_quality.json"
+
+    def read_quality(self) -> dict[str, dict]:
+        path = self._quality_path()
+        if not path.exists():
+            return {}
+        try:
+            data = json.loads(path.read_text())
+            return data if isinstance(data, dict) else {}
+        except (ValueError, OSError):
+            return {}
+
+    def set_quality(self, kind: str, key: str, report: dict) -> None:
+        """Record a data-quality report for a series, keyed ``"<kind>/<key>"``."""
+        manifest = self.read_quality()
+        manifest[f"{kind}/{key}"] = report
+        self.root.mkdir(parents=True, exist_ok=True)
+        self._quality_path().write_text(json.dumps(manifest, indent=2, sort_keys=True))
+
     # --- partition paths ---
 
     def _candle_dir(self, venue: str, symbol: str, interval: str) -> Path:

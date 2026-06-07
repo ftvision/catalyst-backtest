@@ -44,23 +44,45 @@ ORDER BY gas.ts
 """
 
 # Native Base DEX WETH price: hourly OHLC from dex.trades on Base.
+#
+# Data-quality filters (so scam/illiquid rows never enter the store):
+#   - canonical Base WETH contract address, NOT token_bought_symbol = 'WETH'
+#     (the symbol is attacker-controllable; scam tokens spoof it).
+#   - amount_usd >= 500: dust trades produce wildly wrong amount/price ratios.
+#   - >= 5 trades per bucket: thin buckets aren't a reliable price.
+#   - per-trade price within +/-20% of the bucket median: a single bad trade
+#     can't set the high/low. (A second, rolling-median pass at ingest time
+#     removes any bucket-level outliers that slip through; see ingest_candles.)
+BASE_WETH = "0x4200000000000000000000000000000000000006"
 BASE_DEX_SQL = """
-WITH t AS (
-  SELECT block_time, amount_usd / token_bought_amount AS price
+WITH raw AS (
+  SELECT block_time,
+         date_trunc('hour', block_time) AS ts,
+         amount_usd / token_bought_amount AS price
   FROM dex.trades
-  WHERE blockchain = 'base' AND token_bought_symbol = 'WETH'
-    AND amount_usd > 1 AND token_bought_amount > 0
-    AND block_time >= TIMESTAMP '{{start}}' AND block_time < TIMESTAMP '{{end}}'
+  WHERE blockchain = 'base'
+    AND token_bought_address = {weth}
+    AND amount_usd >= 500 AND token_bought_amount > 0
+    AND block_time >= TIMESTAMP '{{{{start}}}}' AND block_time < TIMESTAMP '{{{{end}}}}'
+),
+stats AS (
+  SELECT ts, approx_percentile(price, 0.5) AS med, count(*) AS n
+  FROM raw GROUP BY ts
+),
+clean AS (
+  SELECT r.ts, r.block_time, r.price
+  FROM raw r JOIN stats s ON r.ts = s.ts
+  WHERE s.n >= 5 AND r.price BETWEEN s.med * 0.8 AND s.med * 1.2
 )
-SELECT date_trunc('hour', block_time) AS ts,
+SELECT ts,
        (array_agg(price ORDER BY block_time ASC))[1]  AS open,
        max(price)                                     AS high,
        min(price)                                     AS low,
        (array_agg(price ORDER BY block_time DESC))[1] AS close
-FROM t
-GROUP BY 1
-ORDER BY 1
-"""
+FROM clean
+GROUP BY ts
+ORDER BY ts
+""".format(weth=BASE_WETH)
 
 PARAMS = [
     {"key": "start", "type": "datetime", "value": "2024-01-01 00:00:00"},
@@ -137,9 +159,14 @@ def main() -> int:
     n_px = ingest_candles(
         store, client, venue="base", symbol="ETH", interval=args.interval,
         query_id=px_id, start=args.start, end=args.end,
+        filter_outliers=True, repair_wicks=True,
     )
     store.set_provenance("candles", "base/ETH", "native")
-    print(f"  wrote {n_px} candles -> venue=base/symbol=ETH/{args.interval} [native]")
+    q = store.read_quality().get(f"candles/base/ETH/{args.interval}", {})
+    print(
+        f"  wrote {n_px} candles -> venue=base/symbol=ETH/{args.interval} [native]"
+        f"  (removed {q.get('outliers_removed', 0)} outliers)"
+    )
     return 0
 
 
