@@ -193,11 +193,64 @@ function isEventWindowAligned(candles: CandlePoint[], events: MarketEvent[]) {
   return events.some((event) => event.time >= firstCandle && event.time <= lastCandle);
 }
 
-function isEventInCandleWindow(event: MarketEvent, candles: CandlePoint[]) {
-  if (!candles.length) return false;
-  const firstCandle = candles[0].time;
-  const lastCandle = candles[candles.length - 1].time;
-  return event.time >= firstCandle && event.time <= lastCandle;
+function candleStepSeconds(candles: CandlePoint[]) {
+  if (candles.length < 2) return 3_600;
+  return Math.max(1, Number(candles[1].time) - Number(candles[0].time));
+}
+
+function priceMatchesCandleClose(candle: CandlePoint, price: number) {
+  return Math.abs(candle.close - price) <= Math.max(0.05, Math.abs(price) * 0.00001);
+}
+
+function nearestCandleIndexByTime(candles: CandlePoint[], time: UTCTimestamp) {
+  if (!candles.length) return -1;
+  let nearestIndex = 0;
+  let nearestDistance = Math.abs(Number(candles[0].time) - Number(time));
+
+  for (let index = 1; index < candles.length; index += 1) {
+    const distance = Math.abs(Number(candles[index].time) - Number(time));
+    if (distance < nearestDistance) {
+      nearestDistance = distance;
+      nearestIndex = index;
+    }
+  }
+
+  return nearestIndex;
+}
+
+function eventCandleIndex(event: MarketEvent, candles: CandlePoint[]) {
+  if (!candles.length) return -1;
+
+  const exactIndex = candles.findIndex((candle) => candle.time === event.time);
+  const observedPrice = event.observedPrice;
+  if (observedPrice === undefined || !Number.isFinite(observedPrice)) {
+    return exactIndex >= 0 ? exactIndex : nearestCandleIndexByTime(candles, event.time);
+  }
+
+  if (exactIndex >= 0 && priceMatchesCandleClose(candles[exactIndex], observedPrice)) {
+    return exactIndex;
+  }
+
+  const stepSeconds = candleStepSeconds(candles);
+  const maxDistanceSeconds = stepSeconds * 12;
+  const candidates = candles
+    .map((candle, index) => ({
+      candle,
+      index,
+      distanceSeconds: Math.abs(Number(candle.time) - Number(event.time)),
+    }))
+    .filter(({ candle, distanceSeconds }) => distanceSeconds <= maxDistanceSeconds && priceMatchesCandleClose(candle, observedPrice));
+  if (candidates.length > 0) {
+    candidates.sort((a, b) => a.distanceSeconds - b.distanceSeconds);
+    return candidates[0].index;
+  }
+
+  return exactIndex >= 0 ? exactIndex : nearestCandleIndexByTime(candles, event.time);
+}
+
+function eventCandleTime(event: MarketEvent, candles: CandlePoint[]) {
+  const index = eventCandleIndex(event, candles);
+  return index >= 0 ? candles[index]?.time : undefined;
 }
 
 function compactVisibleLogicalRange(selectedIndex: number, candleCount: number) {
@@ -257,8 +310,11 @@ export function MarketReplayChart({
       shouldUseAdaptiveGranularity ? replayByGranularity[granularity] : hourlyReplay;
     const eventTimeForGranularity = (event: MarketEvent) => {
       const displayCandles = candlesForGranularity(activeGranularity);
-      if (!isEventInCandleWindow(event, displayCandles)) return undefined;
-      return shouldUseAdaptiveGranularity ? bucketStart(event.time, activeGranularity) : event.time;
+      const anchorTime = eventCandleTime(event, candles);
+      if (anchorTime === undefined) return undefined;
+      const coordinateTime = shouldUseAdaptiveGranularity ? bucketStart(anchorTime, activeGranularity) : anchorTime;
+      if (!displayCandles.some((candle) => candle.time === coordinateTime)) return undefined;
+      return coordinateTime;
     };
     const fallbackCandlesForGranularity = () => candlesForGranularity(activeGranularity);
 
@@ -455,7 +511,7 @@ export function MarketReplayChart({
 
     const selectedEvent = events.find((event) => event.id === selectedEventId);
     const selectedCandleIndex = selectedEvent
-      ? candles.findIndex((candle) => candle.time >= selectedEvent.time)
+      ? eventCandleIndex(selectedEvent, candles)
       : -1;
 
     if (compact && selectedCandleIndex >= 0) {
