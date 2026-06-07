@@ -258,11 +258,12 @@ pub async fn coverage(State(state): State<AppState>, Json(body): Json<Value>) ->
         Ok(r) => r,
         Err(e) => return error(StatusCode::BAD_REQUEST, "invalid_request", e.to_string()),
     };
+    let interval = req.interval.clone();
     let bundle = match load_market_data_for_window(&state, req).await {
         Ok(bundle) => bundle,
         Err(response) => return response,
     };
-    Json(support::coverage_response(&bundle)).into_response()
+    Json(support::coverage_response(&bundle, &interval)).into_response()
 }
 
 pub async fn market_data_catalog(State(state): State<AppState>) -> Response {

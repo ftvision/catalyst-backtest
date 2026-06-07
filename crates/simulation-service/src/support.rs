@@ -66,30 +66,58 @@ pub fn list_profiles() -> Vec<Value> {
         .collect()
 }
 
+/// Intra-series coverage for a series' timestamps against the interval grid.
+fn series_cov(tss: &[&str], interval_secs: i64) -> catalyst_market_data_loader::SeriesCoverage {
+    let mut micros: Vec<i64> = tss
+        .iter()
+        .filter_map(|t| chrono::DateTime::parse_from_rfc3339(t).ok().map(|d| d.timestamp_micros()))
+        .collect();
+    micros.sort_unstable();
+    micros.dedup();
+    catalyst_market_data_loader::series_coverage(&micros, interval_secs)
+}
+
 /// Per-series coverage rows + provider metadata + warnings for the coverage view.
-pub fn coverage_response(bundle: &MarketDataBundle) -> Value {
+///
+/// Each row now carries `completeness_pct` and interior `missing_ranges` (#42),
+/// not just start/end — so a series with holes inside the window no longer reads
+/// as fully "present".
+pub fn coverage_response(bundle: &MarketDataBundle, interval: &str) -> Value {
+    let secs = catalyst_market_data_loader::interval_seconds(interval).unwrap_or(0);
     let mut rows: Vec<Value> = Vec::new();
-    let span = |ts: Option<&String>| ts.cloned();
+
+    let mut row = |head: Value, tss: &[&str], n: usize| {
+        let c = series_cov(tss, secs);
+        let mut obj = head.as_object().cloned().unwrap_or_default();
+        obj.insert("points".into(), json!(n));
+        obj.insert("complete".into(), json!(n > 0 && c.missing == 0));
+        obj.insert("completeness_pct".into(), json!(c.completeness_pct));
+        obj.insert("missing".into(), json!(c.missing));
+        obj.insert("missing_ranges".into(), json!(c.missing_ranges));
+        obj.insert("start".into(), json!(c.first));
+        obj.insert("end".into(), json!(c.last));
+        rows.push(Value::Object(obj));
+    };
 
     for s in &bundle.candles {
-        rows.push(json!({"kind": "candles", "venue": s.venue, "symbol": s.symbol,
-            "points": s.points.len(), "complete": !s.points.is_empty(),
-            "start": span(s.points.first().map(|p| &p.ts)), "end": span(s.points.last().map(|p| &p.ts))}));
+        let tss: Vec<&str> = s.points.iter().map(|p| p.ts.as_str()).collect();
+        row(json!({"kind": "candles", "venue": s.venue, "symbol": s.symbol}), &tss, s.points.len());
     }
     for s in &bundle.funding {
-        rows.push(json!({"kind": "funding", "venue": s.venue, "symbol": s.symbol,
-            "points": s.points.len(), "complete": !s.points.is_empty(),
-            "start": span(s.points.first().map(|p| &p.ts)), "end": span(s.points.last().map(|p| &p.ts))}));
+        let tss: Vec<&str> = s.points.iter().map(|p| p.ts.as_str()).collect();
+        row(json!({"kind": "funding", "venue": s.venue, "symbol": s.symbol}), &tss, s.points.len());
     }
     for s in &bundle.gas {
-        rows.push(json!({"kind": "gas", "chain": s.chain,
-            "points": s.points.len(), "complete": !s.points.is_empty(),
-            "start": span(s.points.first().map(|p| &p.ts)), "end": span(s.points.last().map(|p| &p.ts))}));
+        let tss: Vec<&str> = s.points.iter().map(|p| p.ts.as_str()).collect();
+        row(json!({"kind": "gas", "chain": s.chain}), &tss, s.points.len());
     }
     for s in &bundle.yields {
-        rows.push(json!({"kind": "yields", "protocol": s.protocol, "asset": s.asset, "chain": s.chain,
-            "points": s.points.len(), "complete": !s.points.is_empty(),
-            "start": span(s.points.first().map(|p| &p.ts)), "end": span(s.points.last().map(|p| &p.ts))}));
+        let tss: Vec<&str> = s.points.iter().map(|p| p.ts.as_str()).collect();
+        row(
+            json!({"kind": "yields", "protocol": s.protocol, "asset": s.asset, "chain": s.chain}),
+            &tss,
+            s.points.len(),
+        );
     }
 
     let providers: Vec<Value> =

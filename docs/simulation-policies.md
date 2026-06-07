@@ -417,6 +417,12 @@ Research profile may use:
 fallback_provider with warning
 ```
 
+This applies to **intra-window gaps**, not just missing endpoints: the engine
+checks each required candle series for holes *inside* the window (against the
+interval grid). Under `fail` (strict_v1) an interior hole aborts the run; under
+`forward_fill` (research_v1) it's a warning. The `POST /market-data/coverage`
+API surfaces the same gaps (`completeness_pct` + `missing_ranges`) before a run.
+
 ### Perp Risk Policy
 
 Defines margin, liquidation, and funding behavior.

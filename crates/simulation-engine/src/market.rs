@@ -123,6 +123,14 @@ impl BundleIndex {
             .map(|(_, b)| *b)
     }
 
+    /// Sorted candle timestamps (epoch secs) for a (venue, symbol) within `[start, end]`.
+    pub fn candle_ts_in(&self, venue: &str, symbol: &str, start: i64, end: i64) -> Vec<i64> {
+        self.candles
+            .get(&(venue.to_string(), symbol.to_string()))
+            .map(|m| m.range(start..=end).map(|(t, _)| *t).collect())
+            .unwrap_or_default()
+    }
+
     /// Price for a symbol on any venue at `ts` (exact, else last known <= ts).
     pub fn price_any(&self, symbol: &str, ts: i64) -> Option<Decimal> {
         let m = self.by_symbol.get(symbol)?;

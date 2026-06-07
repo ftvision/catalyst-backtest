@@ -335,3 +335,43 @@ fn loads_liquidity_series_for_candle_venue() {
     assert_eq!(s.points[0].reserve_base, "100");
     assert_eq!(s.points[1].reserve_quote, "201000");
 }
+
+// --- intra-series coverage (#42) ---
+
+#[test]
+fn series_coverage_contiguous_is_complete() {
+    use catalyst_market_data_loader::series_coverage;
+    let ts: Vec<i64> = (0..5).map(|i| H0 + i * HOUR).collect();
+    let cov = series_coverage(&ts, 3600);
+    assert_eq!(cov.present, 5);
+    assert_eq!(cov.missing, 0);
+    assert_eq!(cov.completeness_pct, 100.0);
+    assert!(cov.missing_ranges.is_empty());
+}
+
+#[test]
+fn series_coverage_detects_interior_hole() {
+    use catalyst_market_data_loader::series_coverage;
+    // present at hours 0,1,3,4 -> hour 2 is an interior hole
+    let ts = vec![H0, H0 + HOUR, H0 + 3 * HOUR, H0 + 4 * HOUR];
+    let cov = series_coverage(&ts, 3600);
+    assert_eq!(cov.present, 4);
+    assert_eq!(cov.expected, 5); // 0..=4
+    assert_eq!(cov.missing, 1);
+    assert_eq!(cov.completeness_pct, 80.0);
+    assert_eq!(cov.missing_ranges.len(), 1);
+    // the single missing bucket is hour 2
+    assert_eq!(cov.missing_ranges[0].0, "2024-01-01T02:00:00Z");
+    assert_eq!(cov.missing_ranges[0].1, "2024-01-01T02:00:00Z");
+}
+
+#[test]
+fn series_coverage_multi_bucket_gap() {
+    use catalyst_market_data_loader::series_coverage;
+    // hours 0 then 4 -> hours 1,2,3 missing (3 buckets)
+    let ts = vec![H0, H0 + 4 * HOUR];
+    let cov = series_coverage(&ts, 3600);
+    assert_eq!(cov.missing, 3);
+    assert_eq!(cov.missing_ranges[0].0, "2024-01-01T01:00:00Z");
+    assert_eq!(cov.missing_ranges[0].1, "2024-01-01T03:00:00Z");
+}
