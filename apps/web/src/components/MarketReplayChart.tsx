@@ -32,9 +32,10 @@ const markerColor = {
 };
 
 const paneStretch = {
-  market: 58,
-  equity: 29,
-  drawdown: 13,
+  market: 54,
+  volume: 12,
+  equity: 25,
+  drawdown: 9,
 };
 
 const equityColor = "#2768ce";
@@ -106,6 +107,12 @@ function aggregateCandles(candles: CandlePoint[], granularity: ChartGranularity)
     bucket.volume += candle.volume;
   }
   return Array.from(buckets.values());
+}
+
+function hasInformativeVolume(candles: CandlePoint[]) {
+  const volumes = candles.map((candle) => candle.volume).filter((volume) => Number.isFinite(volume) && volume > 0);
+  if (volumes.length === 0) return false;
+  return Math.max(...volumes) > Math.min(...volumes);
 }
 
 function alignReplayToCandles(replay: ReplayPoint[], candles: CandlePoint[]) {
@@ -184,6 +191,13 @@ function isEventWindowAligned(candles: CandlePoint[], events: MarketEvent[]) {
   return events.some((event) => event.time >= firstCandle && event.time <= lastCandle);
 }
 
+function isEventInCandleWindow(event: MarketEvent, candles: CandlePoint[]) {
+  if (!candles.length) return false;
+  const firstCandle = candles[0].time;
+  const lastCandle = candles[candles.length - 1].time;
+  return event.time >= firstCandle && event.time <= lastCandle;
+}
+
 export function MarketReplayChart({
   candles,
   replay,
@@ -213,6 +227,7 @@ export function MarketReplayChart({
       candles.length >= adaptiveGranularityMinCandles &&
       candles.length > candlesByGranularity["4h"].length &&
       fullRangeSeconds > mediumGranularityThresholdSeconds;
+    const shouldShowVolume = !compact && hasInformativeVolume(candles);
     let activeGranularity: ChartGranularity = shouldUseAdaptiveGranularity ? granularityForRange(fullRangeSeconds) : "1h";
     let applyingGranularity = false;
 
@@ -220,8 +235,11 @@ export function MarketReplayChart({
       shouldUseAdaptiveGranularity ? candlesByGranularity[granularity] : candles;
     const replayForGranularity = (granularity: ChartGranularity) =>
       shouldUseAdaptiveGranularity ? replayByGranularity[granularity] : hourlyReplay;
-    const eventTimeForGranularity = (event: MarketEvent) =>
-      shouldUseAdaptiveGranularity ? bucketStart(event.time, activeGranularity) : event.time;
+    const eventTimeForGranularity = (event: MarketEvent) => {
+      const displayCandles = candlesForGranularity(activeGranularity);
+      if (!isEventInCandleWindow(event, displayCandles)) return undefined;
+      return shouldUseAdaptiveGranularity ? bucketStart(event.time, activeGranularity) : event.time;
+    };
     const fallbackCandlesForGranularity = () => candlesForGranularity(activeGranularity);
 
     const chart: IChartApi = createChart(container, {
@@ -264,6 +282,12 @@ export function MarketReplayChart({
       if (compact) return;
       const panes = chart.panes();
       panes[0]?.setStretchFactor(paneStretch.market);
+      if (shouldShowVolume) {
+        panes[1]?.setStretchFactor(paneStretch.volume);
+        panes[2]?.setStretchFactor(paneStretch.equity);
+        panes[3]?.setStretchFactor(paneStretch.drawdown);
+        return;
+      }
       panes[1]?.setStretchFactor(paneStretch.equity);
       panes[2]?.setStretchFactor(paneStretch.drawdown);
     };
@@ -282,26 +306,27 @@ export function MarketReplayChart({
       title: "Market data",
     });
 
-    const volumeSeries = chart.addSeries(HistogramSeries, {
-      color: "#78909c",
-      priceFormat: {
-        type: "volume",
-      },
-      priceScaleId: "volume",
-      priceLineVisible: false,
-      lastValueVisible: false,
-      title: "Volume",
-    });
-    chart.priceScale("volume").applyOptions({
-      scaleMargins: {
-        top: 0.78,
-        bottom: 0,
-      },
-    });
+    const volumeSeries = shouldShowVolume
+      ? chart.addSeries(
+          HistogramSeries,
+          {
+            color: "#78909c",
+            priceFormat: {
+              type: "volume",
+            },
+            priceLineVisible: false,
+            lastValueVisible: false,
+            title: "Volume",
+          },
+          1,
+        )
+      : undefined;
 
     let setReplaySeriesData = (_granularity: ChartGranularity) => {};
 
     if (!compact) {
+      const equityPaneIndex = shouldShowVolume ? 2 : 1;
+      const drawdownPaneIndex = shouldShowVolume ? 3 : 2;
       const equitySeries = chart.addSeries(
         AreaSeries,
         {
@@ -318,7 +343,7 @@ export function MarketReplayChart({
           priceLineVisible: true,
           lastValueVisible: true,
         },
-        1,
+        equityPaneIndex,
       );
 
       const drawdownSeries = chart.addSeries(
@@ -340,7 +365,7 @@ export function MarketReplayChart({
           priceLineVisible: true,
           title: "Drawdown (%)",
         },
-        2,
+        drawdownPaneIndex,
       );
       setReplaySeriesData = (granularity: ChartGranularity) => {
         const replayWindow = replayForGranularity(granularity);
@@ -363,7 +388,7 @@ export function MarketReplayChart({
     const setSeriesData = (granularity: ChartGranularity) => {
       const displayCandles = candlesForGranularity(granularity);
       candleSeries.setData(displayCandles.map(({ time, open, high, low, close }) => ({ time, open, high, low, close })));
-      volumeSeries.setData(
+      volumeSeries?.setData(
         displayCandles.map((candle) => ({
           time: candle.time,
           value: candle.volume,

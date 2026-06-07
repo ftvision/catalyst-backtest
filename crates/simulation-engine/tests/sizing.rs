@@ -1,7 +1,5 @@
 //! ADR 0002 step 2: relative action sizing (`Amount::Relative`).
 
-use std::collections::BTreeMap;
-
 use catalyst_contracts::{BacktestConfig, Graph, MarketDataBundle, SimulationPolicy};
 use catalyst_simulation_engine::{run, SimulationInput};
 use serde_json::{json, Value};
@@ -85,6 +83,40 @@ fn swap_pct_balance_sells_half_the_from_asset() {
     assert_eq!(count(&trace, "action_executed"), 1);
     let eth = &trace.final_portfolio.balances["base"]["ETH"];
     assert!(approx(eth, 0.5), "expected ~0.5 ETH left, got {eth}");
+}
+
+#[test]
+fn swap_absolute_buy_spends_quote_notional() {
+    let g = graph(json!({
+        "nodes": [{
+            "id": "buy", "kind": "action", "subtype": "swap",
+            "config": {"from_asset": "USDC", "to_asset": "ETH", "amount": "100", "chain": "base"}
+        }],
+        "edges": []
+    }));
+    let input = SimulationInput {
+        graph: g,
+        config: config(json!({"base": {"USDC": "1000"}}), 2),
+        policy: strict(),
+        market_data: bundle("base", &["2000", "2000"]),
+    };
+    let trace = run(&input).unwrap();
+    assert_eq!(count(&trace, "action_executed"), 1);
+    assert_eq!(count(&trace, "action_rejected"), 0);
+
+    let detail = trace
+        .events
+        .iter()
+        .find(|event| event.event_type == "action_executed")
+        .and_then(|event| event.detail.as_ref())
+        .unwrap();
+    assert_eq!(detail["value_usd"], "100");
+    let amount = detail["amount"].as_str().unwrap().parse::<f64>().unwrap();
+    let fill_price = detail["price"].as_str().unwrap().parse::<f64>().unwrap();
+    assert!(
+        (amount * fill_price - 100.0).abs() < 1e-9,
+        "expected amount * fill_price to equal $100, got {amount} * {fill_price}"
+    );
 }
 
 #[test]

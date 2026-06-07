@@ -34,6 +34,25 @@ export function EventLensPage({
   const eventTitle = lensEvent?.label ?? audit.selected.kind.replaceAll("_", " ");
   const eventStatus = lensEvent?.status ?? "executed";
   const eventTime = lensEvent?.labelTime ?? audit.selected.raw.timestamp;
+  const selectedSide = lensEvent?.side ?? audit.selected.side;
+  const selectedOrderType = lensEvent?.orderType ?? audit.selected.orderType;
+  const hasPortfolioSnapshot =
+    selectedEventId === audit.selectedEventId && (audit.selected.before.length > 0 || audit.selected.after.length > 0);
+  const portfolioSnapshotNote =
+    audit.selected.before.length > 0 || audit.selected.after.length > 0
+      ? "Portfolio snapshots are only available for the audit's default event."
+      : "Per-event portfolio snapshots are not emitted by the run trace yet.";
+  const feeGas = [lensEvent?.fee ? `fee ${lensEvent.fee}` : undefined, lensEvent?.gas ? `gas ${lensEvent.gas}` : undefined]
+    .filter(Boolean)
+    .join(" / ");
+  const impactRows: Array<[string, string | undefined]> = [
+    ["Status", eventStatus],
+    ["Side", selectedSide],
+    ["Fill price", lensEvent?.price],
+    ["Fill amount", lensEvent?.fillAmount],
+    ["Notional", lensEvent?.notional ?? lensEvent?.impact],
+    ["Fees / gas", feeGas || undefined],
+  ];
 
   return (
     <Stack gap="md">
@@ -91,8 +110,8 @@ export function EventLensPage({
               <SimpleGrid cols={{ base: 2, sm: 4 }} spacing="xs">
                 {[
                   ["Replay event", lensEvent ? String(lensEvent.index) : audit.selected.kind],
-                  ["Side", audit.selected.side],
-                  ["Order", audit.selected.orderType],
+                  ["Side", selectedSide],
+                  ["Order", selectedOrderType],
                   ["Policy", setup.policy],
                 ].map(([label, value]) => (
                   <Paper key={label} className="panel-muted" p="xs">
@@ -124,18 +143,13 @@ export function EventLensPage({
               <Stack gap="sm">
                 <Text fw={650}>Event impact</Text>
                 <SimpleGrid cols={{ base: 2, sm: 3 }} spacing="xs">
-                  {[
-                    ["Status", eventStatus],
-                    ["Observed price", lensEvent?.price ?? "-"],
-                    ["Impact", lensEvent?.impact ?? audit.selected.raw.status ?? "-"],
-                    ...audit.selected.pricing.slice(0, 3),
-                  ].map(([label, value]) => (
+                  {impactRows.map(([label, value]) => (
                     <Paper key={label} className="panel-muted" p="xs">
                       <Text size="xs" c="dimmed">
                         {label}
                       </Text>
                       <Text size="sm" fw={650} className="mono">
-                        {value}
+                        {value ?? "-"}
                       </Text>
                     </Paper>
                   ))}
@@ -144,48 +158,63 @@ export function EventLensPage({
             </Paper>
           </SimpleGrid>
 
-          <SimpleGrid cols={{ base: 1, lg: 2 }} spacing="md">
-            <Paper className="panel" p="md" radius="sm">
-              <Stack gap="sm">
-                <Text fw={650}>Portfolio before</Text>
-                {audit.selected.before.map((asset) => (
-                  <Stack key={asset.asset} gap={4}>
-                    <Group justify="space-between">
-                      <Text size="sm">{asset.asset}</Text>
-                      <Text size="sm" className="mono">
-                        {asset.value}
-                      </Text>
-                    </Group>
-                    <Progress value={asset.percent} size="sm" color="gray" />
-                  </Stack>
-                ))}
-              </Stack>
-            </Paper>
+          {hasPortfolioSnapshot ? (
+            <SimpleGrid cols={{ base: 1, lg: 2 }} spacing="md">
+              <Paper className="panel" p="md" radius="sm">
+                <Stack gap="sm">
+                  <Text fw={650}>Portfolio before</Text>
+                  {audit.selected.before.map((asset) => (
+                    <Stack key={asset.asset} gap={4}>
+                      <Group justify="space-between">
+                        <Text size="sm">{asset.asset}</Text>
+                        <Text size="sm" className="mono">
+                          {asset.value}
+                        </Text>
+                      </Group>
+                      <Progress value={asset.percent} size="sm" color="gray" />
+                    </Stack>
+                  ))}
+                </Stack>
+              </Paper>
 
+              <Paper className="panel" p="md" radius="sm">
+                <Stack gap="sm">
+                  <Text fw={650}>Portfolio after</Text>
+                  {audit.selected.after.map((asset) => (
+                    <Stack key={asset.asset} gap={4}>
+                      <Group justify="space-between">
+                        <Text size="sm">{asset.asset}</Text>
+                        <Text size="sm" className="mono">
+                          {asset.value}
+                        </Text>
+                      </Group>
+                      <Progress value={asset.percent} size="sm" color="teal" />
+                    </Stack>
+                  ))}
+                </Stack>
+              </Paper>
+            </SimpleGrid>
+          ) : (
             <Paper className="panel" p="md" radius="sm">
-              <Stack gap="sm">
-                <Text fw={650}>Portfolio after</Text>
-                {audit.selected.after.map((asset) => (
-                  <Stack key={asset.asset} gap={4}>
-                    <Group justify="space-between">
-                      <Text size="sm">{asset.asset}</Text>
-                      <Text size="sm" className="mono">
-                        {asset.value}
-                      </Text>
-                    </Group>
-                    <Progress value={asset.percent} size="sm" color="teal" />
-                  </Stack>
-                ))}
-              </Stack>
+              <Text fw={650}>Portfolio snapshots</Text>
+              <Text size="sm" c="dimmed">
+                {portfolioSnapshotNote}
+              </Text>
             </Paper>
-          </SimpleGrid>
+          )}
 
           <Paper className="panel" p="md" radius="sm">
             <Stack gap="sm">
               <Text fw={650}>Pricing context</Text>
               <Table withTableBorder>
                 <Table.Tbody>
-                  {audit.selected.pricing.map(([label, value]) => (
+                  {[
+                    ["Event price", lensEvent?.price ?? "-"],
+                    ["Fill amount", lensEvent?.fillAmount ?? "-"],
+                    ["Notional", lensEvent?.notional ?? lensEvent?.impact ?? "-"],
+                    ["Net PnL", audit.selected.pricing.find(([label]) => label === "Net PnL")?.[1] ?? "-"],
+                    ["Run fees", audit.selected.pricing.find(([label]) => label === "Fees")?.[1] ?? "-"],
+                  ].map(([label, value]) => (
                     <Table.Tr key={label}>
                       <Table.Td>{label}</Table.Td>
                       <Table.Td className="mono">{value}</Table.Td>

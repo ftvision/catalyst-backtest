@@ -101,6 +101,12 @@ export interface MarketEvent {
   status: EventStatus;
   price: string;
   impact: string;
+  side?: string;
+  orderType?: string;
+  fillAmount?: string;
+  notional?: string;
+  fee?: string;
+  gas?: string;
 }
 
 export interface CandlePoint {
