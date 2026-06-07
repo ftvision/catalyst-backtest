@@ -11,7 +11,7 @@ export function SectionHeader({
   action?: ReactNode;
 }) {
   return (
-    <Group justify="space-between" align="flex-start" gap="md">
+    <Group className="section-header" justify="space-between" align="flex-start" gap="md">
       <Stack gap={2}>
         <Title order={2}>{title}</Title>
         {subtitle ? (
