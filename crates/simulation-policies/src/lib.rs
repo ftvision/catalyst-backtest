@@ -53,7 +53,7 @@ str_enum!(
 
 str_enum!(
     /// Execution-price slippage model.
-    SlippageModel { FixedBps, VolumeBased, None }
+    SlippageModel { FixedBps, VolumeBased, AmmPriceImpact, None }
 );
 
 str_enum!(

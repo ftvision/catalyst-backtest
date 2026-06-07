@@ -295,3 +295,43 @@ fn candle_providers_carry_provenance_from_manifest() {
     assert_eq!(prov("hyperliquid"), "native");
     assert_eq!(prov("base"), "reference"); // default when not in the manifest
 }
+
+// --- liquidity / pool reserves (#40) ---
+
+#[test]
+fn loads_liquidity_series_for_candle_venue() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    write_candles(root, "base", "ETH", "1h", "2024-01-01", &[H0, H0 + HOUR]);
+    let liq_dir = root.join("liquidity").join("venue=base").join("symbol=ETH");
+    write_parquet(
+        &liq_dir.join("2024-01-01.parquet"),
+        &[
+            ("ts", ts_col(&[H0, H0 + HOUR])),
+            ("reserve_base", str_col(&["100", "100"])),
+            ("reserve_quote", str_col(&["200000", "201000"])),
+        ],
+    );
+
+    let bundle_ref = BundleRef {
+        root: root.to_string_lossy().to_string(),
+        data_requirements: DataRequirements {
+            candles: vec![CandleReq { venue: "base".into(), symbol: "ETH".into() }],
+            ..Default::default()
+        },
+    };
+    let bundle = pollster::block_on(load_bundle(
+        &bundle_ref,
+        "2024-01-01T00:00:00Z",
+        "2024-01-01T03:00:00Z",
+        "1h",
+    ))
+    .unwrap();
+
+    assert_eq!(bundle.liquidity.len(), 1);
+    let s = &bundle.liquidity[0];
+    assert_eq!((s.venue.as_str(), s.symbol.as_str()), ("base", "ETH"));
+    assert_eq!(s.points.len(), 2);
+    assert_eq!(s.points[0].reserve_base, "100");
+    assert_eq!(s.points[1].reserve_quote, "201000");
+}

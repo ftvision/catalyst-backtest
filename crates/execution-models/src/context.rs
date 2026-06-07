@@ -35,4 +35,11 @@ pub trait MarketContext {
 
     /// Gas cost in USD for a single on-chain action on `chain` (None if unknown).
     fn gas_usd(&self, chain: &str) -> Option<Decimal>;
+
+    /// AMM pool reserves `(reserve_base, reserve_quote)` for a (venue, symbol) at
+    /// the current tick, when a depth/liquidity series is available — used by the
+    /// `amm_price_impact` slippage model. None when no pool data is present.
+    fn pool_reserves(&self, _venue: &str, _symbol: &str) -> Option<(Decimal, Decimal)> {
+        None
+    }
 }

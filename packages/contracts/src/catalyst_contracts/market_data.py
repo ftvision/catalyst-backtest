@@ -61,6 +61,18 @@ class YieldSeries(StrictModel):
     points: list[YieldPoint] = Field(default_factory=list)
 
 
+class LiquidityPoint(StrictModel):
+    ts: datetime
+    reserve_base: Decimal
+    reserve_quote: Decimal
+
+
+class LiquiditySeries(StrictModel):
+    venue: str
+    symbol: str
+    points: list[LiquidityPoint] = Field(default_factory=list)
+
+
 class Coverage(StrictModel):
     start: datetime | None = None
     end: datetime | None = None
@@ -85,6 +97,7 @@ class MarketDataBundle(StrictModel):
     funding: list[FundingSeries] = Field(default_factory=list)
     gas: list[GasSeries] = Field(default_factory=list)
     yields: list[YieldSeries] = Field(default_factory=list)
+    liquidity: list[LiquiditySeries] = Field(default_factory=list)
     providers: list[Provider] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
@@ -96,6 +109,8 @@ __all__ = [
     "FundingSeries",
     "GasSeries",
     "YieldSeries",
+    "LiquiditySeries",
+    "LiquidityPoint",
     "Provider",
     "Coverage",
 ]

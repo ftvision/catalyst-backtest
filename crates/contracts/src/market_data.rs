@@ -73,6 +73,24 @@ pub struct YieldSeries {
     pub points: Vec<YieldPoint>,
 }
 
+/// An AMM pool's reserves at a tick — `reserve_base` units of the base token and
+/// `reserve_quote` units of the quote (USD/stable). Constant-product price impact
+/// is computed from these (#40).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LiquidityPoint {
+    pub ts: String,
+    pub reserve_base: Decimal,
+    pub reserve_quote: Decimal,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LiquiditySeries {
+    pub venue: String,
+    pub symbol: String,
+    #[serde(default)]
+    pub points: Vec<LiquidityPoint>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Coverage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -116,6 +134,8 @@ pub struct MarketDataBundle {
     pub gas: Vec<GasSeries>,
     #[serde(default)]
     pub yields: Vec<YieldSeries>,
+    #[serde(default)]
+    pub liquidity: Vec<LiquiditySeries>,
     #[serde(default)]
     pub providers: Vec<Provider>,
     #[serde(default)]

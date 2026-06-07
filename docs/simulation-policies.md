@@ -239,6 +239,13 @@ MVP default:
 fixed_bps
 ```
 
+`amm_price_impact` is implemented for swaps (#40): when a `liquidity` (pool
+reserve) series is present for the traded `(venue, symbol)`, the fill uses the
+constant-product average price (`x·y=k`) for the trade size instead of a flat
+bps — so large orders pay realistic impact and small orders don't. It falls back
+to the reference price when no pool data is present. `order_book_depth` (HL perps)
+is not modeled yet.
+
 Example:
 
 ```text

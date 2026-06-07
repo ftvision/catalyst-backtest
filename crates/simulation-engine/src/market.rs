@@ -36,6 +36,7 @@ pub struct BundleIndex {
     funding: HashMap<(String, String), BTreeMap<i64, Decimal>>,
     gas: HashMap<String, BTreeMap<i64, Decimal>>,
     yields: HashMap<YieldKey, BTreeMap<i64, Decimal>>,
+    liquidity: HashMap<(String, String), BTreeMap<i64, (Decimal, Decimal)>>,
     all_ts: BTreeSet<i64>,
 }
 
@@ -86,6 +87,17 @@ impl BundleIndex {
                 }
             }
         }
+        for series in &bundle.liquidity {
+            let key = (series.venue.clone(), series.symbol.clone());
+            for p in &series.points {
+                if let Some(ts) = parse_ts(&p.ts) {
+                    idx.liquidity
+                        .entry(key.clone())
+                        .or_default()
+                        .insert(ts, (dec(&p.reserve_base), dec(&p.reserve_quote)));
+                }
+            }
+        }
         idx
     }
 
@@ -130,6 +142,13 @@ impl BundleIndex {
         let m = self.yields.get(key)?;
         m.get(&ts).copied().or_else(|| m.range(..=ts).next_back().map(|(_, v)| *v))
     }
+
+    /// Pool reserves (base, quote) for a (venue, symbol) at `ts` (exact, else last
+    /// known <= ts).
+    pub fn reserves_at(&self, venue: &str, symbol: &str, ts: i64) -> Option<(Decimal, Decimal)> {
+        let m = self.liquidity.get(&(venue.to_string(), symbol.to_string()))?;
+        m.get(&ts).copied().or_else(|| m.range(..=ts).next_back().map(|(_, v)| *v))
+    }
 }
 
 /// A read-only market view bound to a single tick.
@@ -147,5 +166,8 @@ impl MarketContext for TickContext<'_> {
     }
     fn gas_usd(&self, chain: &str) -> Option<Decimal> {
         self.index.gas_at(chain, self.ts)
+    }
+    fn pool_reserves(&self, venue: &str, symbol: &str) -> Option<(Decimal, Decimal)> {
+        self.index.reserves_at(venue, symbol, self.ts)
     }
 }
