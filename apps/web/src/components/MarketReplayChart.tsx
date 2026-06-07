@@ -208,10 +208,6 @@ function tickGranularityLabel(candles: CandlePoint[]) {
   return `${seconds}s`;
 }
 
-function priceMatchesCandleClose(candle: CandlePoint, price: number) {
-  return Math.abs(candle.close - price) <= Math.max(0.05, Math.abs(price) * 0.00001);
-}
-
 function nearestCandleIndexByTime(candles: CandlePoint[], time: UTCTimestamp) {
   if (!candles.length) return -1;
   let nearestIndex = 0;
@@ -232,33 +228,6 @@ function eventCandleIndex(event: MarketEvent, candles: CandlePoint[]) {
   if (!candles.length) return -1;
 
   const exactIndex = candles.findIndex((candle) => candle.time === event.time);
-  if (event.status !== "signal") {
-    return exactIndex >= 0 ? exactIndex : nearestCandleIndexByTime(candles, event.time);
-  }
-
-  const observedPrice = event.observedPrice;
-  if (observedPrice === undefined || !Number.isFinite(observedPrice)) {
-    return exactIndex >= 0 ? exactIndex : nearestCandleIndexByTime(candles, event.time);
-  }
-
-  if (exactIndex >= 0 && priceMatchesCandleClose(candles[exactIndex], observedPrice)) {
-    return exactIndex;
-  }
-
-  const stepSeconds = candleStepSeconds(candles);
-  const maxDistanceSeconds = stepSeconds * 12;
-  const candidates = candles
-    .map((candle, index) => ({
-      candle,
-      index,
-      distanceSeconds: Math.abs(Number(candle.time) - Number(event.time)),
-    }))
-    .filter(({ candle, distanceSeconds }) => distanceSeconds <= maxDistanceSeconds && priceMatchesCandleClose(candle, observedPrice));
-  if (candidates.length > 0) {
-    candidates.sort((a, b) => a.distanceSeconds - b.distanceSeconds);
-    return candidates[0].index;
-  }
-
   return exactIndex >= 0 ? exactIndex : nearestCandleIndexByTime(candles, event.time);
 }
 
