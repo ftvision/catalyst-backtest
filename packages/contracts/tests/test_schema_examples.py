@@ -21,6 +21,7 @@ CASES = [
     ("graph.threshold-composed.json", "graph"),
     ("graph.relative-sizing.json", "graph"),
     ("graph.ma-cross.json", "graph"),
+    ("graph.short-momentum.json", "graph"),
     ("backtest-request.json", "backtest-request"),
     ("simulation-policy.strict_v1.json", "simulation-policy"),
     ("market-data-bundle.json", "market-data-bundle"),
