@@ -14,3 +14,9 @@ interval = "1h"
 
 [config.initial_portfolio.hyperliquid]
 USDC = "10000"
+
+# HL funding sits at its cap (~1.25e-5) ~80% of the time, so the carry is
+# "almost always on". Open the basis once and hold it (collecting funding)
+# instead of re-opening on every funding jitter.
+[config.execution]
+signal_trigger = "once_per_backtest"
