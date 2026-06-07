@@ -37,7 +37,7 @@ keeps the two languages behaviorally aligned.
 
 | Example | Validates against |
 | --- | --- |
-| `graph.swap.json`, `graph.perp-signal.json`, `graph.yield.json` | `graph` |
+| `graph.swap.json`, `graph.perp-signal.json`, `graph.yield.json`, `graph.limit-order.json`, `graph.ma-cross.json`, `graph.relative-sizing.json`, `graph.threshold-composed.json`, `graph.threshold-funding.json` | `graph` |
 | `backtest-request.json` | `backtest-request` |
 | `simulation-policy.strict_v1.json` | `simulation-policy` |
 | `market-data-bundle.json` | `market-data-bundle` |

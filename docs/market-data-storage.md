@@ -18,6 +18,7 @@ Parquet with Hive-style partitioning, one file per series per UTC date:
 <root>/funding/venue=<venue>/symbol=<symbol>/<YYYY-MM-DD>.parquet
 <root>/gas/chain=<chain>/<YYYY-MM-DD>.parquet
 <root>/yields/protocol=<p>/asset=<a>/chain=<c>/pool=<pool|_none>/<YYYY-MM-DD>.parquet
+<root>/liquidity/venue=<venue>/symbol=<symbol>/<YYYY-MM-DD>.parquet
 ```
 
 Partitioning enables **partition pruning** (read only the dates in the window)
@@ -31,6 +32,7 @@ and **projection** (read only needed columns).
 | funding | `ts`, `rate` |
 | gas | `ts`, `gas_usd` |
 | yields | `ts`, `apr` |
+| liquidity | `ts`, `reserve_base`, `reserve_quote` |
 
 - **`ts`** — `timestamp[us, tz=UTC]`.
 - **Value columns** — stored as **strings** (decimal-as-string), matching the
@@ -44,12 +46,30 @@ and **projection** (read only needed columns).
 - Writes **merge by `ts`** within a date file (idempotent incremental backfill).
 - A reference price stored under a venue (e.g. Binance klines written under
   `venue=hyperliquid, symbol=ETH`) is an **approximation** of that venue's own
-  mark — fine for directional backtests, not execution-grade. Record the real
-  provenance in a coverage/manifest entry when it matters.
+  mark — fine for directional backtests, not execution-grade. The real provenance
+  is recorded in the `_provenance.json` sidecar (below).
+
+## Sidecars (manifests at `<root>/`)
+
+Small JSON files at the store root, keyed by `"<kind>/<key>"` (e.g.
+`"candles/base/ETH/1h"`). They are metadata *about* the series, not series data:
+
+- **`_provenance.json`** — per series, `native` (the venue's own price/feed),
+  `reference` (a proxy stored under another venue, e.g. a CEX price), or
+  `derived`. The Rust loader reads it to label provider metadata. Written via
+  `ParquetStore.set_provenance` / read via `read_provenance`.
+- **`_quality.json`** — per series, the ingestion-time cleaning report
+  (`outliers_removed`, `wicks_repaired`, `method`, `affected_ranges`,
+  `repaired_ranges`). Written via `set_quality` / read via `read_quality`. See
+  [market-data-construction.md](market-data-construction.md).
+- **`_validation.json`** — per series, the latest cross-reference QA report
+  (per-field deviation vs an independent reference + OHLC invariants), written by
+  `scripts/validate_market_data.py`. There is no `ParquetStore` accessor for this
+  one yet; the script reads/writes it directly.
 
 ## Coverage
 
-`ParquetStore.coverage(series_dir)` returns `(min_ts, max_ts)` for a series so a
+`ParquetStore.coverage(base)` (a series partition `Path`) returns `(min_ts, max_ts)` for a series so a
 run can report what history is actually available and the missing-data policy
 can act, rather than silently returning gaps.
 

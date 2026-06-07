@@ -4,7 +4,8 @@ This directory is the repo-level strategy repository: graph definitions live in
 `graphs/`, market scenarios live in `scenarios/`, and `catalog.json` names the
 strategies and scenarios that should be runnable together.
 
-The catalog mirrors all 15 pasted graph examples:
+The catalog covers graphs `g01`–`g26` (the original 15 pasted examples plus the
+ADR-0002 strategy-surface graphs g16–g26):
 
 - `g01_evm_swap_buy_eth_base`
 - `g02_hl_spot_buy_eth`

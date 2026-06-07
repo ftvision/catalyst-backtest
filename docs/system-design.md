@@ -77,6 +77,9 @@ catalyst-backtest/
     graph.schema.json
     backtest-request.schema.json
     backtest-result.schema.json
+    market-data-bundle.schema.json
+    simulation-policy.schema.json
+    simulation-trace.schema.json
 
   crates/
     contracts/
@@ -91,7 +94,11 @@ catalyst-backtest/
 
   packages/
     contracts/
+    market-data-core/
     market-data/
+    market-data-dune/
+    market-data-bigquery/
+    client/            # catalyst-bt CLI
 
   apps/
     web/
@@ -397,12 +404,17 @@ Benefits:
 - data source changes do not force simulation changes
 - same simulation can run from cached data, fixtures, or live fetches
 
-Possible storage:
+Storage:
 
-- local Parquet for candles/rates/events
-- DuckDB for local querying
-- Postgres later for job metadata
-- object storage later for large artifacts
+- local Parquet for candles/rates/events (dev)
+- **Cloudflare R2** (object storage) for the shared/prod market-data store — the
+  Rust loader reads it directly via `object_store`
+- run/result artifacts are currently held in the service's in-memory run index
+- (possible later: DuckDB for local querying, Postgres for durable job metadata)
+
+The service is deployed to **Fly.io** (`https://catalyst-backtest-api.fly.dev`)
+and the web workbench to **Cloudflare Pages**
+(`https://catalyst-backtest-web.pages.dev`); see `infra/`.
 
 ## Testing Strategy
 

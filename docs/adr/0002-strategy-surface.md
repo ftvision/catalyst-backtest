@@ -23,7 +23,8 @@ in practice: **funding-rate carry**, **yield rotation**, trend/mean-reversion on
 Three facts make now the right time to design this:
 
 1. **The compiler is single-source in Rust** (`crates/graph-compiler`; the Python
-   one is conformance-only). A new primitive is one language, not two.
+   conformance compiler that existed at the time has since been retired — ADR
+   0001 / #43). A new primitive is one language, not two.
 2. **The engine is already shaped like a general model, hardwired to price.** A
    `Signal` is `{ id, symbol, operator, threshold, targets }` — "read a scalar,
    compare to a threshold, emit a bool" — that always reads
@@ -206,8 +207,9 @@ edges — no existing graph changes meaning.
   example is round-trip validated cross-language. Rust + Python test suites green.
 
 The Python conformance compiler was intentionally **not** extended for the new
-subtypes — per ADR 0001 the Rust compiler is authoritative; the Python mirror
-stays scoped to the existing `price_threshold` golden graphs.
+subtypes — per ADR 0001 the Rust compiler is authoritative. (That Python mirror
+has since been removed entirely by the ADR-0001 migration / #43; the Rust
+compiler is now the only compiler.)
 
 **Step 4 (composition) is also implemented:**
 
