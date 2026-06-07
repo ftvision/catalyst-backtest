@@ -264,15 +264,124 @@ select {
   min-height: 42px;
 }
 
-.node-inspector-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
-  gap: 12px;
-  align-items: stretch;
+.graph-topology-preview {
+  height: 300px;
+  overflow: hidden;
+  border: 1px solid var(--cb-border);
+  border-radius: 6px;
+  background:
+    linear-gradient(180deg, oklch(0.99 0.005 235), oklch(0.972 0.009 235)),
+    var(--cb-surface);
 }
 
-.node-details {
-  min-width: 0;
+.graph-topology-preview .react-flow__renderer {
+  cursor: default;
+}
+
+.graph-topology-preview .react-flow__pane {
+  cursor: default;
+}
+
+.graph-topology-preview .react-flow__node {
+  cursor: pointer;
+}
+
+.graph-topology-preview .react-flow__background {
+  fill: var(--cb-surface-2);
+}
+
+.graph-node-card {
+  display: grid;
+  width: 154px;
+  min-height: 68px;
+  gap: 2px;
+  border: 1px solid var(--cb-border);
+  border-radius: 7px;
+  background: oklch(0.994 0.004 235);
+  color: var(--cb-text);
+  padding: 8px 10px;
+  text-align: left;
+  box-shadow: 0 1px 2px oklch(0.25 0.03 245 / 0.06);
+  transition:
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    background-color 140ms ease;
+}
+
+.graph-node-card:hover,
+.graph-node-card.active {
+  border-color: oklch(0.68 0.09 245);
+  background: var(--cb-row-selected);
+  box-shadow:
+    inset 0 0 0 1px oklch(0.86 0.05 245),
+    0 1px 3px oklch(0.25 0.03 245 / 0.1);
+}
+
+.graph-node-card.data {
+  border-color: oklch(0.82 0.04 286);
+}
+
+.graph-node-card.signal,
+.graph-node-card.filter {
+  border-color: oklch(0.82 0.045 78);
+}
+
+.graph-node-card.action {
+  border-color: oklch(0.8 0.055 178);
+}
+
+.graph-node-kind {
+  color: var(--cb-muted);
+  font-size: 0.64rem;
+  font-weight: 750;
+  letter-spacing: 0;
+  line-height: 1.1;
+  text-transform: uppercase;
+}
+
+.graph-node-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--cb-text);
+  font-size: 0.79rem;
+  font-weight: 750;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.graph-node-detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--cb-muted);
+  font-size: 0.7rem;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.graph-node-handle {
+  width: 6px;
+  height: 6px;
+  border: 1px solid var(--cb-border-strong);
+  background: var(--cb-surface);
+  opacity: 0;
+}
+
+.graph-topology-preview .react-flow__edge-path {
+  stroke: oklch(0.66 0.035 245);
+  stroke-width: 1.4;
+}
+
+.graph-topology-preview .react-flow__edge.active .react-flow__edge-path {
+  stroke: var(--cb-blue);
+  stroke-width: 2;
+}
+
+.graph-topology-preview .react-flow__edge .react-flow__arrowhead polyline {
+  stroke: oklch(0.66 0.035 245);
+}
+
+.graph-topology-preview .react-flow__edge.active .react-flow__arrowhead polyline {
+  stroke: var(--cb-blue);
 }
 
 .policy-helper {
@@ -744,9 +853,6 @@ select {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .node-inspector-grid {
-    grid-template-columns: 1fr;
-  }
 }
 
 @media (max-width: 720px) {

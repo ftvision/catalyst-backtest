@@ -10,6 +10,12 @@ export interface GraphNode {
   detail: string;
 }
 
+export interface GraphEdge {
+  id: string;
+  from: string;
+  to: string;
+}
+
 export interface GraphSummary {
   id: string;
   hash: string;
@@ -20,6 +26,7 @@ export interface GraphSummary {
   nodeCount: number;
   edgeCount: number;
   nodes: GraphNode[];
+  edges: GraphEdge[];
 }
 
 export interface SetupData {

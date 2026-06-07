@@ -1,11 +1,12 @@
-import { ActionIcon, Button, Group, NumberInput, Paper, Popover, Select, SimpleGrid, Stack, Table, Text, TextInput, Title } from "@mantine/core";
+import { ActionIcon, Group, NumberInput, Paper, Popover, Select, SimpleGrid, Stack, Text, TextInput, Title } from "@mantine/core";
 import { DateTimePicker } from "@mantine/dates";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
-import { useMemo, useState } from "react";
-import { HelpCircle, Play } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { HelpCircle } from "lucide-react";
 import type { BacktestConfig, MarketDataCatalogItem, StrategyListItem } from "../api/client";
 import { DataTable } from "../components/DataTable";
+import { GraphTopologyPreview } from "../components/GraphTopologyPreview";
 import { MarketDataSelector } from "../components/MarketDataSelector";
 import { RunReadinessRail } from "../components/RunReadinessRail";
 import { SectionHeader } from "../components/SectionHeader";
@@ -63,7 +64,13 @@ export function RunSetupPage({
   onConfigChange?: (patch: Partial<Pick<BacktestConfig, "start" | "end" | "interval">>) => void;
 }) {
   const [selectedNodeId, setSelectedNodeId] = useState(graph.nodes[0]?.id);
-  const selectedNode = graph.nodes.find((node) => node.id === selectedNodeId) ?? graph.nodes[0];
+
+  useEffect(() => {
+    if (!graph.nodes.some((node) => node.id === selectedNodeId)) {
+      setSelectedNodeId(graph.nodes[0]?.id);
+    }
+  }, [graph.nodes, selectedNodeId]);
+
   const strategyOptions = strategies.map((strategy) => ({
     value: strategy.id,
     label: strategy.title,
@@ -96,18 +103,13 @@ export function RunSetupPage({
       <SectionHeader
         title="Run Setup"
         subtitle="Confirm graph, local market data, portfolio, and policy before creating a run."
-        action={
-          <Button leftSection={<Play size={14} />} onClick={onRun} disabled={runDisabled || !hasMarketData}>
-            {runLabel}
-          </Button>
-        }
       />
 
       <SetupStepStrip steps={steps} />
 
       <div className="setup-preflight-grid">
         <Stack gap="md">
-          <SetupModule title="Graph" subtitle="Read-only strategy graph and node requirements." status={graph.status === "validated" ? "success" : "warning"}>
+          <SetupModule title="Graph" subtitle="Read-only strategy topology." status={graph.status === "validated" ? "success" : "warning"}>
             <Group justify="space-between" align="flex-start">
               <Stack gap={2}>
                 <Title order={2}>{graph.name}</Title>
@@ -145,48 +147,12 @@ export function RunSetupPage({
                 <Text fw={650}>{graph.edgeCount}</Text>
               </Paper>
             </SimpleGrid>
-            <div className="node-inspector-grid">
-              <Table withTableBorder highlightOnHover>
-                <Table.Thead>
-                  <Table.Tr>
-                    <Table.Th>Node</Table.Th>
-                    <Table.Th>Kind</Table.Th>
-                    <Table.Th>Detail</Table.Th>
-                  </Table.Tr>
-                </Table.Thead>
-                <Table.Tbody>
-                  {graph.nodes.map((node) => (
-                    <Table.Tr
-                      key={node.id}
-                      className={selectedNode?.id === node.id ? "selected-row" : undefined}
-                      onClick={() => setSelectedNodeId(node.id)}
-                    >
-                      <Table.Td className="mono">{node.label}</Table.Td>
-                      <Table.Td>{node.kind}</Table.Td>
-                      <Table.Td>{node.detail}</Table.Td>
-                    </Table.Tr>
-                  ))}
-                </Table.Tbody>
-              </Table>
-              <Paper className="panel-muted node-details" p="sm" radius="sm">
-                <Stack gap="xs">
-                  <Group justify="space-between">
-                    <Text fw={700}>Node details</Text>
-                    <StatusBadge status={selectedNode ? "success" : "warning"} label={selectedNode ? "selected" : "none"} />
-                  </Group>
-                  <Text size="xs" c="dimmed">
-                    Id
-                  </Text>
-                  <Text className="mono" size="sm">
-                    {selectedNode?.id ?? "-"}
-                  </Text>
-                  <Text size="xs" c="dimmed">
-                    Requirement
-                  </Text>
-                  <Text size="sm">{selectedNode?.detail ?? "Select a node to inspect the requirement."}</Text>
-                </Stack>
-              </Paper>
-            </div>
+            <GraphTopologyPreview
+              nodes={graph.nodes}
+              edges={graph.edges}
+              selectedNodeId={selectedNodeId}
+              onSelectNode={setSelectedNodeId}
+            />
           </SetupModule>
 
           <SetupModule title="Market data" subtitle="Choose the local Parquet replay window before running." status={hasMarketData ? coverageStatus : "danger"}>
