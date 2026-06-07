@@ -221,6 +221,29 @@ pub enum Source {
     },
     /// Per-chain gas cost in USD.
     Gas { chain: String },
+    /// A transform over another source's recent values, e.g. a moving average of
+    /// price. `window` is the number of bars; needs that much warmup history.
+    Derived {
+        of: Box<Source>,
+        transform: Transform,
+        window: u32,
+    },
+}
+
+/// A rolling transform applied to a source's last `window` bar values.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Transform {
+    /// Simple moving average.
+    Sma,
+    /// Exponential moving average (alpha = 2 / (window + 1)).
+    Ema,
+    /// Highest value over the window.
+    RollingHigh,
+    /// Lowest value over the window.
+    RollingLow,
+    /// Rate of change vs the oldest sample: (current - oldest) / oldest.
+    Roc,
 }
 
 /// The right-hand side of a signal comparison.

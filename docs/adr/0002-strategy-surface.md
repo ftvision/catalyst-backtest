@@ -1,6 +1,6 @@
 # ADR 0002 — Strategy surface: observable-parameterized signals, firing control, composition
 
-- **Status:** Accepted — steps 1, 2 & 4 implemented (step 3 pending)
+- **Status:** Accepted — steps 1–4 implemented
 - **Builds on:** ADR 0001 (Rust owns the run/service path)
 - **Relates to:** #28 (compiler now single-source in Rust), reviewer feedback on
   "any runnable graph" support (more signal types, repeat/cooldown, variables)
@@ -242,9 +242,28 @@ stays scoped to the existing `price_threshold` golden graphs.
 - Schema gains `amountOrPct`; a `graph.relative-sizing.json` example
   (take-profit: sell 50% on a price spike) is round-trip validated.
 
-Step 3 (derived sources `sma`/`ema`/`rolling_high|low`/`roc` + warmup/lookback
-propagation through the loader) remains — it reaches into `market-data-loader`
-for pre-`start` history.
+**Step 3 (derived sources + warmup) is also implemented:**
+
+- `Source::Derived { of, transform, window }` with `transform` ∈
+  `sma`/`ema`/`rolling_high`/`rolling_low`/`roc`. A `Reference::Source` can wrap a
+  derived source, so "price < its 20-bar SMA" and breakout/momentum signals are
+  expressible.
+- The engine samples the underlying source at the last `window` grid bars
+  (newest-first) and applies the transform; it requires a **full window of warmup
+  history** before the signal is valid (returns no value until then).
+- The compiler records the max **`lookback_bars`** on `DataRequirements`, and the
+  service worker loads `start − lookback_bars × interval` from the store so
+  derived signals are warm from the first tick. `ticks()` still starts at the
+  run's `start`, so pre-`start` bars feed indicators without creating ticks.
+- Schema gains the `derived` source; a `graph.ma-cross.json` example
+  (price < 20-bar SMA → buy 25% of balance) is round-trip validated.
+
+All four ADR-0002 steps are now implemented.
+
+### Remaining follow-ups (small, noted in code)
+
+- `pct_portfolio` sizing (needs portfolio equity threaded into execution).
+- Nothing else outstanding for the signal/sizing surface.
 
 ## Open decisions
 

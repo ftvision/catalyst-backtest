@@ -6,7 +6,7 @@ use rust_decimal::Decimal;
 use serde_json::{json, Value};
 
 use catalyst_contracts::graph::{
-    Amount, AmountBasis, PerpOrderConfig, Reference, Source, SwapConfig, YieldConfig,
+    Amount, AmountBasis, PerpOrderConfig, Reference, Source, SwapConfig, Transform, YieldConfig,
 };
 use catalyst_contracts::trace::{Event, Portfolio, SimulationTrace, Snapshot};
 use catalyst_contracts::{BacktestConfig, Graph, MarketDataBundle, SimulationPolicy};
@@ -202,6 +202,7 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
             ts,
             &ts_iso,
             tick_index,
+            interval_secs,
             &policy,
             &mut events,
             &mut signal_state,
@@ -268,6 +269,7 @@ fn evaluate_signals(
     ts: i64,
     ts_iso: &str,
     tick_index: usize,
+    interval_secs: i64,
     policy: &ResolvedPolicy,
     events: &mut Vec<Event>,
     signal_state: &mut HashMap<String, bool>,
@@ -288,8 +290,8 @@ fn evaluate_signals(
         let cond = match &signal.def {
             SignalDef::Threshold { source, operator, reference } => {
                 match (
-                    source_value(source, index, ts),
-                    reference_value(reference, index, ts, variables),
+                    source_value(source, index, ts, interval_secs),
+                    reference_value(reference, index, ts, interval_secs, variables),
                 ) {
                     (Some(lhs), Some(rhs)) => {
                         leaf_values.insert(signal.id.as_str(), (lhs, rhs));
@@ -389,7 +391,12 @@ fn evaluate_signals(
 }
 
 /// The per-tick scalar a [`Source`] observes, from the indexed market data.
-fn source_value(source: &Source, index: &BundleIndex, ts: i64) -> Option<Decimal> {
+fn source_value(
+    source: &Source,
+    index: &BundleIndex,
+    ts: i64,
+    interval_secs: i64,
+) -> Option<Decimal> {
     match source {
         Source::Price { symbol, venue } => match venue {
             Some(v) => index.bar_at(v, symbol, ts).map(|b| b.close),
@@ -401,6 +408,53 @@ fn source_value(source: &Source, index: &BundleIndex, ts: i64) -> Option<Decimal
             index.apr_at(&key, ts)
         }
         Source::Gas { chain } => index.gas_at(chain, ts),
+        Source::Derived { of, transform, window } => {
+            let w = (*window).max(1) as i64;
+            // Sample the underlying source at the last `window` grid bars,
+            // newest first; stop at the first gap.
+            let mut samples: Vec<Decimal> = Vec::with_capacity(w as usize);
+            for k in 0..w {
+                match source_value(of, index, ts - k * interval_secs, interval_secs) {
+                    Some(v) => samples.push(v),
+                    None => break,
+                }
+            }
+            // Require a full window of warmup history before the signal is valid.
+            if (samples.len() as u32) < *window {
+                return None;
+            }
+            Some(apply_transform(transform, &samples))
+        }
+    }
+}
+
+/// Apply a [`Transform`] to samples ordered newest-first.
+fn apply_transform(transform: &Transform, samples: &[Decimal]) -> Decimal {
+    match transform {
+        Transform::Sma => {
+            samples.iter().copied().sum::<Decimal>() / Decimal::from(samples.len() as u64)
+        }
+        Transform::RollingHigh => samples.iter().copied().max().unwrap_or(Decimal::ZERO),
+        Transform::RollingLow => samples.iter().copied().min().unwrap_or(Decimal::ZERO),
+        Transform::Roc => {
+            let current = samples[0];
+            let oldest = *samples.last().unwrap();
+            if oldest.is_zero() {
+                Decimal::ZERO
+            } else {
+                (current - oldest) / oldest
+            }
+        }
+        Transform::Ema => {
+            // Fold oldest -> newest with alpha = 2 / (n + 1).
+            let alpha = Decimal::from(2) / Decimal::from(samples.len() as u64 + 1);
+            let mut iter = samples.iter().rev();
+            let mut ema = *iter.next().unwrap();
+            for &v in iter {
+                ema = alpha * v + (Decimal::ONE - alpha) * ema;
+            }
+            ema
+        }
     }
 }
 
@@ -409,11 +463,12 @@ fn reference_value(
     reference: &Reference,
     index: &BundleIndex,
     ts: i64,
+    interval_secs: i64,
     variables: &HashMap<String, Decimal>,
 ) -> Option<Decimal> {
     match reference {
         Reference::Const { value } => value.parse::<Decimal>().ok(),
-        Reference::Source { source } => source_value(source, index, ts),
+        Reference::Source { source } => source_value(source, index, ts, interval_secs),
         Reference::Var { var } => variables.get(var).copied(),
     }
 }
