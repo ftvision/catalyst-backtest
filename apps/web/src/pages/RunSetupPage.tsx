@@ -1,6 +1,6 @@
-import { Button, Group, NumberInput, Paper, Select, SimpleGrid, Stack, Table, Text, TextInput, Title } from "@mantine/core";
+import { ActionIcon, Button, Group, NumberInput, Paper, Popover, Select, SimpleGrid, Stack, Table, Text, TextInput, Title } from "@mantine/core";
 import { useMemo, useState } from "react";
-import { Play } from "lucide-react";
+import { HelpCircle, Play } from "lucide-react";
 import type { MarketDataCatalogItem, StrategyListItem } from "../api/client";
 import { DataTable } from "../components/DataTable";
 import { MarketDataSelector } from "../components/MarketDataSelector";
@@ -9,7 +9,7 @@ import { SectionHeader } from "../components/SectionHeader";
 import { SetupModule } from "../components/SetupModule";
 import { SetupStepStrip, type SetupStep } from "../components/SetupStepStrip";
 import { StatusBadge } from "../components/StatusBadge";
-import type { GraphSummary, SetupData } from "../types";
+import type { AuditData, GraphSummary, SetupData } from "../types";
 
 export function RunSetupPage({
   graph,
@@ -26,6 +26,7 @@ export function RunSetupPage({
   selectedMarketDataId,
   onSelectMarketData,
   marketWarnings = [],
+  policyMatrix = [],
 }: {
   graph: GraphSummary;
   setup: SetupData;
@@ -41,6 +42,7 @@ export function RunSetupPage({
   selectedMarketDataId?: string;
   onSelectMarketData?: (id: string) => void;
   marketWarnings?: string[];
+  policyMatrix?: AuditData["policyMatrix"];
 }) {
   const [selectedNodeId, setSelectedNodeId] = useState(graph.nodes[0]?.id);
   const selectedNode = graph.nodes.find((node) => node.id === selectedNodeId) ?? graph.nodes[0];
@@ -189,7 +191,36 @@ export function RunSetupPage({
             />
           </SetupModule>
 
-          <SetupModule title="Configuration" subtitle="Policy profile and deterministic simulation assumptions." status={setup.policy ? "success" : "danger"}>
+          <SetupModule
+            title="Configuration"
+            subtitle="Policy profile and deterministic simulation assumptions."
+            status={setup.policy ? "success" : "danger"}
+            action={
+              policyMatrix.length ? (
+                <Popover width={680} position="bottom-end" shadow="md">
+                  <Popover.Target>
+                    <ActionIcon variant="light" aria-label="Compare policy profiles">
+                      <HelpCircle size={16} />
+                    </ActionIcon>
+                  </Popover.Target>
+                  <Popover.Dropdown>
+                    <Stack gap="sm" className="policy-helper">
+                      <Stack gap={2}>
+                        <Text fw={650}>Policy profile comparison</Text>
+                        <Text size="xs" c="dimmed">
+                          These assumptions are resolved before the run. Pick the profile here, then inspect event-specific reasons in Event Lens.
+                        </Text>
+                      </Stack>
+                      <DataTable
+                        columns={["Rule", "Strict", "Conservative", "Research"]}
+                        rows={policyMatrix}
+                      />
+                    </Stack>
+                  </Popover.Dropdown>
+                </Popover>
+              ) : null
+            }
+          >
             <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
               <TextInput label="Start" value={setup.start} readOnly />
               <TextInput label="End" value={setup.end} readOnly />

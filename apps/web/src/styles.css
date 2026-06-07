@@ -275,6 +275,23 @@ select {
   min-width: 0;
 }
 
+.policy-helper {
+  max-width: min(640px, calc(100vw - 48px));
+}
+
+.policy-helper .table-scroll {
+  max-height: 360px;
+}
+
+.policy-helper .mantine-Table-table {
+  font-size: 0.78rem;
+}
+
+.policy-helper .mantine-Table-th,
+.policy-helper .mantine-Table-td {
+  white-space: nowrap;
+}
+
 .selected-row {
   background: var(--cb-row-selected);
 }

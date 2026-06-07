@@ -574,6 +574,7 @@ export function App() {
               selectedMarketDataId={selectedMarketDataId}
               onSelectMarketData={(id) => void loadMarketSelection(id)}
               marketWarnings={marketWarnings}
+              policyMatrix={workbench.audit.policyMatrix}
             />
           ) : null}
           {activeRoute === "replay" ? (

@@ -12,7 +12,6 @@ import {
 } from "@mantine/core";
 import { AlertTriangle } from "lucide-react";
 import { CostAttribution } from "../components/CostAttribution";
-import { DataTable } from "../components/DataTable";
 import { MarketReplayChart } from "../components/MarketReplayChart";
 import { SectionHeader } from "../components/SectionHeader";
 import { StatusBadge } from "../components/StatusBadge";
@@ -182,23 +181,17 @@ export function EventLensPage({
 
           <Paper className="panel" p="md" radius="sm">
             <Stack gap="sm">
-              <Text fw={650}>Pricing and policy matrix</Text>
-              <SimpleGrid cols={{ base: 1, lg: 2 }} spacing="md">
-                <Table withTableBorder>
-                  <Table.Tbody>
-                    {audit.selected.pricing.map(([label, value]) => (
-                      <Table.Tr key={label}>
-                        <Table.Td>{label}</Table.Td>
-                        <Table.Td className="mono">{value}</Table.Td>
-                      </Table.Tr>
-                    ))}
-                  </Table.Tbody>
-                </Table>
-                <DataTable
-                  columns={["Rule", "Strict", "Conservative", "Research"]}
-                  rows={audit.policyMatrix}
-                />
-              </SimpleGrid>
+              <Text fw={650}>Pricing context</Text>
+              <Table withTableBorder>
+                <Table.Tbody>
+                  {audit.selected.pricing.map(([label, value]) => (
+                    <Table.Tr key={label}>
+                      <Table.Td>{label}</Table.Td>
+                      <Table.Td className="mono">{value}</Table.Td>
+                    </Table.Tr>
+                  ))}
+                </Table.Tbody>
+              </Table>
             </Stack>
           </Paper>
 
