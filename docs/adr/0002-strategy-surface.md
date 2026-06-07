@@ -1,6 +1,6 @@
 # ADR 0002 — Strategy surface: observable-parameterized signals, firing control, composition
 
-- **Status:** Accepted — steps 1 & 4 implemented (steps 2–3 pending)
+- **Status:** Accepted — steps 1, 2 & 4 implemented (step 3 pending)
 - **Builds on:** ADR 0001 (Rust owns the run/service path)
 - **Relates to:** #28 (compiler now single-source in Rust), reviewer feedback on
   "any runnable graph" support (more signal types, repeat/cooldown, variables)
@@ -225,10 +225,26 @@ stays scoped to the existing `price_threshold` golden graphs.
 - Schema (`graph`) gains the three subtypes; a `graph.threshold-composed.json`
   example is round-trip validated cross-language.
 
-Steps 2 (relative sizing — execution-models + portfolio valuation) and 3
-(derived sources `sma`/`ema`/`rolling_high|low`/`roc` + warmup/lookback
-propagation through the loader) remain; both open cross-cutting surfaces beyond
-the signal layer.
+**Step 2 (relative action sizing) is also implemented:**
+
+- `Amount` is now `Absolute` (a decimal string, or `"all"`) or `Relative
+  { basis, value }`; bare strings still deserialize as `Absolute`, so existing
+  graphs are unchanged. `SwapConfig.amount`, `YieldConfig.amount`, and
+  `PerpOrderConfig.size_usd` use it.
+- The engine resolves a relative amount to absolute in `execute_action` (before
+  both market and resting-limit dispatch), against ledger-derived bases:
+  `pct_balance` (swap from-asset / yield asset / perp cash) and `pct_position`
+  (perp notional / yield principal+accrued). This unlocks stop-loss,
+  take-profit, and rebalancing.
+- **`pct_portfolio` is accepted by the contract/schema but rejected at execution**
+  with a clear message — it needs portfolio equity threaded into execution, a
+  small follow-up.
+- Schema gains `amountOrPct`; a `graph.relative-sizing.json` example
+  (take-profit: sell 50% on a price spike) is round-trip validated.
+
+Step 3 (derived sources `sma`/`ema`/`rolling_high|low`/`roc` + warmup/lookback
+propagation through the loader) remains — it reaches into `market-data-loader`
+for pre-`start` history.
 
 ## Open decisions
 
