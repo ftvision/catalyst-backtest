@@ -18,6 +18,7 @@ import { formatNumber, formatPercent } from "../utils/format";
 interface EventRail {
   id: string;
   left: number;
+  top?: number;
   label: string;
   node: string;
   status: MarketEvent["status"];
@@ -54,12 +55,12 @@ const wideGranularityThresholdSeconds = secondsPerDay * 35;
 const mediumGranularityThresholdSeconds = secondsPerDay * 10;
 const adaptiveGranularityMinCandles = 240;
 const granularitySeconds = {
-  "1h": 3_600,
   "4h": 14_400,
   "1d": secondsPerDay,
 };
 
-type ChartGranularity = keyof typeof granularitySeconds;
+type ChartGranularity = "tick" | keyof typeof granularitySeconds;
+type GranularityMode = "adaptive" | "tick";
 
 interface ReplayChartCache {
   candlesByGranularity: Record<ChartGranularity, CandlePoint[]>;
@@ -71,6 +72,7 @@ interface ReplayChartCache {
 const replayChartCache = new WeakMap<CandlePoint[], WeakMap<ReplayPoint[], ReplayChartCache>>();
 
 function bucketStart(time: UTCTimestamp, granularity: ChartGranularity): UTCTimestamp {
+  if (granularity === "tick") return time;
   const bucketSeconds = granularitySeconds[granularity];
   return (Math.floor(Number(time) / bucketSeconds) * bucketSeconds) as UTCTimestamp;
 }
@@ -89,11 +91,11 @@ function rangeSeconds(range: IRange<Time> | null) {
 function granularityForRange(visibleSeconds: number): ChartGranularity {
   if (visibleSeconds > wideGranularityThresholdSeconds) return "1d";
   if (visibleSeconds > mediumGranularityThresholdSeconds) return "4h";
-  return "1h";
+  return "tick";
 }
 
 function aggregateCandles(candles: CandlePoint[], granularity: ChartGranularity) {
-  if (granularity === "1h") return candles;
+  if (granularity === "tick") return candles;
 
   const buckets = new Map<number, CandlePoint>();
   for (const candle of candles) {
@@ -123,7 +125,7 @@ function alignReplayToCandles(replay: ReplayPoint[], candles: CandlePoint[]) {
 }
 
 function aggregateReplay(replay: ReplayPoint[], granularity: ChartGranularity) {
-  if (granularity === "1h") return replay;
+  if (granularity === "tick") return replay;
 
   const buckets = new Map<number, ReplayPoint>();
   for (const point of replay) {
@@ -144,13 +146,13 @@ function aggregateReplay(replay: ReplayPoint[], granularity: ChartGranularity) {
 
 function buildReplayChartCache(candles: CandlePoint[], replay: ReplayPoint[]): ReplayChartCache {
   const candlesByGranularity: Record<ChartGranularity, CandlePoint[]> = {
-    "1h": candles,
+    tick: candles,
     "4h": aggregateCandles(candles, "4h"),
     "1d": aggregateCandles(candles, "1d"),
   };
   const hourlyReplay = alignReplayToCandles(replay, candles);
   const replayByGranularity: Record<ChartGranularity, ReplayPoint[]> = {
-    "1h": hourlyReplay,
+    tick: hourlyReplay,
     "4h": aggregateReplay(hourlyReplay, "4h"),
     "1d": aggregateReplay(hourlyReplay, "1d"),
   };
@@ -196,6 +198,14 @@ function isEventWindowAligned(candles: CandlePoint[], events: MarketEvent[]) {
 function candleStepSeconds(candles: CandlePoint[]) {
   if (candles.length < 2) return 3_600;
   return Math.max(1, Number(candles[1].time) - Number(candles[0].time));
+}
+
+function tickGranularityLabel(candles: CandlePoint[]) {
+  const seconds = candleStepSeconds(candles);
+  if (seconds % secondsPerDay === 0) return `${seconds / secondsPerDay}d`;
+  if (seconds % 3_600 === 0) return `${seconds / 3_600}h`;
+  if (seconds % 60 === 0) return `${seconds / 60}m`;
+  return `${seconds}s`;
 }
 
 function priceMatchesCandleClose(candle: CandlePoint, price: number) {
@@ -271,21 +281,25 @@ export function MarketReplayChart({
   events,
   selectedEventId,
   compact = false,
+  granularityMode,
 }: {
   candles: CandlePoint[];
   replay: ReplayPoint[];
   events: MarketEvent[];
   selectedEventId?: string;
   compact?: boolean;
+  granularityMode?: GranularityMode;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const resetRangeRef = useRef<() => void>(() => undefined);
   const [eventRails, setEventRails] = useState<EventRail[]>([]);
-  const [displayedGranularity, setDisplayedGranularity] = useState<ChartGranularity>("1h");
+  const [displayedGranularity, setDisplayedGranularity] = useState<ChartGranularity>("tick");
   const eventsAligned = isEventWindowAligned(candles, events);
   const chartData = useMemo(() => getReplayChartCache(candles, replay), [candles, replay]);
   const displayedCandleCount = chartData.candlesByGranularity[displayedGranularity]?.length ?? candles.length;
+  const resolvedGranularityMode = granularityMode ?? (compact ? "tick" : "adaptive");
+  const granularityLabel = displayedGranularity === "tick" ? tickGranularityLabel(candles) : displayedGranularity;
 
   const resetRange = () => {
     resetRangeRef.current();
@@ -297,12 +311,12 @@ export function MarketReplayChart({
     const container = containerRef.current;
     const { candlesByGranularity, fullRangeSeconds, hourlyReplay, replayByGranularity } = chartData;
     const shouldUseAdaptiveGranularity =
-      !compact &&
+      resolvedGranularityMode === "adaptive" &&
       candles.length >= adaptiveGranularityMinCandles &&
       candles.length > candlesByGranularity["4h"].length &&
       fullRangeSeconds > mediumGranularityThresholdSeconds;
     const shouldShowVolume = !compact && hasInformativeVolume(candles);
-    let activeGranularity: ChartGranularity = shouldUseAdaptiveGranularity ? granularityForRange(fullRangeSeconds) : "1h";
+    let activeGranularity: ChartGranularity = shouldUseAdaptiveGranularity ? granularityForRange(fullRangeSeconds) : "tick";
     let applyingGranularity = false;
 
     const candlesForGranularity = (granularity: ChartGranularity) =>
@@ -494,7 +508,7 @@ export function MarketReplayChart({
     };
 
     const desiredGranularity = (range: IRange<Time> | null): ChartGranularity => {
-      if (!shouldUseAdaptiveGranularity) return "1h";
+      if (!shouldUseAdaptiveGranularity) return "tick";
       if (!range) return activeGranularity;
       return granularityForRange(rangeSeconds(range));
     };
@@ -553,11 +567,20 @@ export function MarketReplayChart({
         const coordinate = chart.timeScale().timeToCoordinate(coordinateTime);
         if (coordinate === null) return [];
         if (coordinate < 0 || coordinate > container.clientWidth) return [];
+        const priceCoordinate =
+          event.observedPrice === undefined || !Number.isFinite(event.observedPrice)
+            ? null
+            : candleSeries.priceToCoordinate(event.observedPrice);
+        const dotTop =
+          priceCoordinate === null
+            ? undefined
+            : Math.max(4, Math.min(container.clientHeight - 4, priceCoordinate));
 
         return [
           {
             id: event.id,
             left: coordinate,
+            top: dotTop,
             label: event.kind,
             node: event.node,
             status: event.status,
@@ -576,7 +599,7 @@ export function MarketReplayChart({
       updateEventRails();
     };
     resetRangeRef.current = () => {
-      const fullGranularity = shouldUseAdaptiveGranularity ? granularityForRange(fullRangeSeconds) : "1h";
+      const fullGranularity = shouldUseAdaptiveGranularity ? granularityForRange(fullRangeSeconds) : "tick";
       applyGranularity(fullGranularity, null);
       const fullLogicalRange = fullLogicalRangeForGranularity(fullGranularity);
       if (fullLogicalRange) {
@@ -607,12 +630,12 @@ export function MarketReplayChart({
       chartRef.current = null;
       resetRangeRef.current = () => undefined;
     };
-  }, [candles, chartData, compact, events, eventsAligned, selectedEventId]);
+  }, [candles, chartData, compact, events, eventsAligned, resolvedGranularityMode, selectedEventId]);
 
   return (
     <div className={compact ? "chart-shell compact" : "chart-shell"}>
       <div ref={containerRef} className={compact ? "chart-frame compact" : "chart-frame"} />
-      {!compact && candles.length ? <div className="chart-granularity-badge">{displayedGranularity} candles</div> : null}
+      {!compact && candles.length ? <div className="chart-granularity-badge">{granularityLabel} candles</div> : null}
       {!compact ? (
         <ChartInteractionControls
           ariaLabel="Market replay chart controls"
@@ -630,6 +653,7 @@ export function MarketReplayChart({
             style={
               {
                 left: `${rail.left}px`,
+                "--event-dot-top": rail.top === undefined ? undefined : `${rail.top}px`,
                 "--event-color": markerColor[rail.status],
               } as CSSProperties
             }

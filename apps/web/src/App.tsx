@@ -53,10 +53,13 @@ import { RunSetupPage } from "./pages/RunSetupPage";
 import { SimulationHistoryPage } from "./pages/SimulationHistoryPage";
 import { marketCatalogId } from "./components/MarketDataSelector";
 import {
+  deleteCachedRunDetail,
   getLastRunId,
   loadAllCachedRunDetails,
   loadCachedRunDetail,
+  loadDeletedRunIds,
   makeCachedRunDetail,
+  markRunDeleted,
   saveCachedRunDetail,
   setLastRunId,
   type CachedRunDetail,
@@ -216,6 +219,12 @@ function mergeHistoryItems(...lists: BacktestListItem[][]): BacktestListItem[] {
   return [...byId.values()].sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? ""));
 }
 
+function withoutDeletedHistoryItems(items: BacktestListItem[], deletedRunIds: string[]) {
+  if (!deletedRunIds.length) return items;
+  const deleted = new Set(deletedRunIds);
+  return items.filter((item) => !deleted.has(item.id));
+}
+
 function stringConfig(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
@@ -342,6 +351,7 @@ export function App() {
   const [policyProfiles, setPolicyProfiles] = useState<PolicyProfileOption[]>([]);
   const [marketCatalog, setMarketCatalog] = useState<MarketDataCatalogItem[]>([]);
   const [marketWarnings, setMarketWarnings] = useState<string[]>([]);
+  const [deletedRunIds, setDeletedRunIds] = useState<string[]>(() => loadDeletedRunIds());
   const [selectedMarketDataId, setSelectedMarketDataId] = useState<string>();
   const [activeGraph, setActiveGraph] = useState<CatalystGraph>(demoGraph);
   const [activeConfig, setActiveConfig] = useState<BacktestConfig>(demoConfig);
@@ -1088,6 +1098,20 @@ export function App() {
     openRunDetails(tab);
   }
 
+  async function deleteHistoryRun(runId: string) {
+    markRunDeleted(runId);
+    setDeletedRunIds(loadDeletedRunIds());
+    await deleteCachedRunDetail(runId).catch(() => undefined);
+    setWorkbench((current) => {
+      const historyItems = current.historyItems.filter((item) => item.id !== runId);
+      return {
+        ...current,
+        historyItems,
+        runHistory: historyItems.length ? runHistoryFromApi(historyItems) : current.runHistory.filter((row) => row.id !== runId),
+      };
+    });
+  }
+
   const renderedDetailTabs = {
     result: visitedDetailTabs.result || activeDetailTab === "result",
     replay: visitedDetailTabs.replay || activeDetailTab === "replay",
@@ -1098,6 +1122,17 @@ export function App() {
     (workbench.setup.runId === "service_demo" &&
       workbench.result.status === result.status &&
       workbench.result.createdAt === result.createdAt);
+  const visibleHistoryItems = useMemo(
+    () => withoutDeletedHistoryItems(workbench.historyItems, deletedRunIds),
+    [deletedRunIds, workbench.historyItems],
+  );
+  const visibleRunHistory = useMemo(
+    () =>
+      visibleHistoryItems.length
+        ? runHistoryFromApi(visibleHistoryItems)
+        : workbench.runHistory.filter((row) => !deletedRunIds.includes(row.id)),
+    [deletedRunIds, visibleHistoryItems, workbench.runHistory],
+  );
 
   return (
     <div className="app-shell">
@@ -1188,7 +1223,7 @@ export function App() {
             <RunSetupPage
               graph={workbench.graph}
               setup={workbench.setup}
-              runHistory={workbench.runHistory}
+              runHistory={visibleRunHistory}
               onRun={runBacktest}
               runLabel={runLabel}
               runDisabled={isRunning}
@@ -1222,12 +1257,13 @@ export function App() {
           ) : null}
           {activeRoute === "history" ? (
             <SimulationHistoryPage
-              items={workbench.historyItems}
-              fallbackRows={workbench.runHistory}
+              items={visibleHistoryItems}
+              fallbackRows={visibleRunHistory}
               selectedRunId={workbench.setup.runId}
               onSelectRun={(id) => void loadRunDetail(id)}
               onOpenResult={(id) => void openHistoryRunDetail(id, "result")}
               onReplayEvents={(id) => void openHistoryRunDetail(id, "replay")}
+              onDeleteRun={(id) => void deleteHistoryRun(id)}
             />
           ) : null}
           {activeRoute === "details" ? (

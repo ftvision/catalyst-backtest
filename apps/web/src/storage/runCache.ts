@@ -12,6 +12,7 @@ const DB_NAME = "catalyst-backtest";
 const DB_VERSION = 1;
 const RUN_DETAIL_STORE = "run-details";
 const LAST_RUN_ID_KEY = "catalyst:last-run-id";
+const DELETED_RUN_IDS_KEY = "catalyst:deleted-run-ids";
 const CACHE_SCHEMA_VERSION = 1;
 
 export interface CachedRunDetail {
@@ -103,6 +104,10 @@ export async function loadCachedRunDetail(runId: string): Promise<CachedRunDetai
   return detail;
 }
 
+export async function deleteCachedRunDetail(runId: string): Promise<void> {
+  await runStoreTransaction("readwrite", (store) => store.delete(runId));
+}
+
 /** Every cached run, newest first — the user's local backtest history. */
 export async function loadAllCachedRunDetails(): Promise<CachedRunDetail[]> {
   try {
@@ -123,4 +128,23 @@ export function setLastRunId(runId: string) {
 export function getLastRunId() {
   if (typeof localStorage === "undefined") return undefined;
   return localStorage.getItem(LAST_RUN_ID_KEY) ?? undefined;
+}
+
+export function loadDeletedRunIds(): string[] {
+  if (typeof localStorage === "undefined") return [];
+  try {
+    const parsed = JSON.parse(localStorage.getItem(DELETED_RUN_IDS_KEY) ?? "[]");
+    return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+export function markRunDeleted(runId: string) {
+  if (typeof localStorage === "undefined") return;
+  const next = Array.from(new Set([...loadDeletedRunIds(), runId]));
+  localStorage.setItem(DELETED_RUN_IDS_KEY, JSON.stringify(next));
+  if (getLastRunId() === runId) {
+    localStorage.removeItem(LAST_RUN_ID_KEY);
+  }
 }
