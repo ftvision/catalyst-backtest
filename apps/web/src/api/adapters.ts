@@ -124,7 +124,7 @@ export function graphFromPreview(
     name: meta.name ?? "ETH service backtest",
     version: meta.version ?? "service",
     updatedAt: new Date().toISOString().replace("T", " ").slice(0, 16),
-    status: preview?.valid === false ? "warning" : "validated",
+    status: preview?.valid === false ? "danger" : "validated",
     nodeCount: numberValue(summary?.node_count, graph.nodes.length),
     edgeCount: numberValue(summary?.edge_count, graph.edges.length),
     nodes: graph.nodes.map((node) => ({
@@ -157,6 +157,7 @@ export function setupFromService(input: {
 }): SetupData {
   const coverageRows = input.coverage?.coverage ?? [];
   const warnings = [
+    ...(input.preview?.valid === false && input.preview.error ? [input.preview.error] : []),
     ...(input.preview?.warnings ?? []),
     ...(input.coverage?.warnings ?? []),
     ...(input.metadata?.warnings ?? []),

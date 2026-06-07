@@ -39,6 +39,7 @@ import {
   type BacktestListItem,
   type BacktestStatus,
   type CatalystGraph,
+  type CoverageResponse,
   type MarketDataCatalogItem,
   type MarketDataBundle,
   type StrategyListItem,
@@ -100,6 +101,23 @@ function errorMessage(error: unknown): string {
   if (error instanceof ApiError) return error.code ? `${error.code}: ${error.message}` : error.message;
   if (error instanceof Error) return error.message;
   return "Unknown service error";
+}
+
+function emptyMarketData(config: BacktestConfig, warnings: string[] = []): MarketDataBundle {
+  return {
+    schema_version: "catalyst.market_data.bundle.v1",
+    interval: config.interval,
+    start: config.start,
+    end: config.end,
+    candles: [],
+    gas: [],
+    funding: [],
+    warnings,
+  };
+}
+
+function mergeWarnings(...groups: Array<string[] | undefined>) {
+  return Array.from(new Set(groups.flatMap((group) => group ?? [])));
 }
 
 function stringConfig(value: unknown): string | undefined {
@@ -220,17 +238,24 @@ export function App() {
     marketDataId?: string;
   }) {
     const sourceLabel = input.sourceMode === "store" ? "Parquet store" : "Inline fallback";
-    const [profiles, preview, coverage] = await Promise.all([
+    const [profiles, preview] = await Promise.all([
       input.profiles ? Promise.resolve({ items: input.profiles }) : catalystApi.listPolicyProfiles(),
       catalystApi.previewGraph(input.graph, { profile: input.policyProfile }),
-      catalystApi.checkCoverage({
-        graph: input.graph,
-        start: input.config.start,
-        end: input.config.end,
-        interval: input.config.interval,
-        ...(input.sourceMode === "inline" ? { market_data: input.marketData } : {}),
-      }),
     ]);
+    const coverage = await catalystApi.checkCoverage({
+      graph: input.graph,
+      start: input.config.start,
+      end: input.config.end,
+      interval: input.config.interval,
+      ...(input.sourceMode === "inline" ? { market_data: input.marketData } : {}),
+    }).catch<CoverageResponse>((error) => ({
+      coverage: [],
+      warnings: [errorMessage(error)],
+    }));
+    const coverageWithMarketWarnings: CoverageResponse = {
+      ...coverage,
+      warnings: mergeWarnings(coverage.warnings, input.marketData.warnings),
+    };
     const history = await catalystApi.listBacktests(preview.graph_hash);
 
     setDataSourceMode(input.sourceMode);
@@ -258,7 +283,7 @@ export function App() {
         config: input.config,
         policyProfile: input.policyProfile,
         dataSourceLabel: sourceLabel,
-        coverage,
+        coverage: coverageWithMarketWarnings,
         preview,
         profiles: profiles.items,
       }),
@@ -286,7 +311,7 @@ export function App() {
         start: config.start,
         end: config.end,
         interval: config.interval,
-      });
+      }).catch((error) => emptyMarketData(config, [errorMessage(error)]));
       await hydrateWorkbench({
         graph: input.graph,
         config,

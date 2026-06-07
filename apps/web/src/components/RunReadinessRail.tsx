@@ -3,7 +3,8 @@ import { Play } from "lucide-react";
 import type { SetupData } from "../types";
 import { StatusBadge } from "./StatusBadge";
 
-function readinessStatus(setup: SetupData, hasMarketData: boolean) {
+function readinessStatus(setup: SetupData, hasMarketData: boolean, graphStatus: string) {
+  if (graphStatus !== "validated") return "danger";
   if (!hasMarketData) return "danger";
   if (setup.coverage.some((item) => item.status === "danger")) return "danger";
   if (setup.coverage.some((item) => item.status === "warning") || setup.warnings.length) return "warning";
@@ -25,7 +26,7 @@ export function RunReadinessRail({
   disabled?: boolean;
   onRun: () => void;
 }) {
-  const status = readinessStatus(setup, hasMarketData);
+  const status = readinessStatus(setup, hasMarketData, graphStatus);
   const marketDataReady = hasMarketData && !setup.coverage.some((item) => item.status === "danger");
   const marketDataDetail = !hasMarketData
     ? "No local series"

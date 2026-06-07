@@ -111,9 +111,10 @@ export function RunSetupPage({
     : setup.coverage.some((item) => item.status === "warning") || activeMarketWarnings.length
       ? "warning"
       : "success";
+  const graphStatus = graph.status === "validated" ? "success" : "danger";
   const steps: SetupStep[] = useMemo(
     () => [
-      { id: "graph", label: "Graph", detail: `${graph.nodeCount} nodes / ${graph.hash}`, status: graph.status === "validated" ? "success" : "warning" },
+      { id: "graph", label: "Graph", detail: `${graph.nodeCount} nodes / ${graph.hash}`, status: graphStatus },
       {
         id: "market-data",
         label: "Market data",
@@ -123,7 +124,7 @@ export function RunSetupPage({
       { id: "portfolio", label: "Portfolio", detail: `${setup.portfolio.length} balances`, status: setup.portfolio.length ? "success" : "danger" },
       { id: "configuration", label: "Configuration", detail: setup.policy, status: setup.policy ? "success" : "danger" },
     ],
-    [coverageStatus, graph.hash, graph.nodeCount, graph.status, hasMarketData, setup.interval, setup.policy, setup.portfolio.length, setup.start],
+    [coverageStatus, graph.hash, graph.nodeCount, graphStatus, hasMarketData, setup.interval, setup.policy, setup.portfolio.length, setup.start],
   );
   const startValue = isoToPickerValue(setup.start);
   const endValue = isoToPickerValue(setup.end);
@@ -139,7 +140,7 @@ export function RunSetupPage({
 
       <div className="setup-preflight-grid">
         <Stack gap="md">
-          <SetupModule title="Graph" subtitle="Read-only strategy topology." status={graph.status === "validated" ? "success" : "warning"}>
+          <SetupModule title="Graph" subtitle="Read-only strategy topology." status={graphStatus}>
             <Group justify="space-between" align="flex-start">
               <Stack gap={2}>
                 <Title order={2}>{graph.name}</Title>
@@ -189,7 +190,7 @@ export function RunSetupPage({
             <SetupModule
               title="Parameters"
               subtitle="Tune this strategy's variables before running."
-              status={graph.status === "validated" ? "success" : "warning"}
+              status={graphStatus}
             >
               <ParametersPanel
                 variables={variables}
