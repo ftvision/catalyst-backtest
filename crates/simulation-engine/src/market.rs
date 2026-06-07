@@ -141,6 +141,18 @@ impl BundleIndex {
         self.funding.get(&(venue.to_string(), symbol.to_string())).and_then(|m| m.get(&ts).copied())
     }
 
+    /// Sum of funding rates in the bar `(lo_excl, hi_incl]` for a (venue, symbol).
+    /// Captures every funding interval within a tick, so funding is correct even
+    /// when the tick interval is coarser than the funding interval (e.g. 4h ticks
+    /// over hourly funding). Zero if the series is absent or has no points there.
+    pub fn funding_sum(&self, venue: &str, symbol: &str, lo_excl: i64, hi_incl: i64) -> Decimal {
+        use std::ops::Bound::{Excluded, Included};
+        self.funding
+            .get(&(venue.to_string(), symbol.to_string()))
+            .map(|m| m.range((Excluded(lo_excl), Included(hi_incl))).map(|(_, r)| *r).sum())
+            .unwrap_or(Decimal::ZERO)
+    }
+
     pub fn gas_at(&self, chain: &str, ts: i64) -> Option<Decimal> {
         let m = self.gas.get(chain)?;
         m.get(&ts).copied().or_else(|| m.range(..=ts).next_back().map(|(_, v)| *v))
