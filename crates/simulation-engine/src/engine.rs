@@ -17,8 +17,8 @@ use catalyst_execution_models::{
 };
 use catalyst_portfolio_ledger::{Ledger, PerpPosition, PerpSide, YieldPosition};
 use catalyst_simulation_policies::{
-    resolve_policy, Funding, InsufficientBalance, LiquidationCheck, Repeat, ResolvedPolicy,
-    SignalTrigger,
+    resolve_policy, Funding, InsufficientBalance, LiquidationCheck, MissingRequired, Repeat,
+    ResolvedPolicy, SignalTrigger,
 };
 
 use crate::exec_graph::{eval_threshold, ActionNode, CombinatorOp, ExecGraph, Signal, SignalDef};
@@ -39,6 +39,7 @@ pub struct SimulationInput {
 pub enum EngineError {
     Policy(String),
     Config(String),
+    Data(String),
 }
 
 impl std::fmt::Display for EngineError {
@@ -46,6 +47,7 @@ impl std::fmt::Display for EngineError {
         match self {
             EngineError::Policy(m) => write!(f, "policy error: {m}"),
             EngineError::Config(m) => write!(f, "config error: {m}"),
+            EngineError::Data(m) => write!(f, "data error: {m}"),
         }
     }
 }
@@ -117,6 +119,51 @@ fn resolve_expiry(time_in_force: &Option<String>, expire_after_bars: Option<u32>
     }
 }
 
+/// Count interior missing buckets in a sorted timestamp series given the step.
+fn interior_missing(ts_sorted: &[i64], step: i64) -> usize {
+    let mut missing = 0usize;
+    for w in ts_sorted.windows(2) {
+        if w[1] - w[0] > step {
+            missing += (w[1] - w[0]) as usize / step as usize - 1;
+        }
+    }
+    missing
+}
+
+/// Check required candle series for interior gaps within the window. Under
+/// `missing_required = fail` a gap aborts the run; otherwise it's a warning.
+fn check_required_coverage(
+    compiled: &catalyst_graph_compiler::CompiledGraph,
+    index: &BundleIndex,
+    start: i64,
+    end: i64,
+    step: i64,
+    policy: &ResolvedPolicy,
+    warnings: &mut Vec<String>,
+) -> Result<(), EngineError> {
+    if step <= 0 {
+        return Ok(());
+    }
+    for req in &compiled.data_requirements.candles {
+        let ts = index.candle_ts_in(&req.venue, &req.symbol, start, end);
+        if ts.len() < 2 {
+            continue; // leading/trailing absence isn't an interior hole
+        }
+        let missing = interior_missing(&ts, step);
+        if missing > 0 {
+            let msg = format!(
+                "required candles {}/{} have {missing} missing bar(s) inside the window",
+                req.venue, req.symbol
+            );
+            if policy.missing_required == MissingRequired::Fail {
+                return Err(EngineError::Data(msg));
+            }
+            warnings.push(msg);
+        }
+    }
+    Ok(())
+}
+
 fn interval_seconds(interval: &str) -> Option<i64> {
     Some(match interval {
         "1m" => 60,
@@ -159,6 +206,10 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
     let mut signal_last_fired: HashMap<String, i64> = HashMap::new();
     let mut signal_fire_count: HashMap<String, u32> = HashMap::new();
     let variables = parse_variables(&input.graph.variables);
+
+    // Intra-window gap check on required candle series (#42): a hole inside a
+    // required series fails the run under `missing_required = fail`, else warns.
+    check_required_coverage(&compiled, &index, start, end, interval_secs, &policy, &mut warnings)?;
 
     let mut ticks = index.ticks(start, end);
     if ticks.is_empty() {

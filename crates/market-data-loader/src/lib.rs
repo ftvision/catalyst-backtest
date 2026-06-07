@@ -119,6 +119,77 @@ fn micros_to_iso(micros: i64) -> String {
         .unwrap_or_default()
 }
 
+/// Supported bar interval -> seconds.
+pub fn interval_seconds(interval: &str) -> Option<i64> {
+    Some(match interval {
+        "1m" => 60,
+        "5m" => 300,
+        "15m" => 900,
+        "1h" => 3_600,
+        "4h" => 14_400,
+        "1d" => 86_400,
+        _ => return None,
+    })
+}
+
+/// Intra-series coverage: holes *inside* a series, measured against the interval
+/// grid between its first and last present timestamps. Leading/trailing absence
+/// (a series that simply doesn't span the whole window) is not counted as a hole;
+/// only interior missing buckets are. A contiguous series reports 100%.
+#[derive(Debug, Clone, Serialize)]
+pub struct SeriesCoverage {
+    pub present: usize,
+    /// Grid buckets expected between first and last present timestamp (inclusive).
+    pub expected: usize,
+    pub completeness_pct: f64,
+    /// Count of interior missing buckets.
+    pub missing: usize,
+    /// `[first_missing, last_missing]` (inclusive) per interior gap, as RFC3339.
+    pub missing_ranges: Vec<(String, String)>,
+    pub first: Option<String>,
+    pub last: Option<String>,
+}
+
+/// Compute [`SeriesCoverage`] from sorted, unique timestamps (micros) + interval.
+pub fn series_coverage(ts_sorted_micros: &[i64], interval_secs: i64) -> SeriesCoverage {
+    let present = ts_sorted_micros.len();
+    if present < 2 || interval_secs <= 0 {
+        return SeriesCoverage {
+            present,
+            expected: present,
+            completeness_pct: if present == 0 { 0.0 } else { 100.0 },
+            missing: 0,
+            missing_ranges: Vec::new(),
+            first: ts_sorted_micros.first().map(|t| micros_to_iso(*t)),
+            last: ts_sorted_micros.last().map(|t| micros_to_iso(*t)),
+        };
+    }
+    let step = interval_secs * 1_000_000;
+    let (first, last) = (ts_sorted_micros[0], ts_sorted_micros[present - 1]);
+    let expected = ((last - first) / step + 1) as usize;
+    let mut missing = 0usize;
+    let mut missing_ranges = Vec::new();
+    for w in ts_sorted_micros.windows(2) {
+        let gap = w[1] - w[0];
+        if gap > step {
+            let n = (gap / step - 1) as usize;
+            if n > 0 {
+                missing += n;
+                missing_ranges.push((micros_to_iso(w[0] + step), micros_to_iso(w[1] - step)));
+            }
+        }
+    }
+    SeriesCoverage {
+        present,
+        expected,
+        completeness_pct: present as f64 / expected as f64 * 100.0,
+        missing,
+        missing_ranges,
+        first: Some(micros_to_iso(first)),
+        last: Some(micros_to_iso(last)),
+    }
+}
+
 /// Resolve a `root` (local path, `file://`, `s3://`, `gs://`, ...) into an object
 /// store plus the base path within it.
 ///

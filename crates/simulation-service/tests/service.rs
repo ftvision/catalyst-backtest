@@ -326,6 +326,36 @@ async fn coverage_from_inline_bundle() {
         .map(|r| r["kind"].as_str().unwrap())
         .collect();
     assert!(kinds.contains(&"candles") && kinds.contains(&"gas"));
+    // a contiguous series reports complete with no interior gaps
+    let candles = v["coverage"].as_array().unwrap().iter().find(|r| r["kind"] == "candles").unwrap();
+    assert_eq!(candles["complete"], true);
+    assert_eq!(candles["missing"], 0);
+    assert_eq!(candles["completeness_pct"], 100.0);
+}
+
+#[tokio::test]
+async fn coverage_reports_interior_gaps() {
+    // candles at hours 0 and 2 (hour 1 missing) -> an interior hole
+    let md = json!({
+        "schema_version": "catalyst.backtest.market_data_bundle.v1",
+        "interval": "1h", "start": "2024-01-01T00:00:00Z", "end": "2024-01-01T02:00:00Z",
+        "candles": [{"venue": "base", "symbol": "ETH", "quote": "USD", "points": [
+            {"ts": "2024-01-01T00:00:00Z", "open": "2000", "high": "2000", "low": "2000", "close": "2000"},
+            {"ts": "2024-01-01T02:00:00Z", "open": "2000", "high": "2000", "low": "2000", "close": "2000"}
+        ]}],
+        "gas": [{"chain": "base", "points": [{"ts": "2024-01-01T00:00:00Z", "gas_usd": "0.02"}]}]
+    });
+    let body = json!({"graph": graph(), "start": "2024-01-01T00:00:00Z", "end": "2024-01-01T02:00:00Z",
+                      "interval": "1h", "market_data": md});
+    let (s, v) = send(&state(), "POST", "/market-data/coverage", Some(body)).await;
+    assert_eq!(s, StatusCode::OK);
+    let candles = v["coverage"].as_array().unwrap().iter().find(|r| r["kind"] == "candles").unwrap();
+    assert_eq!(candles["complete"], false);
+    assert_eq!(candles["missing"], 1);
+    // 2 of 3 expected buckets present (hours 0,1,2) -> ~66.7%
+    let pct = candles["completeness_pct"].as_f64().unwrap();
+    assert!((66.0..67.0).contains(&pct), "pct was {pct}");
+    assert_eq!(candles["missing_ranges"][0][0], "2024-01-01T01:00:00Z");
 }
 
 #[tokio::test]
