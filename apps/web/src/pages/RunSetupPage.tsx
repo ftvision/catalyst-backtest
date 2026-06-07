@@ -1,7 +1,10 @@
 import { ActionIcon, Button, Group, NumberInput, Paper, Popover, Select, SimpleGrid, Stack, Table, Text, TextInput, Title } from "@mantine/core";
+import { DateTimePicker } from "@mantine/dates";
+import dayjs from "dayjs";
+import utc from "dayjs/plugin/utc";
 import { useMemo, useState } from "react";
 import { HelpCircle, Play } from "lucide-react";
-import type { MarketDataCatalogItem, StrategyListItem } from "../api/client";
+import type { BacktestConfig, MarketDataCatalogItem, StrategyListItem } from "../api/client";
 import { DataTable } from "../components/DataTable";
 import { MarketDataSelector } from "../components/MarketDataSelector";
 import { RunReadinessRail } from "../components/RunReadinessRail";
@@ -10,6 +13,19 @@ import { SetupModule } from "../components/SetupModule";
 import { SetupStepStrip, type SetupStep } from "../components/SetupStepStrip";
 import { StatusBadge } from "../components/StatusBadge";
 import type { AuditData, GraphSummary, SetupData } from "../types";
+
+dayjs.extend(utc);
+
+function isoToPickerValue(value: string) {
+  const parsed = dayjs.utc(value);
+  return parsed.isValid() ? parsed.format("YYYY-MM-DD HH:mm:ss") : null;
+}
+
+function pickerValueToIso(value: string | null) {
+  if (!value) return undefined;
+  const parsed = dayjs.utc(value);
+  return parsed.isValid() ? parsed.toISOString() : undefined;
+}
 
 export function RunSetupPage({
   graph,
@@ -27,6 +43,7 @@ export function RunSetupPage({
   onSelectMarketData,
   marketWarnings = [],
   policyMatrix = [],
+  onConfigChange,
 }: {
   graph: GraphSummary;
   setup: SetupData;
@@ -43,6 +60,7 @@ export function RunSetupPage({
   onSelectMarketData?: (id: string) => void;
   marketWarnings?: string[];
   policyMatrix?: AuditData["policyMatrix"];
+  onConfigChange?: (patch: Partial<Pick<BacktestConfig, "start" | "end" | "interval">>) => void;
 }) {
   const [selectedNodeId, setSelectedNodeId] = useState(graph.nodes[0]?.id);
   const selectedNode = graph.nodes.find((node) => node.id === selectedNodeId) ?? graph.nodes[0];
@@ -70,6 +88,8 @@ export function RunSetupPage({
     ],
     [coverageStatus, graph.hash, graph.nodeCount, graph.status, hasMarketData, setup.interval, setup.policy, setup.portfolio.length, setup.start],
   );
+  const startValue = isoToPickerValue(setup.start);
+  const endValue = isoToPickerValue(setup.end);
 
   return (
     <Stack gap="md">
@@ -222,9 +242,34 @@ export function RunSetupPage({
             }
           >
             <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
-              <TextInput label="Start" value={setup.start} readOnly />
-              <TextInput label="End" value={setup.end} readOnly />
-              <Select label="Interval" value={setup.interval} data={["15m", "1h", "4h", "1d"]} readOnly />
+              <DateTimePicker
+                label="Start"
+                value={startValue}
+                valueFormat="YYYY-MM-DD HH:mm"
+                dropdownType="popover"
+                description="Stored as UTC"
+                onChange={(value) => {
+                  const next = pickerValueToIso(value);
+                  if (next) onConfigChange?.({ start: next });
+                }}
+              />
+              <DateTimePicker
+                label="End"
+                value={endValue}
+                valueFormat="YYYY-MM-DD HH:mm"
+                dropdownType="popover"
+                description="Stored as UTC"
+                onChange={(value) => {
+                  const next = pickerValueToIso(value);
+                  if (next) onConfigChange?.({ end: next });
+                }}
+              />
+              <Select
+                label="Interval"
+                value={setup.interval}
+                data={["15m", "1h", "4h", "1d"]}
+                onChange={(value) => value && onConfigChange?.({ interval: value })}
+              />
               <Select
                 label="Policy profile"
                 value={setup.policy}

@@ -144,6 +144,23 @@ export function App() {
     };
   }
 
+  function updateRunConfig(patch: Partial<Pick<BacktestConfig, "start" | "end" | "interval">>) {
+    setActiveConfig((current) => {
+      const next = { ...current, ...patch };
+      setWorkbench((workbenchState) => ({
+        ...workbenchState,
+        setup: {
+          ...workbenchState.setup,
+          start: next.start,
+          end: next.end,
+          interval: next.interval,
+        },
+      }));
+      return next;
+    });
+    setApiMessage(`Configuration updated / ${dataSourceLabel}`);
+  }
+
   async function hydrateWorkbench(input: {
     graph: CatalystGraph;
     config: BacktestConfig;
@@ -575,6 +592,7 @@ export function App() {
               onSelectMarketData={(id) => void loadMarketSelection(id)}
               marketWarnings={marketWarnings}
               policyMatrix={workbench.audit.policyMatrix}
+              onConfigChange={updateRunConfig}
             />
           ) : null}
           {activeRoute === "replay" ? (
