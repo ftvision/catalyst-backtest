@@ -1,0 +1,52 @@
+{
+  "schema_version": "catalyst.strategy_catalog.v1",
+  "strategies": [
+    {
+      "id": "g01_evm_swap_buy_eth_base",
+      "title": "EVM swap - buy $100 of ETH on Base",
+      "graph": "graphs/g01_evm_swap_buy_eth_base.json",
+      "source": "pasted_graph_1"
+    },
+    {
+      "id": "g02_hl_spot_buy_eth",
+      "title": "Hyperliquid spot - buy $100 of ETH",
+      "graph": "graphs/g02_hl_spot_buy_eth.json",
+      "source": "pasted_graph_2"
+    },
+    {
+      "id": "g03_hl_spot_buy_then_sell",
+      "title": "Hyperliquid spot - buy $100 of ETH, then sell 0.04 ETH",
+      "graph": "graphs/g03_hl_spot_buy_then_sell.json",
+      "source": "pasted_graph_3"
+    },
+    {
+      "id": "g04_hl_spot_ladder",
+      "title": "Hyperliquid spot - repeating multi-level ETH buy and sell ladder",
+      "graph": "graphs/g04_hl_spot_ladder.json",
+      "source": "pasted_graph_4"
+    },
+    {
+      "id": "g05_hl_perp_open_long",
+      "title": "Hyperliquid perp - open a 5x ETH long",
+      "graph": "graphs/g05_hl_perp_open_long.json",
+      "source": "pasted_graph_5"
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "eth_flat_2000",
+      "title": "ETH flat at $2,000",
+      "scenario": "scenarios/eth_flat_2000.json"
+    },
+    {
+      "id": "eth_dip_then_rally",
+      "title": "ETH dips below ladder buys, then rallies through sells",
+      "scenario": "scenarios/eth_dip_then_rally.json"
+    },
+    {
+      "id": "eth_selloff_liquidation",
+      "title": "ETH selloff that can liquidate a 5x long",
+      "scenario": "scenarios/eth_selloff_liquidation.json"
+    }
+  ]
+}

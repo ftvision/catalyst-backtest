@@ -43,7 +43,12 @@ fn backtest_body() -> Value {
            "market_data": inline_market_data()})
 }
 
-async fn send(state: &AppState, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
+async fn send(
+    state: &AppState,
+    method: &str,
+    uri: &str,
+    body: Option<Value>,
+) -> (StatusCode, Value) {
     let builder = Request::builder().method(method).uri(uri);
     let req = match body {
         Some(b) => builder
@@ -70,7 +75,11 @@ fn state() -> AppState {
 /// Returns the terminal status JSON (`succeeded` or `failed`).
 async fn run_to_completion(st: &AppState, body: Value) -> (String, Value) {
     let (s, created) = send(st, "POST", "/backtests", Some(body)).await;
-    assert_eq!(s, StatusCode::ACCEPTED, "expected 202 on submit, body: {created}");
+    assert_eq!(
+        s,
+        StatusCode::ACCEPTED,
+        "expected 202 on submit, body: {created}"
+    );
     assert_eq!(created["status"], "queued");
     let id = created["id"].as_str().unwrap().to_string();
 
@@ -120,7 +129,11 @@ async fn create_then_inspect_lifecycle() {
 
     let (s, events) = send(&st, "GET", &format!("/backtests/{id}/events"), None).await;
     assert_eq!(s, StatusCode::OK);
-    assert!(events["items"].as_array().unwrap().iter().any(|e| e["type"] == "action_executed"));
+    assert!(events["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|e| e["type"] == "action_executed"));
 
     let (s, meta) = send(&st, "GET", &format!("/backtests/{id}/metadata"), None).await;
     assert_eq!(s, StatusCode::OK);
@@ -160,7 +173,13 @@ async fn run_history_by_graph_hash() {
     let st = state();
     run_to_completion(&st, backtest_body()).await;
     run_to_completion(&st, backtest_body()).await;
-    let (_, prev) = send(&st, "POST", "/backtests/preview", Some(json!({"graph": graph()}))).await;
+    let (_, prev) = send(
+        &st,
+        "POST",
+        "/backtests/preview",
+        Some(json!({"graph": graph()})),
+    )
+    .await;
     let gh = prev["graph_hash"].as_str().unwrap();
 
     let (s, list) = send(&st, "GET", &format!("/backtests?graph_hash={gh}"), None).await;
@@ -179,8 +198,18 @@ async fn events_filter_and_paginate() {
     let (_, all) = send(&st, "GET", &format!("/backtests/{id}/events"), None).await;
     assert!(all["total"].as_u64().unwrap() >= 1);
 
-    let (_, exec) = send(&st, "GET", &format!("/backtests/{id}/events?status=executed"), None).await;
-    assert!(exec["items"].as_array().unwrap().iter().all(|e| e["type"] == "action_executed"));
+    let (_, exec) = send(
+        &st,
+        "GET",
+        &format!("/backtests/{id}/events?status=executed"),
+        None,
+    )
+    .await;
+    assert!(exec["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|e| e["type"] == "action_executed"));
 
     let (_, page) = send(&st, "GET", &format!("/backtests/{id}/events?limit=1"), None).await;
     assert_eq!(page["items"].as_array().unwrap().len(), 1);
@@ -208,9 +237,54 @@ async fn policy_profiles_lists_three() {
     assert_eq!(s, StatusCode::OK);
     let items = v["items"].as_array().unwrap();
     let ids: Vec<&str> = items.iter().map(|p| p["id"].as_str().unwrap()).collect();
-    assert!(ids.contains(&"strict_v1") && ids.contains(&"conservative_v1") && ids.contains(&"research_v1"));
+    assert!(
+        ids.contains(&"strict_v1")
+            && ids.contains(&"conservative_v1")
+            && ids.contains(&"research_v1")
+    );
     let strict = items.iter().find(|p| p["id"] == "strict_v1").unwrap();
     assert_eq!(strict["resolved_policy"]["price_selection"], "close");
+}
+
+#[tokio::test]
+async fn strategy_repository_is_exposed() {
+    let st = state();
+    let (s, list) = send(&st, "GET", "/strategies", None).await;
+    assert_eq!(s, StatusCode::OK);
+    let items = list["items"].as_array().unwrap();
+    assert_eq!(items.len(), 5);
+    assert!(items.iter().any(|item| item["id"] == "g04_hl_spot_ladder"));
+
+    let (s, strategy) = send(&st, "GET", "/strategies/g04_hl_spot_ladder", None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(strategy["id"], "g04_hl_spot_ladder");
+    assert_eq!(strategy["graph"]["nodes"].as_array().unwrap().len(), 9);
+
+    let (s, missing) = send(&st, "GET", "/strategies/not-real", None).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    assert_eq!(missing["error"]["code"], "not_found");
+}
+
+#[tokio::test]
+async fn strategy_scenarios_are_exposed() {
+    let st = state();
+    let (s, list) = send(&st, "GET", "/strategy-scenarios", None).await;
+    assert_eq!(s, StatusCode::OK);
+    let items = list["items"].as_array().unwrap();
+    assert_eq!(items.len(), 3);
+    assert!(items.iter().any(|item| item["id"] == "eth_dip_then_rally"));
+
+    let (s, scenario) = send(&st, "GET", "/strategy-scenarios/eth_dip_then_rally", None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(scenario["id"], "eth_dip_then_rally");
+    assert_eq!(scenario["scenario"]["config"]["interval"], "1h");
+    assert_eq!(
+        scenario["scenario"]["market_data"]["candles"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
 }
 
 #[tokio::test]
@@ -242,8 +316,12 @@ async fn coverage_from_inline_bundle() {
                       "interval": "1h", "market_data": inline_market_data()});
     let (s, v) = send(&state(), "POST", "/market-data/coverage", Some(body)).await;
     assert_eq!(s, StatusCode::OK);
-    let kinds: Vec<&str> =
-        v["coverage"].as_array().unwrap().iter().map(|r| r["kind"].as_str().unwrap()).collect();
+    let kinds: Vec<&str> = v["coverage"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["kind"].as_str().unwrap())
+        .collect();
     assert!(kinds.contains(&"candles") && kinds.contains(&"gas"));
 }
 
@@ -265,7 +343,11 @@ fn write_eth_candles(root: &Path) {
     use arrow::record_batch::RecordBatch;
     use parquet::arrow::ArrowWriter;
 
-    let dir = root.join("candles").join("venue=base").join("symbol=ETH").join("interval=1h");
+    let dir = root
+        .join("candles")
+        .join("venue=base")
+        .join("symbol=ETH")
+        .join("interval=1h");
     std::fs::create_dir_all(&dir).unwrap();
     let h0: i64 = 1_704_067_200_000_000;
     let hour = 3_600_000_000;
@@ -280,11 +362,16 @@ fn write_eth_candles(root: &Path) {
         ("close", price.clone()),
         ("volume", Arc::new(StringArray::from(vec!["1", "1"]))),
     ];
-    let fields: Vec<Field> =
-        cols.iter().map(|(n, a)| Field::new(*n, a.data_type().clone(), true)).collect();
+    let fields: Vec<Field> = cols
+        .iter()
+        .map(|(n, a)| Field::new(*n, a.data_type().clone(), true))
+        .collect();
     let schema = Arc::new(Schema::new(fields));
-    let batch =
-        RecordBatch::try_new(schema.clone(), cols.iter().map(|(_, a)| a.clone()).collect()).unwrap();
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        cols.iter().map(|(_, a)| a.clone()).collect(),
+    )
+    .unwrap();
     let file = std::fs::File::create(dir.join("2024-01-01.parquet")).unwrap();
     let mut w = ArrowWriter::try_new(file, schema, None).unwrap();
     w.write(&batch).unwrap();
@@ -303,7 +390,11 @@ async fn create_backtest_reads_configured_store() {
     let (id, status) = run_to_completion(&st, body).await;
     assert_eq!(status["status"], "succeeded", "status: {status}");
     let (_, result) = send(&st, "GET", &format!("/backtests/{id}/result"), None).await;
-    assert!(result["trades"].as_array().unwrap().iter().any(|t| t["status"] == "executed"));
+    assert!(result["trades"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|t| t["status"] == "executed"));
 }
 
 #[tokio::test]

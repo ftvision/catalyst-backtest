@@ -15,6 +15,8 @@
 //! - `POST /market-data/coverage` — per-series coverage before a run
 //! - `POST /market-data/window` — normalized bundle for the requested window
 //! - `GET  /policy-profiles`
+//! - `GET  /strategies` `/strategies/{id}` — bundled strategy repository
+//! - `GET  /strategy-scenarios` `/strategy-scenarios/{id}` — bundled market scenarios
 //!
 //! Market data is either inline in the request or read from the configured
 //! Parquet store (`AppState::store_root`) via `catalyst-market-data-loader`.
@@ -46,7 +48,10 @@ pub fn app(state: AppState) -> Router {
     Router::new()
         .route("/health", get(handlers::health))
         .route("/simulate", post(handlers::simulate))
-        .route("/backtests", post(handlers::create_backtest).get(handlers::list_backtests))
+        .route(
+            "/backtests",
+            post(handlers::create_backtest).get(handlers::list_backtests),
+        )
         .route("/backtests/preview", post(handlers::preview))
         .route("/backtests/:id", get(handlers::get_backtest))
         .route("/backtests/:id/result", get(handlers::get_result))
@@ -55,6 +60,16 @@ pub fn app(state: AppState) -> Router {
         .route("/market-data/coverage", post(handlers::coverage))
         .route("/market-data/window", post(handlers::market_data_window))
         .route("/policy-profiles", get(handlers::policy_profiles))
+        .route("/strategies", get(handlers::list_strategies))
+        .route("/strategies/:id", get(handlers::get_strategy))
+        .route(
+            "/strategy-scenarios",
+            get(handlers::list_strategy_scenarios),
+        )
+        .route(
+            "/strategy-scenarios/:id",
+            get(handlers::get_strategy_scenario),
+        )
         .with_state(state)
         .layer(cors)
 }

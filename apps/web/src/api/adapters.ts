@@ -105,16 +105,20 @@ function priceAt(marketData: MarketDataBundle, ts: string): number {
   return numberValue((exact ?? points[points.length - 1]).close);
 }
 
-export function graphFromPreview(graph: CatalystGraph, preview?: GraphPreview): GraphSummary {
+export function graphFromPreview(
+  graph: CatalystGraph,
+  preview?: GraphPreview,
+  meta: { id?: string; name?: string; version?: string } = {},
+): GraphSummary {
   const summary = preview?.graph_summary;
   const actionIds = summary?.actions ?? graph.nodes.filter((node) => node.kind === "action").map((node) => node.id);
   const signalIds = summary?.signals ?? graph.nodes.filter((node) => node.kind === "signal").map((node) => node.id);
 
   return {
-    id: "g_inline_service_demo",
+    id: meta.id ?? "g_inline_service_demo",
     hash: preview?.graph_hash?.slice(0, 8) ?? "service",
-    name: "ETH service backtest",
-    version: "service",
+    name: meta.name ?? "ETH service backtest",
+    version: meta.version ?? "service",
     updatedAt: new Date().toISOString().replace("T", " ").slice(0, 16),
     status: preview?.valid === false ? "warning" : "validated",
     nodeCount: numberValue(summary?.node_count, graph.nodes.length),
