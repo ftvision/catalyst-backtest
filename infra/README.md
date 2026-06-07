@@ -115,13 +115,27 @@ The service already accepts `CATALYST_STORE_ROOT` as `s3://...`. When the demo
 needs durable market-data history, create an R2 bucket with S3-compatible
 credentials, upload the Parquet tree, then set the service env:
 
+Upload the local Parquet tree first (mirrors the keys the loader expects):
+
 ```bash
-fly secrets set \
-  CATALYST_STORE_ROOT=s3://catalyst-market-data \
-  AWS_ACCESS_KEY_ID=... \
-  AWS_SECRET_ACCESS_KEY=... \
-  AWS_ENDPOINT_URL=...
+AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... \
+uv run --with boto3 python scripts/upload_r2.py \
+  --bucket catalyst-market-data --prefix market-data \
+  --endpoint https://<ACCOUNT_ID>.r2.cloudflarestorage.com
 ```
 
-Keep the exact bucket prefix aligned with
-`docs/market-data-storage.md`.
+Then point the service at it:
+
+```bash
+fly secrets set \
+  CATALYST_STORE_ROOT=s3://catalyst-market-data/market-data \
+  AWS_ACCESS_KEY_ID=... \
+  AWS_SECRET_ACCESS_KEY=... \
+  AWS_REGION=auto \
+  AWS_ENDPOINT=https://<ACCOUNT_ID>.r2.cloudflarestorage.com
+```
+
+> The Rust loader (`catalyst-market-data-loader`, via `object_store`) reads
+> **`AWS_ENDPOINT`** — *not* `AWS_ENDPOINT_URL`. Set `AWS_REGION=auto` for R2.
+
+Keep the exact bucket prefix aligned with `docs/market-data-storage.md`.

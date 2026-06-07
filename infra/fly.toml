@@ -1,6 +1,7 @@
 app = "catalyst-backtest-api"
 primary_region = "sjc"
 
+# dockerfile is resolved relative to this config file's directory (infra/).
 [build]
   dockerfile = "Dockerfile.api"
 
