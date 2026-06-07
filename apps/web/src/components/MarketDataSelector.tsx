@@ -44,18 +44,22 @@ export function MarketDataSelector({
   warnings?: string[];
 }) {
   const candleItems = catalog.filter((item) => item.kind === "candles");
-  const selected = candleItems.find((item) => marketCatalogId(item) === selectedId) ?? candleItems[0];
+  const selected = selectedId
+    ? candleItems.find((item) => marketCatalogId(item) === selectedId)
+    : undefined;
   const related = selected
     ? catalog.filter((item) => {
         if (item.kind === "gas") return item.chain === selected.venue;
         if (item.kind === "funding") return item.symbol === selected.symbol;
         return marketCatalogId(item) === marketCatalogId(selected);
       })
-    : catalog;
+    : [];
+  const coverageStatus = warnings.length ? "danger" : related.length ? "success" : "warning";
   const options = candleItems.map((item) => ({
     value: marketCatalogId(item),
     label: labelFor(item),
   }));
+  const fallbackSource = catalog.length ? "Parquet store" : "Inline fallback";
 
   return (
     <Stack gap="md">
@@ -69,7 +73,7 @@ export function MarketDataSelector({
           placeholder={options.length ? "Choose candle series" : "No local Parquet series"}
           searchable
         />
-        <TextInput label="Source" value={selected?.source ?? "Inline fallback"} readOnly />
+        <TextInput label="Source" value={selected?.source ?? fallbackSource} readOnly />
         <TextInput label="Venue" value={selected?.venue ?? "-"} readOnly />
         <TextInput label="Symbol" value={selected?.symbol ?? "-"} readOnly />
         <TextInput label="Interval" value={selected?.interval ?? "-"} readOnly />
@@ -79,7 +83,7 @@ export function MarketDataSelector({
       <Stack gap="xs">
         <Group justify="space-between">
           <Text fw={650}>Local coverage</Text>
-          <StatusBadge status={warnings.length ? "warning" : related.length ? "success" : "warning"} />
+          <StatusBadge status={coverageStatus} />
         </Group>
         <CoverageTimeline items={related} />
         {warnings.length ? (

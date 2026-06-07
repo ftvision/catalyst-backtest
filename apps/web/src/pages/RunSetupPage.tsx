@@ -44,7 +44,9 @@ export function RunSetupPage({
   onSelectMarketData,
   marketWarnings = [],
   policyMatrix = [],
+  policyProfiles = [],
   onConfigChange,
+  onPolicyChange,
 }: {
   graph: GraphSummary;
   setup: SetupData;
@@ -61,7 +63,9 @@ export function RunSetupPage({
   onSelectMarketData?: (id: string) => void;
   marketWarnings?: string[];
   policyMatrix?: AuditData["policyMatrix"];
+  policyProfiles?: Array<{ id: string; label?: string }>;
   onConfigChange?: (patch: Partial<Pick<BacktestConfig, "start" | "end" | "interval">>) => void;
+  onPolicyChange?: (profile: string) => void;
 }) {
   const [selectedNodeId, setSelectedNodeId] = useState(graph.nodes[0]?.id);
 
@@ -75,10 +79,27 @@ export function RunSetupPage({
     value: strategy.id,
     label: strategy.title,
   }));
+  const intervalOptions = Array.from(
+    new Set(marketCatalog.map((item) => item.interval).filter((interval): interval is string => Boolean(interval))),
+  ).map((interval) => ({ value: interval, label: interval }));
+  const resolvedIntervalOptions = intervalOptions.length
+    ? intervalOptions
+    : [{ value: setup.interval, label: setup.interval }];
+  const policyOptions = policyProfiles.length
+    ? policyProfiles.map((profile) => ({ value: profile.id, label: profile.label ?? profile.id }))
+    : [
+        { value: "strict_v1", label: "Strict v1" },
+        { value: "conservative_v1", label: "Conservative v1" },
+        { value: "research_v1", label: "Research v1" },
+      ];
   const hasMarketData = marketCatalog.some((item) => item.kind === "candles");
+  const activeMarketWarnings = [
+    ...marketWarnings,
+    ...setup.warnings.filter((warning) => warning !== "No service warnings for this run."),
+  ];
   const coverageStatus = setup.coverage.some((item) => item.status === "danger")
     ? "danger"
-    : setup.coverage.some((item) => item.status === "warning") || marketWarnings.length
+    : setup.coverage.some((item) => item.status === "warning") || activeMarketWarnings.length
       ? "warning"
       : "success";
   const steps: SetupStep[] = useMemo(
@@ -161,7 +182,7 @@ export function RunSetupPage({
               selectedId={selectedMarketDataId}
               onSelect={onSelectMarketData}
               disabled={selectorDisabled}
-              warnings={marketWarnings}
+              warnings={activeMarketWarnings}
             />
           </SetupModule>
 
@@ -233,18 +254,16 @@ export function RunSetupPage({
               <Select
                 label="Interval"
                 value={setup.interval}
-                data={["15m", "1h", "4h", "1d"]}
+                data={resolvedIntervalOptions}
                 onChange={(value) => value && onConfigChange?.({ interval: value })}
+                disabled={selectorDisabled || resolvedIntervalOptions.length <= 1}
               />
               <Select
                 label="Policy profile"
                 value={setup.policy}
-                data={[
-                  { value: "strict_v1", label: "Strict v1" },
-                  { value: "conservative_v1", label: "Conservative v1" },
-                  { value: "research_v1", label: "Research v1" },
-                ]}
-                readOnly
+                data={policyOptions}
+                onChange={(value) => value && onPolicyChange?.(value)}
+                disabled={selectorDisabled || policyOptions.length === 0}
               />
               <NumberInput label="Slippage bps" value={10} readOnly />
               <NumberInput label="Max missing candles" value={0} readOnly />

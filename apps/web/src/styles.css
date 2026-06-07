@@ -292,8 +292,8 @@ select {
 
 .graph-node-card {
   display: grid;
-  width: 154px;
-  min-height: 68px;
+  width: 176px;
+  min-height: 76px;
   gap: 2px;
   border: 1px solid var(--cb-border);
   border-radius: 7px;
@@ -340,13 +340,15 @@ select {
 }
 
 .graph-node-label {
+  display: -webkit-box;
   overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   color: var(--cb-text);
   font-size: 0.79rem;
   font-weight: 750;
   line-height: 1.2;
-  white-space: nowrap;
 }
 
 .graph-node-detail {
@@ -585,6 +587,51 @@ select {
 
 .metric-cell {
   min-height: 72px;
+}
+
+.market-data-summary-cell {
+  border-radius: 6px;
+  padding: 12px;
+}
+
+.market-data-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+  gap: 16px;
+  align-items: start;
+}
+
+.market-data-table-wrap {
+  max-height: 480px;
+  overflow: auto;
+}
+
+.market-data-table-wrap .mantine-Table-table {
+  min-width: 880px;
+  font-size: 0.8rem;
+}
+
+.market-data-table-wrap .mantine-Table-th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: oklch(0.982 0.007 235);
+}
+
+.market-data-table-wrap .mantine-Table-tr {
+  cursor: pointer;
+}
+
+.market-data-detail-grid {
+  display: grid;
+  grid-template-columns: 104px minmax(0, 1fr);
+  gap: 8px 12px;
+  align-items: baseline;
+}
+
+.market-data-detail-grid > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .event-grid {
@@ -836,6 +883,7 @@ select {
   .setup-grid,
   .setup-preflight-grid,
   .event-grid,
+  .market-data-layout,
   .history-grid,
   .history-detail-grid {
     grid-template-columns: 1fr;

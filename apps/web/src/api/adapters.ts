@@ -158,6 +158,7 @@ export function setupFromService(input: {
   const coverageRows = input.coverage?.coverage ?? [];
   const warnings = [
     ...(input.preview?.warnings ?? []),
+    ...(input.coverage?.warnings ?? []),
     ...(input.metadata?.warnings ?? []),
   ];
 
@@ -178,12 +179,13 @@ export function setupFromService(input: {
     coverage: coverageRows.map((row) => {
       const points = numberValue(row.points);
       const coverage = numberValue(row.covered_pct ?? row.coverage, points > 0 ? 100 : 0);
+      const complete = row.complete !== false && points > 0;
       return {
         kind: titleCase(row.kind),
         source: String(row.source ?? row.venue ?? row.chain ?? row.symbol ?? "inline data"),
         interval: String(row.interval ?? input.config.interval),
         coverage,
-        status: row.complete === false || coverage < 70 ? "warning" : "success",
+        status: !complete ? "danger" : coverage < 70 ? "warning" : "success",
       };
     }),
     assumptions: [

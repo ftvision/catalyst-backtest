@@ -74,8 +74,7 @@ function graphLevels(nodes: GraphNode[], edges: GraphEdge[]) {
     .map((node) => node.id);
 
   queue.forEach((id) => {
-    const node = nodes.find((item) => item.id === id);
-    levels.set(id, kindOrder[node?.kind ?? ""] ?? 0);
+    levels.set(id, 0);
   });
 
   while (queue.length) {
@@ -100,6 +99,7 @@ export function GraphTopologyPreview({
   selectedNodeId,
   onSelectNode,
 }: GraphTopologyPreviewProps) {
+  const graphKey = `${nodes.map((node) => node.id).join("|")}::${edges.map((edge) => `${edge.from}>${edge.to}`).join("|")}`;
   const visibleEdges = useMemo(() => {
     const nodeIds = new Set(nodes.map((node) => node.id));
     return edges.filter((edge) => nodeIds.has(edge.from) && nodeIds.has(edge.to));
@@ -165,6 +165,7 @@ export function GraphTopologyPreview({
   return (
     <div className="graph-topology-preview" aria-label="Read-only strategy graph topology">
       <ReactFlow
+        key={graphKey}
         nodes={flowNodes}
         edges={flowEdges}
         nodeTypes={nodeTypes}

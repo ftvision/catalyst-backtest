@@ -16,6 +16,7 @@ import {
   Activity,
   CandlestickChart,
   Clipboard,
+  Database,
   Download,
   FileChartColumn,
   Gauge,
@@ -46,6 +47,7 @@ import {
 import { demoConfig, demoGraph, demoMarketData } from "./data/demoRequest";
 import { audit, graph, marketReplay, result, runHistory, setup } from "./data/mockData";
 import { EventLensPage } from "./pages/EventLensPage";
+import { MarketDataPage } from "./pages/MarketDataPage";
 import { MarketReplayPage } from "./pages/MarketReplayPage";
 import { ResultReviewPage } from "./pages/ResultReviewPage";
 import { RunSetupPage } from "./pages/RunSetupPage";
@@ -53,10 +55,11 @@ import { SimulationHistoryPage } from "./pages/SimulationHistoryPage";
 import { marketCatalogId } from "./components/MarketDataSelector";
 import type { AuditData, GraphSummary, MarketReplayData, ResultData, SetupData } from "./types";
 
-type RouteId = "setup" | "replay" | "lens" | "result" | "history";
+type RouteId = "setup" | "data" | "replay" | "lens" | "result" | "history";
 
 const routes: Array<{ id: RouteId; label: string; icon: React.ReactNode }> = [
   { id: "setup", label: "Run Setup", icon: <Gauge size={14} /> },
+  { id: "data", label: "Market Data", icon: <Database size={14} /> },
   { id: "replay", label: "Market Replay", icon: <CandlestickChart size={14} /> },
   { id: "lens", label: "Event Lens", icon: <Activity size={14} /> },
   { id: "result", label: "Result Review", icon: <FileChartColumn size={14} /> },
@@ -84,6 +87,11 @@ interface ActiveSelection {
   scenarioTitle: string;
 }
 
+interface PolicyProfileOption {
+  id: string;
+  label?: string;
+}
+
 function sleep(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
@@ -92,6 +100,41 @@ function errorMessage(error: unknown): string {
   if (error instanceof ApiError) return error.code ? `${error.code}: ${error.message}` : error.message;
   if (error instanceof Error) return error.message;
   return "Unknown service error";
+}
+
+function stringConfig(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function requiredCandlePairs(graph: CatalystGraph): Array<{ venue: string; symbol: string }> {
+  const pairs = new Map<string, { venue: string; symbol: string }>();
+  const stableAssets = new Set(["USD", "USDC", "USDT", "DAI"]);
+
+  graph.nodes.forEach((node) => {
+    const config = node.config ?? {};
+    if (node.subtype === "perp_order") {
+      const venue = stringConfig(config.chain);
+      const symbol = stringConfig(config.symbol);
+      if (venue && symbol) pairs.set(`${venue}:${symbol}`, { venue, symbol });
+    }
+    if (node.subtype === "swap") {
+      const venue = stringConfig(config.chain);
+      [stringConfig(config.from_asset), stringConfig(config.to_asset)].forEach((asset) => {
+        if (venue && asset && !stableAssets.has(asset)) pairs.set(`${venue}:${asset}`, { venue, symbol: asset });
+      });
+    }
+  });
+
+  return Array.from(pairs.values());
+}
+
+function compatibleMarketItem(graph: CatalystGraph, catalog: MarketDataCatalogItem[]) {
+  const required = requiredCandlePairs(graph);
+  const candleItems = catalog.filter((item) => item.kind === "candles");
+  if (required.length === 0) return candleItems[0];
+  return candleItems.find((item) =>
+    required.some((req) => item.venue === req.venue && item.symbol === req.symbol),
+  );
 }
 
 export function App() {
@@ -104,6 +147,7 @@ export function App() {
   const [strategyLoading, setStrategyLoading] = useState(false);
   const [strategies, setStrategies] = useState<StrategyListItem[]>([]);
   const [scenarios, setScenarios] = useState<StrategyScenarioListItem[]>([]);
+  const [policyProfiles, setPolicyProfiles] = useState<PolicyProfileOption[]>([]);
   const [marketCatalog, setMarketCatalog] = useState<MarketDataCatalogItem[]>([]);
   const [marketWarnings, setMarketWarnings] = useState<string[]>([]);
   const [selectedMarketDataId, setSelectedMarketDataId] = useState<string>();
@@ -230,10 +274,11 @@ export function App() {
     strategyId: string;
     strategyTitle: string;
     marketItem?: MarketDataCatalogItem;
+    sourceMode?: DataSourceMode;
     profiles?: Array<{ id: string; label?: string }>;
   }) {
     const config = configFromMarketItem(input.baseConfig, input.marketItem);
-    if (input.marketItem) {
+    if (input.marketItem || input.sourceMode === "store") {
       const marketData = await catalystApi.loadMarketDataWindow({
         graph: input.graph,
         start: config.start,
@@ -275,7 +320,13 @@ export function App() {
       setApiStatus("checking");
       setApiMessage(`Loading ${strategyId}`);
       const strategy = await catalystApi.getStrategy(strategyId);
-      const marketItem = marketCatalog.find((item) => marketCatalogId(item) === selectedMarketDataId) ?? marketCatalog.find((item) => item.kind === "candles");
+      const selectedMarketItem = marketCatalog.find((item) => marketCatalogId(item) === selectedMarketDataId);
+      const compatibleSelected =
+        selectedMarketItem &&
+        compatibleMarketItem(strategy.graph, [selectedMarketItem])
+          ? selectedMarketItem
+          : undefined;
+      const marketItem = compatibleSelected ?? compatibleMarketItem(strategy.graph, marketCatalog);
       await hydrateWithMarketItem({
         graph: strategy.graph,
         baseConfig: activeConfig,
@@ -283,6 +334,7 @@ export function App() {
         strategyId: strategy.id,
         strategyTitle: strategy.title,
         marketItem,
+        sourceMode: marketCatalog.length ? "store" : undefined,
       });
       setSelectedEventId((current) => {
         const stillExists = workbench.marketReplay.events.some((event) => event.id === current);
@@ -319,6 +371,32 @@ export function App() {
     }
   }
 
+  async function loadPolicySelection(profile: string) {
+    try {
+      setStrategyLoading(true);
+      setApiStatus("checking");
+      setApiMessage(`Loading policy ${profile}`);
+      await hydrateWorkbench({
+        graph: activeGraph,
+        config: activeConfig,
+        marketData: activeMarketData,
+        policyProfile: profile,
+        strategyId: activeSelection.strategyId,
+        strategyTitle: activeSelection.strategyTitle,
+        scenarioId: activeSelection.scenarioId,
+        scenarioTitle: activeSelection.scenarioTitle,
+        sourceMode: dataSourceMode,
+        profiles: policyProfiles,
+        marketDataId: selectedMarketDataId,
+      });
+    } catch (error) {
+      setApiStatus("failed");
+      setApiMessage(errorMessage(error));
+    } finally {
+      setStrategyLoading(false);
+    }
+  }
+
   useEffect(() => {
     let cancelled = false;
 
@@ -345,6 +423,7 @@ export function App() {
 
         setStrategies(strategyList.items);
         setScenarios(scenarioList.items);
+        setPolicyProfiles(profiles.items);
         setMarketCatalog(catalog.items);
         setMarketWarnings(catalog.warnings ?? []);
         const marketItem = catalog.items.find((item) => item.kind === "candles");
@@ -594,7 +673,17 @@ export function App() {
               onSelectMarketData={(id) => void loadMarketSelection(id)}
               marketWarnings={marketWarnings}
               policyMatrix={workbench.audit.policyMatrix}
+              policyProfiles={policyProfiles}
               onConfigChange={updateRunConfig}
+              onPolicyChange={(profile) => void loadPolicySelection(profile)}
+            />
+          ) : null}
+          {activeRoute === "data" ? (
+            <MarketDataPage
+              catalog={marketCatalog}
+              warnings={marketWarnings}
+              setup={workbench.setup}
+              graph={workbench.graph}
             />
           ) : null}
           {activeRoute === "replay" ? (
