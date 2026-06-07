@@ -165,3 +165,44 @@ fn non_decimal_slippage_is_rejected() {
     });
     assert!(matches!(resolve_policy(&c), Err(PolicyError::Invalid(_))));
 }
+
+#[test]
+fn execution_overrides_win_over_the_profile() {
+    use catalyst_contracts::request::ExecutionOverrides;
+
+    let mut p = strict_v1();
+    assert_eq!(p.signal_trigger, SignalTrigger::Crossing);
+    assert!(p.cooldown.is_none());
+
+    p.apply_execution_overrides(&ExecutionOverrides {
+        signal_trigger: Some("once_per_backtest".into()),
+        slippage_bps: Some("50".into()),
+        gas_model: Some("none".into()),
+        action_cooldown: Some("6h".into()),
+    })
+    .unwrap();
+
+    assert_eq!(p.signal_trigger, SignalTrigger::OncePerBacktest);
+    assert_eq!(p.slippage_bps, "50");
+    assert_eq!(p.cooldown.as_deref(), Some("6h"));
+}
+
+#[test]
+fn unset_execution_overrides_leave_the_profile_unchanged() {
+    use catalyst_contracts::request::ExecutionOverrides;
+    let mut p = strict_v1();
+    let before = p.clone();
+    p.apply_execution_overrides(&ExecutionOverrides::default()).unwrap();
+    assert_eq!(p, before);
+}
+
+#[test]
+fn bad_execution_override_value_is_rejected() {
+    use catalyst_contracts::request::ExecutionOverrides;
+    let mut p = strict_v1();
+    let err = p.apply_execution_overrides(&ExecutionOverrides {
+        signal_trigger: Some("nonsense".into()),
+        ..Default::default()
+    });
+    assert!(matches!(err, Err(PolicyError::UnknownValue { .. })));
+}

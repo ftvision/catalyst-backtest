@@ -76,8 +76,10 @@ fn count(trace: &catalyst_contracts::SimulationTrace, kind: &str) -> usize {
 #[test]
 fn g19_funding_carry_opens_both_legs() {
     let venue = "hyperliquid";
+    // rich on the first bar (>= 0.00001), normal on the second, so the level
+    // signal fires exactly once and opens both legs.
     let funding = json!([{"venue": venue, "symbol": "ETH",
-        "points": [{"ts": ts(0), "rate": "0.0003"}, {"ts": ts(1), "rate": "0.00005"}]}]);
+        "points": [{"ts": ts(0), "rate": "0.0003"}, {"ts": ts(1), "rate": "0.000005"}]}]);
     let trace = run(&SimulationInput {
         graph: graph("g19_funding_carry.json"),
         config: config(venue, "2000", 2),
