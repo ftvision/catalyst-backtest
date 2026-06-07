@@ -223,7 +223,7 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
         let ts_iso = format_ts(ts);
         last_ts_iso = ts_iso.clone();
 
-        accrue_funding(&mut ledger, &index, ts, &ts_iso, &policy, &mut events);
+        accrue_funding(&mut ledger, &index, ts, interval_secs, &ts_iso, &policy, &mut events);
         accrue_yield(&mut ledger, &index, ts, interval_secs, &ts_iso, &mut events);
         check_liquidations(&mut ledger, &index, ts, &ts_iso, &policy, &mut events);
 
@@ -953,6 +953,7 @@ fn accrue_funding(
     ledger: &mut Ledger,
     index: &BundleIndex,
     ts: i64,
+    interval_secs: i64,
     ts_iso: &str,
     policy: &ResolvedPolicy,
     events: &mut Vec<Event>,
@@ -962,7 +963,13 @@ fn accrue_funding(
     }
     let perps: Vec<PerpPosition> = ledger.perps().cloned().collect();
     for p in perps {
-        let Some(rate) = index.funding_at(&p.venue, &p.symbol, ts) else { continue };
+        // Sum every funding point in the bar `(ts - interval, ts]`, not just the
+        // one at `ts` — so a tick interval coarser than the funding interval
+        // (e.g. 4h ticks with hourly funding) accrues all of it rather than 1/N.
+        let rate = index.funding_sum(&p.venue, &p.symbol, ts - interval_secs, ts);
+        if rate.is_zero() {
+            continue;
+        }
         let Some(mark) = mark_price(index, &p.venue, &p.symbol, ts) else { continue };
         let notional = p.size * mark;
         let sign = match p.side {
