@@ -184,6 +184,13 @@ function isEventWindowAligned(candles: CandlePoint[], events: MarketEvent[]) {
   return events.some((event) => event.time >= firstCandle && event.time <= lastCandle);
 }
 
+function isEventInCandleWindow(event: MarketEvent, candles: CandlePoint[]) {
+  if (!candles.length) return false;
+  const firstCandle = candles[0].time;
+  const lastCandle = candles[candles.length - 1].time;
+  return event.time >= firstCandle && event.time <= lastCandle;
+}
+
 export function MarketReplayChart({
   candles,
   replay,
@@ -220,8 +227,11 @@ export function MarketReplayChart({
       shouldUseAdaptiveGranularity ? candlesByGranularity[granularity] : candles;
     const replayForGranularity = (granularity: ChartGranularity) =>
       shouldUseAdaptiveGranularity ? replayByGranularity[granularity] : hourlyReplay;
-    const eventTimeForGranularity = (event: MarketEvent) =>
-      shouldUseAdaptiveGranularity ? bucketStart(event.time, activeGranularity) : event.time;
+    const eventTimeForGranularity = (event: MarketEvent) => {
+      const displayCandles = candlesForGranularity(activeGranularity);
+      if (!isEventInCandleWindow(event, displayCandles)) return undefined;
+      return shouldUseAdaptiveGranularity ? bucketStart(event.time, activeGranularity) : event.time;
+    };
     const fallbackCandlesForGranularity = () => candlesForGranularity(activeGranularity);
 
     const chart: IChartApi = createChart(container, {
