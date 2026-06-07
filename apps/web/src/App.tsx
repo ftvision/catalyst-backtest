@@ -309,6 +309,11 @@ function compatibleMarketItem(graph: CatalystGraph, catalog: MarketDataCatalogIt
 export function App() {
   const [activeRoute, setActiveRoute] = useState<RouteId>(() => initialRouteFromStorage());
   const [activeDetailTab, setActiveDetailTab] = useState<DetailTabId>("result");
+  const [visitedDetailTabs, setVisitedDetailTabs] = useState<Record<DetailTabId, boolean>>({
+    result: true,
+    replay: false,
+    lens: false,
+  });
   const [selectedEventId, setSelectedEventId] = useState(marketReplay.selectedEventId);
   const [apiStatus, setApiStatus] = useState<ApiStatus>("checking");
   const [apiMessage, setApiMessage] = useState(`Checking ${catalystApi.baseUrl}`);
@@ -340,6 +345,13 @@ export function App() {
     runHistory,
     historyItems: [],
   });
+
+  useEffect(() => {
+    if (activeRoute !== "details") return;
+    setVisitedDetailTabs((current) =>
+      current[activeDetailTab] ? current : { ...current, [activeDetailTab]: true },
+    );
+  }, [activeDetailTab, activeRoute]);
   const clipboard = useClipboard({ timeout: 900 });
   const hydrationSeq = useRef(0);
 
@@ -1028,6 +1040,12 @@ export function App() {
     setActiveRoute("details");
   }
 
+  const renderedDetailTabs = {
+    result: visitedDetailTabs.result || activeDetailTab === "result",
+    replay: visitedDetailTabs.replay || activeDetailTab === "replay",
+    lens: visitedDetailTabs.lens || activeDetailTab === "lens",
+  };
+
   return (
     <div className="app-shell">
       <aside className="app-sidebar" aria-label="Workbench navigation">
@@ -1187,29 +1205,35 @@ export function App() {
                 />
               </Group>
 
-              {activeDetailTab === "result" ? (
-                <ResultReviewPage graph={workbench.graph} setup={workbench.setup} result={workbench.result} />
+              {renderedDetailTabs.result ? (
+                <div hidden={activeDetailTab !== "result"}>
+                  <ResultReviewPage graph={workbench.graph} setup={workbench.setup} result={workbench.result} />
+                </div>
               ) : null}
-              {activeDetailTab === "replay" ? (
-                <MarketReplayPage
-                  graph={workbench.graph}
-                  setup={workbench.setup}
-                  result={workbench.result}
-                  replay={workbench.marketReplay}
-                  selectedEventId={selectedEventId}
-                  onSelectEvent={setSelectedEventId}
-                  onInspectEvent={() => openRunDetails("lens")}
-                />
+              {renderedDetailTabs.replay ? (
+                <div hidden={activeDetailTab !== "replay"}>
+                  <MarketReplayPage
+                    graph={workbench.graph}
+                    setup={workbench.setup}
+                    result={workbench.result}
+                    replay={workbench.marketReplay}
+                    selectedEventId={selectedEventId}
+                    onSelectEvent={setSelectedEventId}
+                    onInspectEvent={() => openRunDetails("lens")}
+                  />
+                </div>
               ) : null}
-              {activeDetailTab === "lens" ? (
-                <EventLensPage
-                  audit={workbench.audit}
-                  replay={workbench.marketReplay}
-                  setup={workbench.setup}
-                  selectedEventId={selectedEventId}
-                  selectedReplayEvent={selectedEvent}
-                  onSelectEvent={setSelectedEventId}
-                />
+              {renderedDetailTabs.lens ? (
+                <div hidden={activeDetailTab !== "lens"}>
+                  <EventLensPage
+                    audit={workbench.audit}
+                    replay={workbench.marketReplay}
+                    setup={workbench.setup}
+                    selectedEventId={selectedEventId}
+                    selectedReplayEvent={selectedEvent}
+                    onSelectEvent={setSelectedEventId}
+                  />
+                </div>
               ) : null}
             </Stack>
           ) : null}
