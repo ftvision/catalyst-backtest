@@ -19,6 +19,7 @@ documented here is the cross-language storage contract.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable
@@ -51,6 +52,34 @@ class ParquetStore:
 
     def __init__(self, root: str | Path) -> None:
         self.root = Path(root)
+
+    # --- provenance manifest (#38) ---
+    #
+    # A small sidecar (`<root>/_provenance.json`) recording, per series, whether
+    # its data is venue-`native` (the venue's own price/feed), a `reference`
+    # proxy (e.g. a CEX price stored under another venue), or `derived`. The Rust
+    # loader reads it to label provider metadata so results can tell them apart.
+
+    def _provenance_path(self) -> Path:
+        return self.root / "_provenance.json"
+
+    def read_provenance(self) -> dict[str, str]:
+        path = self._provenance_path()
+        if not path.exists():
+            return {}
+        try:
+            data = json.loads(path.read_text())
+            return data if isinstance(data, dict) else {}
+        except (ValueError, OSError):
+            return {}
+
+    def set_provenance(self, kind: str, key: str, provenance: str) -> None:
+        """Record provenance for a series, keyed as ``"<kind>/<key>"`` (e.g.
+        ``"candles/hyperliquid/ETH"``)."""
+        manifest = self.read_provenance()
+        manifest[f"{kind}/{key}"] = provenance
+        self.root.mkdir(parents=True, exist_ok=True)
+        self._provenance_path().write_text(json.dumps(manifest, indent=2, sort_keys=True))
 
     # --- partition paths ---
 

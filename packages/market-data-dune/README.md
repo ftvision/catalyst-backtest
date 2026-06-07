@@ -28,6 +28,48 @@ Your query receives `start` / `end` (ISO strings) as Dune **query parameters**;
 add more with repeated `--param key=value`. Map columns with `--ts-col`,
 `--gas-col`, `--open-col`, etc.
 
+## Venue-native prices + provenance (#38)
+
+Binance candles are a deep, reliable **reference** (CEX spot), but a proxy — not
+the venue's own price. For realism, ingest **venue-native** prices and label them
+so results can tell native from reference:
+
+- **Hyperliquid perps** trade on HL's own mark — author a Dune query over HL data
+  and store it under `--venue hyperliquid` with `--provenance native`.
+- **Base swaps** fill against a DEX pool — query `dex.trades` (Uniswap/Aerodrome)
+  for hourly OHLC and store under `--venue base --provenance native`.
+
+```bash
+catalyst-ingest-dune prices --root data/market-data \
+  --venue hyperliquid --symbol ETH --interval 1h --provenance native \
+  --query-id <HL_MARK_QUERY_ID> --start ... --end ...
+
+catalyst-ingest-dune prices --root data/market-data \
+  --venue base --symbol ETH --interval 1h --provenance native \
+  --query-id <BASE_DEX_QUERY_ID> --start ... --end ...
+```
+
+`--provenance` (default `native`) is written to the store's `_provenance.json`
+manifest; the Rust loader reads it so each candle series' provider records
+`native`/`reference`. Binance ingestion records `reference` automatically. Keep
+Binance as a labeled fallback where native data is thin.
+
+Example Base-DEX hourly OHLC (Uniswap v3 WETH/USDC) — author on Dune, then pass
+its query id:
+
+```sql
+SELECT date_trunc('hour', block_time) AS ts,
+       (array_agg(amount_usd / token_bought_amount ORDER BY block_time ASC))[1]  AS open,
+       max(amount_usd / token_bought_amount)                                     AS high,
+       min(amount_usd / token_bought_amount)                                     AS low,
+       (array_agg(amount_usd / token_bought_amount ORDER BY block_time DESC))[1] AS close
+FROM dex.trades
+WHERE blockchain = 'base' AND token_bought_symbol = 'WETH'
+  AND amount_usd > 0 AND token_bought_amount > 0
+  AND block_time >= TIMESTAMP '{{start}}' AND block_time < TIMESTAMP '{{end}}'
+GROUP BY 1 ORDER BY 1
+```
+
 ## Auth
 
 Set `DUNE_API_KEY` (or pass `--api-key`). The free tier is limited and large
