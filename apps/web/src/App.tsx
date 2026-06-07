@@ -71,6 +71,9 @@ type ApiStatus = "checking" | "healthy" | "offline" | "running" | "failed";
 type RunStatus = "idle" | "submitting" | "queued" | "running" | "succeeded" | "failed";
 type DataSourceMode = "store" | "inline";
 
+const DEFAULT_BACKTEST_START = "2026-03-01T00:00:00Z";
+const DEFAULT_BACKTEST_END = "2026-06-01T00:00:00Z";
+
 interface WorkbenchState {
   graph: GraphSummary;
   setup: SetupData;
@@ -274,8 +277,8 @@ export function App() {
   function configFromMarketItem(base: BacktestConfig, item?: MarketDataCatalogItem): BacktestConfig {
     return {
       ...base,
-      start: item?.start ?? base.start,
-      end: item?.end ?? base.end,
+      start: DEFAULT_BACKTEST_START,
+      end: DEFAULT_BACKTEST_END,
       interval: item?.interval ?? base.interval,
     };
   }

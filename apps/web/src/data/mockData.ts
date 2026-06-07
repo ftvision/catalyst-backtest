@@ -75,7 +75,7 @@ export const graph: GraphSummary = {
 
 export const setup: SetupData = {
   runId: "run_2026_06_06_18_24",
-  start: "2026-01-01T00:00",
+  start: "2026-03-01T00:00",
   end: "2026-06-01T00:00",
   interval: "1h",
   policy: "strict_v1",
