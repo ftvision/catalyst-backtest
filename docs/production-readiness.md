@@ -2,7 +2,7 @@
 
 An honest assessment of the distance between the current system and a
 **production-ready backtesting platform**, and the order in which to close it.
-Tracked by the production-readiness epic (see the issues referenced per tier).
+Tracked by the production-readiness epic (#131).
 
 ## Where we are
 
