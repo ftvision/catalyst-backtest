@@ -159,3 +159,7 @@ requires a custom resolved policy.
 
 No test exercises `venue_fee_table` (consistent with it being an unimplemented
 stub).
+
+## Related issues
+
+- [#143](https://github.com/ftvision/catalyst-backtest/issues/143) — venue_fee_table fee model is a zero stub

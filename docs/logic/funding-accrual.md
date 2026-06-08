@@ -179,3 +179,7 @@ is modeled as an unconditional accrual, not a rejectable action.
 (The test exercises the `Long`/positive-rate path; the short and negative-rate
 sign flips are inspectable in `accrue_funding` at `engine.rs:994-998` but are not
 separately asserted in this test file.)
+
+## Related issues
+
+- [#118](https://github.com/ftvision/catalyst-backtest/issues/118) — accrual over actual elapsed time — FIXED

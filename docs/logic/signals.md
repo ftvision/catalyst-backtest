@@ -192,3 +192,7 @@ fires**, against that tick's bar. A *limit* action triggered by a fire only
   threshold (`signals.rs:250-271`).
 - `yield_source_without_candles_drives_ticks` — signals fire and chain actions even
   when a non-candle (yield-only) series drives the tick clock (`signals.rs:191-223`).
+
+## Related issues
+
+- [#121](https://github.com/ftvision/catalyst-backtest/issues/121) — cooldown boundary / no per-signal config

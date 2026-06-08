@@ -218,3 +218,10 @@ a volatile asset (valued 1:1 USD, which is wrong — see below).
 and asset-unit gas behaviors of #115 are not covered by tests — they are
 inferred from the code paths cited above. No test exercises `CompoundApy` /
 `ProtocolIndex`, since they have no behavior.)
+
+## Related issues
+
+- [#114](https://github.com/ftvision/catalyst-backtest/issues/114) — yield is simple, not compounding
+- [#115](https://github.com/ftvision/catalyst-backtest/issues/115) — non-stable yield valuation (1:1 USD, gas units)
+- [#118](https://github.com/ftvision/catalyst-backtest/issues/118) — elapsed-time accrual — FIXED
+- [#121](https://github.com/ftvision/catalyst-backtest/issues/121) — no Yield policy gate

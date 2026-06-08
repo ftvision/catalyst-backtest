@@ -108,6 +108,11 @@ margin and unrealized PnL + yield principal and accrued (see
 | Liquidation marks at close only; no maintenance margin | ⚠️ open (#120) |
 | Resting limit orders don't reserve balance | ⚠️ open (#124) |
 | Yield is simple-interest, not compounding | ⚠️ fidelity (#121) |
+| `same_tick` ordering policy is inert | ⚠️ open (#141) |
+| `missing_optional` data policy is inert | ⚠️ open (#142) |
+| `venue_fee_table` fee model is a zero stub | ⚠️ open (#143) |
+| partial fills + `partial_fill`/`clamp_to_available` not implemented | ⚠️ open (#144) |
+| `gas.fallback.model` ignored; `fixed_native` = `fixed_usd` | ⚠️ open (#145, #146) |
 
 The broader roadmap to production-grade correctness is in
 [production-readiness.md](../production-readiness.md) (Tier 0 = "the numbers are

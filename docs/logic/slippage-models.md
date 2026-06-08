@@ -171,3 +171,8 @@ into a 1000-ETH bar.) A larger trade widens the `amm` gap further while
   it falls back to bps — a real cost, not zero).
 - `amm_buy_applies_price_impact_from_reserves` / `amm_falls_back_to_fixed_bps_without_reserves`
   — the reserve-driven path and its no-reserves `fixed_bps` fallback.
+
+## Related issues
+
+- [#136](https://github.com/ftvision/catalyst-backtest/issues/136) — amm_price_impact fallback to fixed_bps — FIXED
+- [#137](https://github.com/ftvision/catalyst-backtest/issues/137) — volume_based square-root law — IMPLEMENTED

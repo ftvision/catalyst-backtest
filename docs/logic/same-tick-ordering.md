@@ -150,8 +150,7 @@ the policy field.
   `ConservativeAdverseOrder` does **not** re-sort same-tick actions into the
   worst-case order; it is adverse only via its *other* knobs
   (`worse_side_ohlc` price selection and 25 bps slippage — `profiles.rs:41-43`).
-  I did not find a tracking issue number for wiring up `same_tick`; treat its
-  non-implementation as a known gap.
+  Tracked by [#141](https://github.com/ftvision/catalyst-backtest/issues/141) — `same_tick` is inert (the engine never branches on it).
 - **Fallback / degenerate ticks:** with no market data in range the loop still
   runs one degenerate tick (`engine.rs:226-229`); ordering is unaffected.
 
@@ -189,3 +188,7 @@ What *is* tested, and underpins the deterministic order:
   `crates/simulation-engine/tests/no_look_ahead.rs` and
   `crates/simulation-engine/tests/limit_orders.rs` cover next-bar eligibility,
   which is the resting-fill step (5) of the tick order.
+
+## Related issues
+
+- [#141](https://github.com/ftvision/catalyst-backtest/issues/141) — same_tick ordering is inert

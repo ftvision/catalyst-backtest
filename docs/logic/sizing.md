@@ -186,3 +186,8 @@ subtype in `execute_action` (`engine.rs:812-895`):
 
 The `"all"` sentinel paths are covered in the execution-model crate's own tests
 (`crates/execution-models/tests/`), not in `sizing.rs`.
+
+## Related issues
+
+- [#117](https://github.com/ftvision/catalyst-backtest/issues/117) — margin cap — FIXED
+- [#121](https://github.com/ftvision/catalyst-backtest/issues/121) — pct_position semantics (perp entry-price basis; swap aliases pct_balance)

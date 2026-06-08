@@ -192,3 +192,7 @@ good-til-`n`-bars caps how long a stale order lingers before being cancelled.
 - `place_perp_limit_open_long_is_a_buy` — long open resolves to `Buy`.
 - `place_reduce_only_limit_requires_a_position_and_closes_it` — reduce-only rejected
   with no position, and resolves to the closing side when one exists.
+
+## Related issues
+
+- [#124](https://github.com/ftvision/catalyst-backtest/issues/124) — resting limit orders don't reserve balance

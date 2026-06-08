@@ -122,8 +122,7 @@ Resting-order fills use the same pattern
 - **Known limitation — `partial_fill` and `clamp_to_available` are declared but
   unimplemented.** Selecting either gives reject semantics, *not* a partial fill.
   No engine code path reads them; treat them as reserved enum values until one
-  does. I could not find a tracking issue number in the repo for wiring these up
-  — stated as unverified.
+  does. Tracked by [#144](https://github.com/ftvision/catalyst-backtest/issues/144).
 - **Known limitation — `partial_fills` is an inert flag.** It influences only the
   `validate` consistency check (`resolve.rs:172-178`); it never reaches the
   engine.
@@ -165,3 +164,7 @@ Policy validation of the declared-but-unimplemented combo —
   has `partial_fills = none`) plus `insufficient_balance = partial_fill` is a
   config contradiction and fails to resolve (`policies.rs:124-129`). This pins
   the validator guard, not any partial-fill execution.
+
+## Related issues
+
+- [#144](https://github.com/ftvision/catalyst-backtest/issues/144) — partial fills + partial_fill/clamp_to_available not implemented

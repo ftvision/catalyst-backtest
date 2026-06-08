@@ -142,3 +142,8 @@ established by the component-level tests below.
   `liquidation_is_logged` (`reporter.rs:122`): a `"liquidation"` event is surfaced
   as a `liquidation` trade row with the symbol present and a non-empty reason (the
   reporter side of the event emitted at `engine.rs:1070-1081`).
+
+## Related issues
+
+- [#117](https://github.com/ftvision/catalyst-backtest/issues/117) — leverage loss capped at margin — FIXED
+- [#120](https://github.com/ftvision/catalyst-backtest/issues/120) — close-only marking; no maintenance margin

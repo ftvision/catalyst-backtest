@@ -172,3 +172,10 @@ Note: there is **no** dedicated unit test asserting the non-stable balance
 mark-to-close path, the unpriced-leg drop (#119), the `price_any` venue-blind
 fallback, or the non-stable yield 1:1 behavior (#115); those claims are grounded
 in the `compute_equity`/`mark_price` source above, not in an executable test.
+
+## Related issues
+
+- [#115](https://github.com/ftvision/catalyst-backtest/issues/115) — non-stable yield valuation
+- [#117](https://github.com/ftvision/catalyst-backtest/issues/117) — margin cap — FIXED
+- [#118](https://github.com/ftvision/catalyst-backtest/issues/118) — elapsed accrual — FIXED
+- [#119](https://github.com/ftvision/catalyst-backtest/issues/119) — inconsistent/stale/venue-blind price lookups; unpriced holdings dropped

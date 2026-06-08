@@ -197,3 +197,7 @@ not per tick. It's a precondition check on the required candle series.
 - `coverage_reports_interior_gaps` — candles at hours 0,2 (hour 1 missing) →
   `complete false`, `missing 1`, `completeness_pct ≈ 66.7`,
   `missing_ranges[0][0] == 01:00`.
+
+## Related issues
+
+- [#142](https://github.com/ftvision/catalyst-backtest/issues/142) — missing_optional is inert

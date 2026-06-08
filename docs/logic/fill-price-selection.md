@@ -172,3 +172,8 @@ The per-variant arithmetic of `open`/`mid`/`close`/`worse_side_ohlc` is not
 directly asserted by a dedicated unit test in the files reviewed; the
 `next_open` behavior (the look-ahead-critical case) is the one covered
 end-to-end.
+
+## Related issues
+
+- [#116](https://github.com/ftvision/catalyst-backtest/issues/116) — next_open fills booked at the decision bar (phantom entry P&L)
+- [#122](https://github.com/ftvision/catalyst-backtest/issues/122) — same-bar look-ahead under close/open/mid selection

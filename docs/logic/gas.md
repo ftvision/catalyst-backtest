@@ -176,3 +176,8 @@ model charges `gas_fixed_amount` on every action.
 - gas aggregation: an EXECUTED event with `gas_usd: "0.02"` (`:71`) yields
   `total_gas_usd == "0.02"` (`:87`), and a Hyperliquid perp fill carries
   `gas_usd: "0"` (`:101`).
+
+## Related issues
+
+- [#145](https://github.com/ftvision/catalyst-backtest/issues/145) — gas.fallback.model selector is ignored
+- [#146](https://github.com/ftvision/catalyst-backtest/issues/146) — fixed_native treated as fixed_usd
