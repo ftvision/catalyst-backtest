@@ -1106,7 +1106,14 @@ fn compute_equity(ledger: &Ledger, index: &BundleIndex, ts: i64) -> Decimal {
         }
     }
     for y in ledger.yields() {
-        equity += y.value();
+        // A yield position is denominated in `asset` units; value it in USD like a
+        // spot balance (#115). A USD stablecoin is 1:1; anything else marks to its
+        // price, so e.g. ETH deposited into a vault isn't counted as $1/unit.
+        if is_stable(&y.asset) {
+            equity += y.value();
+        } else if let Some(price) = mark_price(index, &y.chain, &y.asset, ts) {
+            equity += y.value() * price;
+        }
     }
     equity
 }
