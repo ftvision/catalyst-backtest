@@ -26,6 +26,9 @@
 //!     gap; here we assert summing across an actual one-bar data gap.
 
 use std::collections::BTreeMap;
+use std::str::FromStr;
+
+use rust_decimal::Decimal;
 
 use catalyst_contracts::{BacktestConfig, Graph, MarketDataBundle, SimulationPolicy, SimulationTrace};
 use catalyst_simulation_engine::{run, SimulationInput};
@@ -117,36 +120,31 @@ fn issue_113_yield_accrues_full_elapsed_across_a_one_bar_gap() {
     let ye = events_of(&trace, "yield_accrued");
     assert_eq!(ye.len(), 2, "expected accrual at ticks 1h and 3h");
 
-    // Correct/expected magnitudes.
-    const ONE_HOUR: &str = "0.01141552511415525114155251"; // 1000*0.10*3600/31536000
-    const TWO_HOUR: &str = "0.02283105022831050228310502"; // 1000*0.10*7200/31536000 (correct gap accrual)
+    // Expected magnitudes. Interest COMPOUNDS on (principal + accrued) (#114), so
+    // the gap tick accrues 2h elapsed on principal + the tick-1h interest.
+    let p = Decimal::from(1000);
+    let apr = Decimal::from_str("0.10").unwrap();
+    let frac1 = Decimal::from(3600) / Decimal::from(31_536_000);
+    let frac2 = Decimal::from(7200) / Decimal::from(31_536_000);
+    let i_1h = p * apr * frac1; // tick 1h: accrued was 0, so == simple 1h slice
+    let i_gap = (p + i_1h) * apr * frac2; // tick 3h: 2h elapsed, on principal + accrued
 
-    // Tick 1h: a normal 1h slice.
+    // Tick 1h: a normal 1h slice (compounding coincides with simple at the first accrual).
     assert_eq!(ye[0].ts, iso(EPOCH + 3600));
-    let i0 = ye[0].detail.as_ref().unwrap()["interest_usd"].as_str().unwrap();
-    assert_eq!(i0, ONE_HOUR, "first (non-gap) tick accrues exactly one 1h slice");
+    let i0 = Decimal::from_str(ye[0].detail.as_ref().unwrap()["interest_usd"].as_str().unwrap()).unwrap();
+    assert_eq!(i0, i_1h, "first (non-gap) tick accrues exactly one 1h slice");
 
-    // Tick 3h (the gap tick): 2h elapsed since the 1h tick -> the full 2h figure.
+    // Tick 3h (the gap tick): 2h elapsed since the 1h tick -> the full 2h figure (#113),
+    // compounded on principal + accrued (#114).
     assert_eq!(ye[1].ts, iso(EPOCH + 3 * 3600));
-    let i1 = ye[1].detail.as_ref().unwrap()["interest_usd"].as_str().unwrap();
-    assert_eq!(
-        i1, TWO_HOUR,
-        "ISSUE #113 FIXED: gap tick (3h, 2h elapsed) accrues the full 2h ({TWO_HOUR}), not 1h ({ONE_HOUR})"
-    );
-    assert_ne!(
-        i1, ONE_HOUR,
-        "ISSUE #113 regression: gap tick must NOT under-accrue to a single 1h slice"
-    );
+    let i1 = Decimal::from_str(ye[1].detail.as_ref().unwrap()["interest_usd"].as_str().unwrap()).unwrap();
+    assert_eq!(i1, i_gap, "ISSUE #113 FIXED: gap tick accrues 2h elapsed, compounded (#114)");
+    // #113 elapsed property: the 2h gap tick accrues strictly more than a single 1h slice.
+    assert!(i1 > i_1h, "ISSUE #113: gap tick must NOT under-accrue to a single 1h slice");
 
-    // Whole-run interest is the correct 1h + 2h elapsed total (0.0342...),
-    // not the old under-accrued 2x1h figure (0.0228...).
-    let sum: f64 = i0.parse::<f64>().unwrap() + i1.parse::<f64>().unwrap();
-    let under_accrued = 0.022_831_050_228_310_502_f64; // old bug: 2 x one-hour slices
-    let correct_total = 0.034_246_575_342_465_753_f64; // 1h + 2h
-    assert!(
-        (sum - correct_total).abs() < 1e-9,
-        "ISSUE #113 FIXED: total interest {sum} matches the correct 1h+2h {correct_total}, not {under_accrued}"
-    );
+    // Whole-run interest covers the full 1h + 2h elapsed, not the old 2x1h under-accrual.
+    let sum = i0 + i1;
+    let under_accrued = i_1h * Decimal::from(2); // old static-interval bug: 2 x one-hour slices
     assert!(sum > under_accrued, "ISSUE #113: total interest covers the full elapsed gap");
 }
 
