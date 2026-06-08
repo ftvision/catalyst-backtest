@@ -21,7 +21,7 @@ value becomes the reference.
 
 | Variant | Reference price | Code | Look-ahead? |
 | --- | --- | --- | --- |
-| `next_open` | the **next** bar's `open`, else this bar's `close` on the final bar | `pricing.rs:39` | **no** (next-bar) |
+| `next_open` | the **next** bar's `open` (the engine defers the fill to that bar; see timing note) | `pricing.rs:39` | **no** (next-bar) |
 | `close` | this bar's `close` | `pricing.rs:38` | **yes** (same-bar) |
 | `open` | this bar's `open` | `pricing.rs:40` | partial (see notes) |
 | `mid` | `(bar.high + bar.low) / 2` | `pricing.rs:41` | **yes** (uses this bar's H/L) |
@@ -93,32 +93,37 @@ the policy contract's `fills.price_selection` field** (resolution:
 
 ## Correctness notes / edge cases
 
-- **`next_open` is the central no-look-ahead guarantee.** The action runs during
-  tick N's processing (driven by tick N's data), but `reference_price` returns
-  **tick N+1's open** (`pricing.rs:39`). `bar_after` selects the first bar
-  *strictly* after the current ts (`market.rs:137-143`, `range((ts+1)..)`), so it
-  can never return the current bar. Demonstrated end-to-end by
-  `strict_default_fills_at_next_bar_open_not_this_close`
-  (`crates/simulation-engine/tests/no_look_ahead.rs:80-92`): a 500-USDC buy
-  decided on bar 0 (close 2000) fills at bar 1's open (2100), +10 bps → **2102.1**,
-  not anything derived from 2000.
-- **`next_open` final-bar fallback.** When there is no next bar (the last bar of
-  the run, or no data for the series ahead), `next.map(...).unwrap_or(bar.close)`
-  falls back to **this bar's close** (`pricing.rs:39`). This is the one case a
-  next open cannot exist; it is the *only* situation where `next_open` touches
-  same-bar data, and it falls back to `close` (not `open`), tested by
-  `next_open_falls_back_to_close_on_final_bar`
-  (`no_look_ahead.rs:94-106`): a single-bar run fills at close 2000 × 1.001 =
-  **2002**, not the bar's open 1900.
-- **Booking time vs. fill price under `next_open`.** The fill event is recorded at
-  the **decision bar's** timestamp (`run_action_chain` stamps the
-  `action_executed` event with the current tick's `ts_iso`, `engine.rs:652-658`),
-  while the economically realized price is the **next** bar's open. So a
-  `next_open` fill is *booked* at bar N but *priced* at bar N+1's open. Booking
-  the effect on the decision bar (rather than the fill bar) injects phantom
-  entry-bar P&L into the equity curve — tracked by **#116** (no in-code marker;
-  the issue is on GitHub). Equity snapshots are still taken per tick at that
-  tick's marks (`engine.rs:292-297`).
+- **`next_open` is the central no-look-ahead guarantee.** The action is **decided**
+  during tick N's processing (driven by tick N's data) but the order is **deferred**
+  and fills during tick N+1's processing, at **tick N+1's open** — the engine fills
+  it via `fill_pending_market` using a `price_selection = Open` clone, so
+  `reference_price` returns the fill bar's own open. Either way the realized price is
+  tick N+1's open, a price that did not exist at decision time. Demonstrated
+  end-to-end by `strict_default_fills_at_next_bar_open_not_this_close`
+  (`crates/simulation-engine/tests/no_look_ahead.rs`): a 500-USDC buy decided on bar
+  0 (close 2000) fills at bar 1's open (2100), +10 bps → **2102.1**, not anything
+  derived from 2000.
+- **Deferral, not a price fallback, on the final bar (#116).** A market order under
+  `next_open` is **deferred by the engine** and filled on the next bar at that bar's
+  open (`fill_pending_market`, which fills via a `price_selection = Open` policy
+  clone so `reference_price` returns the fill bar's open). When there is **no** next
+  bar — a market order decided on the run's final bar — there is nothing to fill
+  against, so the order **lapses unfilled** (recorded as `order_expired`); it does
+  **not** fall back to the final close (that would be the same-bar look-ahead the
+  deferral exists to prevent). Tested by `next_open_on_final_bar_does_not_fill`
+  (`no_look_ahead.rs`): a single-bar run produces no `action_executed`, the ledger
+  is untouched (full cash, no ETH), and the order is expired. (The
+  `next.map(...).unwrap_or(bar.close)` fallback still exists inside `reference_price`
+  for `NextOpen`, but the engine's deferral means a market order never reaches it on
+  the final bar — the fallback is exercised only by the pricing unit tests, not the
+  live market-order path.)
+- **Booking time matches fill price under `next_open` (#116, fixed).** The fill is
+  now both **filled and booked** at the fill bar: `fill_pending_market` stamps the
+  `action_executed` event with the **fill bar's** `ts_iso`, and the position/cash
+  effect lands on that bar. So a `next_open` fill is *booked* at bar N+1 and *priced*
+  at bar N+1's open — decision time (bar N) and fill time (bar N+1) no longer
+  conflate, and bar N's snapshot carries no phantom entry-bar P&L. Equity snapshots
+  are still taken per tick at that tick's marks.
 - **Same-bar look-ahead is real for `close`/`mid`/`worse_side_ohlc`.** These read
   values (close, or the bar's high/low) that are only known once the bar has
   fully formed, yet the engine both *evaluates the signal* and *fills* within the
@@ -149,11 +154,18 @@ the policy contract's `fills.price_selection` field** (resolution:
 ## Tests (executable documentation)
 
 `crates/simulation-engine/tests/no_look_ahead.rs`:
-- `strict_default_fills_at_next_bar_open_not_this_close` (`:80-92`) — `next_open`
+- `strict_default_fills_at_next_bar_open_not_this_close` — `next_open`
   fills at the *next* bar's open (2100 → 2102.1 after 10 bps), proving the decision
   bar's close (2000) is not used.
-- `next_open_falls_back_to_close_on_final_bar` (`:94-106`) — single-bar run falls
-  back to the current close (2000 → 2002), never the open, when no next bar exists.
+- `next_open_on_final_bar_does_not_fill` — a single-bar run has no next bar, so the
+  deferred market order lapses unfilled (no `action_executed`, ledger untouched,
+  `order_expired` recorded) — it does **not** fall back to the final close (#116).
+
+`crates/simulation-engine/tests/issue_116_next_open_booking.rs` — the end-to-end
+booking-time spec: an action decided on bar N is filled and booked on bar N+1
+(`issue_116_spec_action_executes_at_next_tick_*`), bar N's snapshot is untouched
+(`issue_116_entry_bar_*`), and a signal firing on the last bar does not execute
+(`issue_116_spec_end_of_horizon_signal_action_not_executed_strict`).
 
 `crates/simulation-policies/tests/policies.rs`:
 - `strict_profile_defaults` — asserts `price_selection == NextOpen` for
@@ -175,5 +187,5 @@ end-to-end.
 
 ## Related issues
 
-- [#116](https://github.com/ftvision/catalyst-backtest/issues/116) — next_open fills booked at the decision bar (phantom entry P&L)
+- [#116](https://github.com/ftvision/catalyst-backtest/issues/116) — next_open market orders deferred to fill+book on the fill bar (no phantom entry P&L) — **fixed**
 - [#122](https://github.com/ftvision/catalyst-backtest/issues/122) — same-bar look-ahead under close/open/mid selection

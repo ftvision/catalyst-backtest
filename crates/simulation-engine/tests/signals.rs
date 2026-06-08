@@ -343,10 +343,12 @@ fn all_combinator_fires_only_when_every_input_true() {
     });
     let input = SimulationInput {
         graph: graph(g),
-        config: config("base", "1000", 4),
+        config: config("base", "1000", 5),
         policy: policy_with_signals(sig(Some("level"), None, None, None)),
-        // in-band, hi-out, lo-out, in-band
-        market_data: bundle("base", &["1500", "2500", "800", "1500"], json!([]), json!([])),
+        // in-band, hi-out, lo-out, in-band, hi-out. The trailing out-of-band bar
+        // gives the second in-band fire (bar 3) a bar 4 to fill against under
+        // next_open without adding a third in-band fire.
+        market_data: bundle("base", &["1500", "2500", "800", "1500", "2500"], json!([]), json!([])),
     };
     let trace = run(&input).unwrap();
     assert_eq!(count(&trace, "signal_fired"), 2);
