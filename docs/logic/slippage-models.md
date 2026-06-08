@@ -15,7 +15,7 @@ Applied in two places:
 | --- | --- | --- | --- | --- |
 | `fixed_bps` | `price · (1 ± bps/10000)` | no | any venue (CEX, perp, simple DEX proxy) | implemented |
 | `amm_price_impact` | constant-product avg from pool reserves | **yes** | on-chain AMM DEX (needs a reserves series) | implemented (**swap-only**) |
-| `volume_based` | *(intended: scale by size ÷ bar volume)* | — | thin / volume-limited markets | **not implemented — behaves as `none`** |
+| `volume_based` | `base_bps + coef·√(amount/volume)` (√-law) | **yes** | thin / volume-limited markets | **design decided (#137); not yet implemented — still behaves as `none`** |
 | `none` | `price` (no haircut) | no | research / idealized | implemented |
 
 ## `fixed_bps` — flat adverse haircut
@@ -57,15 +57,69 @@ is constant-product (x·y=k):
   3. Models a single constant-product pool — not routed/multi-hop fills,
      concentrated liquidity (Uniswap v3), or MEV/sandwich effects.
 
-## `volume_based` — not yet implemented
+## `volume_based` — participation-scaled impact
 
-**Declared in the contract but not implemented.** It currently returns **zero**
-slippage, i.e. behaves identically to `none`. Selecting it gives an idealized
-fill, *not* a volume-scaled cost. (The test below asserts this aliasing so the
-gap is visible; remove that assertion when the model ships.)
+> **Status: design decided (square-root law); implementation tracked in #137.**
+> Until it ships, `volume_based` still returns **zero** slippage (behaves as
+> `none`) — don't rely on it yet. The slippage comparison test asserts this
+> aliasing so the gap stays visible.
 
-- **Intended market:** thin / volume-constrained venues where impact scales with
-  participation rate (trade size ÷ bar volume). Until implemented, don't rely on it.
+**Intended market:** thin / volume-constrained venues where the cost of a trade
+depends on how much of the available volume it consumes. The driver is the
+**participation rate** `p = amount / bar_volume` — your trade as a fraction of
+the bar's traded volume. Bigger `p` ⇒ more slippage.
+
+The open question is *how fast* cost grows with `p`. Two candidate models:
+
+### Candidate A — linear participation
+```
+effective_bps = base_bps · (1 + p)
+```
+Extra impact grows **proportionally** with size (a straight line): double the
+trade ⇒ double the extra cost. A trade equal to the whole bar's volume (`p = 1`)
+pays 2× the base bps.
+
+### Candidate B — square-root law
+```
+effective_bps = base_bps + coef · √p
+```
+Extra impact grows **sub-linearly / concavely**: quadruple the trade ⇒ only
+*double* the extra cost. This is the empirical **"square-root law of market
+impact"** (Almgren, Kyle, et al.), observed across equities, FX, and crypto.
+
+### How they compare (base 10 bps)
+| participation `p` | A: linear `10·(1+p)` | B: √-law `10 + 30·√p` |
+| --- | --- | --- |
+| 1% (tiny) | 10.1 | 13.0 |
+| 25% | 12.5 | 25.0 |
+| 100% (whole bar) | 20.0 | 40.0 |
+| 400% | 50.0 | 70.0 |
+
+The **shape** is the difference: from 25%→100% participation (4× the size),
+linear's *extra* impact rises 4× (2.5→10 bps) while √-law's rises only 2×
+(15→30 bps). For **small** trades (`p ≪ 1`, the common case) the two are nearly
+identical; they diverge only for large trades.
+
+### Decision: square-root law (Candidate B)
+
+`volume_based` will use `effective_bps = base_bps + coef · √(amount / bar_volume)`.
+
+**Why:**
+- **Realism where it matters.** The model exists precisely to penalize *large*
+  trades; the square-root law is what real markets exhibit there, while linear
+  over-penalizes size (makes large-size strategies look worse than reality).
+- **Right answer for capacity questions** — "how big can this strategy get before
+  impact eats the edge?" — which is the main reason to use a volume model at all.
+- **No downside for small trades**, where it's indistinguishable from linear.
+- Cost is only a `√` (an f64 round-trip on the `Decimal`, fine for a slippage
+  estimate).
+
+**Behavior details (to implement):**
+- Falls back to **`fixed_bps`** when the bar has **no volume** (Dune-derived
+  candles carry none; Binance/HL do) or zero volume — never silently zero.
+- `base_bps` is the policy's `slippage_bps`; `coef` is a model constant (and a
+  candidate future policy knob).
+- Applies to both swaps and perps (unlike `amm_price_impact`, which is swap-only).
 
 ## `none` — idealized
 
