@@ -1063,8 +1063,23 @@ fn check_liquidations(
     }
     let perps: Vec<PerpPosition> = ledger.perps().cloned().collect();
     for p in perps {
-        let Some(mark) = mark_price(index, &p.venue, &p.symbol, ts) else { continue };
-        if p.unrealized_pnl(mark) <= -p.margin_usd {
+        // Liquidation triggers on the worst price the position touches *within* the
+        // bar, not just the close (#120): a long is most underwater at the bar's
+        // low, a short at its high. Marking only the close lets a position that
+        // breaches its margin intrabar but recovers by close wrongly escape — a
+        // real venue would have closed it on the wick.
+        let adverse = match index.bar_at(&p.venue, &p.symbol, ts) {
+            Some(bar) => match p.side {
+                PerpSide::Long => bar.low,
+                PerpSide::Short => bar.high,
+            },
+            // No candle this tick: fall back to the last-known mark.
+            None => match mark_price(index, &p.venue, &p.symbol, ts) {
+                Some(m) => m,
+                None => continue,
+            },
+        };
+        if p.unrealized_pnl(adverse) <= -p.margin_usd {
             // Liquidation: margin is lost, position removed (settle nothing back).
             let _ = ledger.close_perp(&p.venue, &p.symbol, Decimal::ZERO);
             events.push(Event {
@@ -1075,7 +1090,7 @@ fn check_liquidations(
                 detail: Some(json!({
                     "venue": p.venue,
                     "symbol": p.symbol,
-                    "mark": mark.normalize().to_string(),
+                    "mark": adverse.normalize().to_string(),
                     "margin_lost_usd": p.margin_usd.normalize().to_string(),
                 })),
             });
