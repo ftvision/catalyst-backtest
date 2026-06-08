@@ -156,6 +156,18 @@ impl BundleIndex {
         m.get(&ts).copied().or_else(|| m.range(..=ts).next_back().map(|(_, v)| *v))
     }
 
+    /// Close for a specific (venue, symbol) at `ts` (exact, else the most recent
+    /// close <= ts). Unlike [`price_any`] this is VENUE-SCOPED: a position on one
+    /// venue is never valued at another venue's candle that happens to share the
+    /// symbol (#119). Used for marking positions and for sizing's unit price, so
+    /// both agree and a brief gap doesn't drop a holding's value or reject sizing.
+    pub fn close_at(&self, venue: &str, symbol: &str, ts: i64) -> Option<Decimal> {
+        let m = self.candles.get(&(venue.to_string(), symbol.to_string()))?;
+        m.get(&ts)
+            .map(|b| b.close)
+            .or_else(|| m.range(..=ts).next_back().map(|(_, b)| b.close))
+    }
+
     pub fn funding_at(&self, venue: &str, symbol: &str, ts: i64) -> Option<Decimal> {
         self.funding.get(&(venue.to_string(), symbol.to_string())).and_then(|m| m.get(&ts).copied())
     }
