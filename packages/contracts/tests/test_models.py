@@ -70,3 +70,31 @@ def test_extra_fields_rejected_on_strict_models() -> None:
     payload["unexpected"] = True
     with pytest.raises(ValidationError):
         SimulationPolicy.model_validate(payload)
+
+
+def test_amm_price_impact_slippage_accepted_for_dex_swaps() -> None:
+    """Real-world fidelity: an on-chain AMM swap's slippage IS price impact from
+    pool reserves, so `amm_price_impact` is the realistic execution model for a
+    DEX (e.g. a Base ETH swap). The Rust engine implements it (#40); the Python
+    policy contract must accept it so a DEX strategy can select it via API/CLI."""
+    policy = SimulationPolicy.model_validate(
+        {
+            "profile": "research_v1",
+            "fills": {"slippage": {"model": "amm_price_impact", "bps": "0"}},
+        }
+    )
+    assert policy.fills.slippage.model == "amm_price_impact"
+
+
+def test_amm_price_impact_validates_against_schema() -> None:
+    """The schema (cross-language source of truth) must also allow the model the
+    Rust engine supports, or the policy is valid in Rust but rejected at the
+    contract boundary."""
+    from catalyst_contracts import validate
+
+    payload = {
+        "schema_version": "catalyst.backtest.policy.v1",
+        "profile": "research_v1",
+        "fills": {"slippage": {"model": "amm_price_impact", "bps": "0"}},
+    }
+    validate(payload, "simulation-policy")  # raises on failure

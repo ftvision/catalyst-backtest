@@ -39,7 +39,7 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "model": { "type": "string", "enum": ["fixed_bps", "volume_based", "none"] },
+            "model": { "type": "string", "enum": ["fixed_bps", "volume_based", "amm_price_impact", "none"] },
             "bps": { "$ref": "#/$defs/decimal" }
           }
         },
