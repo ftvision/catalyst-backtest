@@ -31,7 +31,15 @@ impl FakeMarket {
         let c = d(close);
         self.bars.insert(
             (venue.into(), symbol.into()),
-            Bar { open: c, high: c * d("1.02"), low: c * d("0.98"), close: c },
+            Bar { open: c, high: c * d("1.02"), low: c * d("0.98"), close: c, volume: None },
+        );
+        self
+    }
+    fn with_bar_volume(mut self, venue: &str, symbol: &str, close: &str, volume: &str) -> Self {
+        let c = d(close);
+        self.bars.insert(
+            (venue.into(), symbol.into()),
+            Bar { open: c, high: c * d("1.02"), low: c * d("0.98"), close: c, volume: Some(d(volume)) },
         );
         self
     }
@@ -282,7 +290,7 @@ fn zero_slippage_zero_fee_policy_fills_at_close() {
 // --- Limit orders: touch logic + placement validation ---
 
 fn bar(open: &str, high: &str, low: &str, close: &str) -> Bar {
-    Bar { open: d(open), high: d(high), low: d(low), close: d(close) }
+    Bar { open: d(open), high: d(high), low: d(low), close: d(close), volume: None }
 }
 
 #[test]
@@ -469,16 +477,63 @@ fn slippage_models_produce_distinct_swap_fills() {
 
     // none = idealized mid fill.
     assert_eq!(none, d("2000"));
-    // volume_based is declared but NOT implemented -> currently aliases `none`.
-    // (This assertion documents the stub; update it when volume_based ships.)
-    assert_eq!(volume, d("2000"));
     // fixed_bps: flat +10bps adverse, size-independent.
     assert_eq!(fixed, d("2002"));
+    // volume_based with NO bar volume falls back to fixed_bps (never silent zero).
+    assert_eq!(volume, d("2002"));
     // amm_price_impact: constant-product, size-dependent -> (200000+2000)/100 = 2020.
     assert_eq!(amm, d("2020"));
 
-    // Adverse ordering: idealized < flat-bps < depth-aware (for this size/pool).
+    // Adverse ordering: idealized < flat-bps (= volume fallback) < depth-aware.
     assert!(none < fixed && fixed < amm, "{none} < {fixed} < {amm}");
+}
+
+// --- volume_based (square-root law) — participation-scaled slippage (#137) ---
+
+#[test]
+fn volume_based_charges_more_for_a_larger_share_of_bar_volume() {
+    // Same bar (close 2000, volume 1000 ETH), same base bps; a trade that's a
+    // bigger fraction of the bar's volume pays progressively more (sqrt law).
+    let market = FakeMarket::new().with_bar_volume("base", "ETH", "2000", "1000");
+    let buy = |usd: &str| {
+        execute_swap(
+            &mut ledger_with("base", "USDC", "10000000"),
+            &market,
+            &slip(SlippageModel::VolumeBased, "10"),
+            &swap("USDC", "ETH", usd, "base"),
+        )
+        .fill()
+        .unwrap()
+        .price
+        .unwrap()
+    };
+
+    // base ETH ~= usd/2000. p = base/1000. eff_bps = 10 + 50*sqrt(p).
+    // $20k -> base 10, p=0.01 -> 10 + 50*0.1 = 15 bps -> 2003.0
+    // $500k -> base 250, p=0.25 -> 10 + 50*0.5 = 35 bps -> 2007.0
+    // $2M -> base 1000, p=1.0 -> 10 + 50*1 = 60 bps -> 2012.0
+    let small = buy("20000");
+    let mid = buy("500000");
+    let large = buy("2000000");
+
+    assert!(small < mid && mid < large, "monotonic in size: {small} {mid} {large}");
+    // sub-linear: 100x the size (p 0.01 -> 1.0) is only ~12x the extra impact, not 100x.
+    assert!((small - d("2003")).abs() < d("0.5"), "small ~2003, was {small}");
+    assert!((large - d("2012")).abs() < d("0.5"), "large ~2012, was {large}");
+}
+
+#[test]
+fn volume_based_falls_back_to_fixed_bps_when_bar_has_no_volume() {
+    // Dune-derived candles carry no volume -> fall back to the configured bps,
+    // never silently zero. Same bar without volume => 2002, like fixed_bps.
+    let market = FakeMarket::new().with_bar("base", "ETH", "2000");
+    let out = execute_swap(
+        &mut ledger_with("base", "USDC", "5000"),
+        &market,
+        &slip(SlippageModel::VolumeBased, "10"),
+        &swap("USDC", "ETH", "100", "base"),
+    );
+    assert_eq!(out.fill().unwrap().price, Some(d("2002")));
 }
 
 #[test]

@@ -13,11 +13,15 @@ pub struct Bar {
     pub high: Decimal,
     pub low: Decimal,
     pub close: Decimal,
+    /// Traded volume in base units for the bar, when the source provides it.
+    /// `None` for sources that don't (e.g. Dune-derived candles); the volume
+    /// slippage model falls back to fixed bps when it's absent.
+    pub volume: Option<Decimal>,
 }
 
 impl Bar {
     pub fn flat(price: Decimal) -> Self {
-        Bar { open: price, high: price, low: price, close: price }
+        Bar { open: price, high: price, low: price, close: price, volume: None }
     }
 }
 

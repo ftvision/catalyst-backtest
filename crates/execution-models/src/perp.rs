@@ -8,7 +8,7 @@ use catalyst_simulation_policies::ResolvedPolicy;
 
 use crate::context::MarketContext;
 use crate::outcome::{Execution, Fill};
-use crate::pricing::{fee_usd, fill_price, parse, Direction};
+use crate::pricing::{apply_bps, fee_usd, parse, reference_price, slippage_bps, Direction};
 
 fn ledger_side(side: CfgSide) -> PerpSide {
     match side {
@@ -50,7 +50,17 @@ pub fn execute_perp(
         }
     };
     let next = ctx.next_bar(venue, &cfg.symbol);
-    execute_perp_at(ledger, policy, cfg, fill_price(&bar, next.as_ref(), dir, policy))
+    let reference = reference_price(&bar, next.as_ref(), dir, policy);
+    // Trade size in base units (notional / reference price), for the volume
+    // model's participation rate. amm_price_impact is swap-only, so perps only
+    // ever see the bps-based models here.
+    let base_amount = if reference.is_zero() {
+        Decimal::ZERO
+    } else {
+        parse(cfg.size_usd.as_str()) / reference
+    };
+    let price = apply_bps(reference, dir, slippage_bps(policy, base_amount, bar.volume));
+    execute_perp_at(ledger, policy, cfg, price)
 }
 
 /// Execute a perp order at an explicit fill `price` (used by both the market path

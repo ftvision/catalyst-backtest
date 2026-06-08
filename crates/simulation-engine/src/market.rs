@@ -53,6 +53,7 @@ impl BundleIndex {
                         high: dec(&p.high),
                         low: dec(&p.low),
                         close: dec(&p.close),
+                        volume: p.volume.as_deref().map(dec),
                     };
                     idx.candles.entry(key.clone()).or_default().insert(ts, bar);
                     idx.by_symbol.entry(series.symbol.clone()).or_default().insert(ts, bar.close);
