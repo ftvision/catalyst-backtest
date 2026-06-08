@@ -197,8 +197,17 @@ fn limit_expires_after_n_bars() {
 
 #[test]
 fn reduce_only_limit_take_profit_fills() {
-    // Open a market long on bar 0, and rest a take-profit (reduce-only) sell limit
-    // at 2200. Bar 1 rallies to a high of 2300, touching it -> the position closes.
+    // Decide a market long on bar 0, then rest a take-profit (reduce-only) sell
+    // limit at 2200. Under #116 next_open the MARKET open is deferred: it is
+    // decided on bar 0 but BOOKED at bar 1's OPEN (2100), so the position only
+    // exists from bar 1 onward. A reduce-only limit can only be PLACED against an
+    // open position, so the take-profit is wired DOWNSTREAM of the open (edge
+    // open->tp): it is placed when the deferred market entry actually books, on
+    // bar 1, not on the decision bar 0 (where there would be no position to
+    // reduce). Placed on bar 1, the take-profit is eligible from bar 2; bar 2
+    // rallies to a high of 2300, touching 2200 -> the position closes at 2200.
+    // The horizon is extended by one bar (3 ticks) so the deferred entry books on
+    // bar 1 and the take-profit still gets a later bar (bar 2) to fill on.
     let g = graph(json!({
         "nodes": [
             {"id": "open", "kind": "action", "subtype": "perp_order",
@@ -206,23 +215,28 @@ fn reduce_only_limit_take_profit_fills() {
                         "chain": "hyperliquid", "order_type": "market", "reduce_only": false}},
             perp_limit_graph("short", "2200", true)
         ],
-        "edges": []
+        "edges": [{"from": "open", "to": "tp"}]
     }));
     let input = SimulationInput {
         graph: g,
-        config: config("hyperliquid", "1000", 2),
+        config: config("hyperliquid", "1000", 3),
         policy: strict_policy(),
         market_data: ohlc_bundle(
             "hyperliquid",
-            &[("2000", "2010", "1990", "2000"), ("2100", "2300", "2090", "2250")],
+            &[
+                ("2000", "2010", "1990", "2000"), // bar 0: market long decided here
+                ("2100", "2150", "2090", "2120"), // bar 1: entry books at open 2100; TP placed here
+                ("2120", "2300", "2110", "2250"), // bar 2: high 2300 touches the 2200 take-profit
+            ],
         ),
     };
     let trace = run(&input).unwrap();
-    assert_eq!(count(&trace, "action_executed"), 1); // the market open
+    assert_eq!(count(&trace, "action_executed"), 1); // the deferred market open (booked bar 1)
     assert_eq!(count(&trace, "order_placed"), 1); // the take-profit
-    assert_eq!(count(&trace, "order_filled"), 1); // touched at 2200
+    assert_eq!(count(&trace, "order_filled"), 1); // touched at 2200 on bar 2
     let filled = first(&trace, "order_filled");
     assert_eq!(detail(&filled, "price"), "2200");
+    assert_eq!(filled.ts, ts(2)); // fills on bar 2, after the entry is booked on bar 1
     assert!(trace.final_portfolio.perp_positions.is_empty()); // closed out
 }
 

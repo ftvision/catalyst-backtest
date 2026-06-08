@@ -343,13 +343,20 @@ fn all_combinator_fires_only_when_every_input_true() {
     });
     let input = SimulationInput {
         graph: graph(g),
-        config: config("base", "1000", 4),
+        config: config("base", "1000", 5),
         policy: policy_with_signals(sig(Some("level"), None, None, None)),
-        // in-band, hi-out, lo-out, in-band
-        market_data: bundle("base", &["1500", "2500", "800", "1500"], json!([]), json!([])),
+        // in-band, hi-out, lo-out, in-band, hi-out (extra bar so the tick-3
+        // in-band swap has a next bar to fill against under #116 next_open
+        // deferral; the tick-5 bar is out-of-band so it adds no extra signal).
+        market_data: bundle("base", &["1500", "2500", "800", "1500", "2500"], json!([]), json!([])),
     };
     let trace = run(&input).unwrap();
+    // Signal evaluation is unchanged: fires in-band at ticks 0 and 3 (ticks 1,2,4
+    // are out-of-band) -> 2 fires.
     assert_eq!(count(&trace, "signal_fired"), 2);
+    // #116: each market swap is booked at the NEXT bar's open. The tick-0 swap
+    // fills at tick 1; the tick-3 swap now fills at tick 4 (previously it was the
+    // final bar and would be dropped). Both execute -> 2 actions.
     assert_eq!(count(&trace, "action_executed"), 2);
 }
 

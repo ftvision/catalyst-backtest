@@ -17,8 +17,8 @@ use catalyst_execution_models::{
 };
 use catalyst_portfolio_ledger::{Ledger, PerpPosition, PerpSide, YieldPosition};
 use catalyst_simulation_policies::{
-    resolve_policy, Funding, InsufficientBalance, LiquidationCheck, MissingRequired, Repeat,
-    ResolvedPolicy, SignalTrigger,
+    resolve_policy, Funding, InsufficientBalance, LiquidationCheck, MissingRequired, PriceSelection,
+    Repeat, ResolvedPolicy, SignalTrigger,
 };
 
 use crate::exec_graph::{eval_threshold, ActionNode, CombinatorOp, ExecGraph, Signal, SignalDef};
@@ -89,6 +89,10 @@ enum ActionOutcome {
     Executed(Fill),
     Rejected(String),
     Resting(RestingSpec),
+    /// A market swap/perp under `next_open`: defer the fill to the next bar's
+    /// open instead of executing on the decision bar (#116). Carries no payload —
+    /// the node is re-run at the fill bar by its id.
+    DeferMarket,
 }
 
 /// A validated limit placement ready to enter the resting book.
@@ -96,6 +100,22 @@ struct RestingSpec {
     placed: PlacedLimit,
     kind: RestingKind,
     expire_after_bars: Option<u32>,
+}
+
+/// A market swap/perp decided on `placed_index` under the strict `next_open`
+/// policy, awaiting its fill at the NEXT tick's open (#116). Only *market* fills
+/// defer — the decision is made on bar N (from bar N's data) but the ledger
+/// effect, the entry-bar snapshot, and funding eligibility must land on bar N+1,
+/// where the fill actually happens. Limit-order placement and yield actions are
+/// unaffected and still execute on the decision bar. A pending fill drains from
+/// the bar after placement (mirroring resting orders); one still pending at the
+/// end of the run had no next bar to fill against and is dropped (no look-ahead).
+struct PendingMarket {
+    /// The action node to execute at the fill bar (re-run via [`run_action_chain`]
+    /// under the open-priced fill policy, which also runs its downstream chain).
+    node_id: String,
+    /// Tick index at which the decision was made; fills from the next tick on.
+    placed_index: usize,
 }
 
 impl From<Execution> for ActionOutcome {
@@ -208,6 +228,17 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
     let mut signals_ever_fired: HashSet<String> = HashSet::new();
     // Resting limit orders awaiting a touch, plus a monotonic id counter.
     let mut resting: Vec<RestingOrder> = Vec::new();
+    // Market swap/perp fills decided under `next_open` but not yet filled; they
+    // fill at the next tick's open (#116). See [`PendingMarket`].
+    let mut pending_market: Vec<PendingMarket> = Vec::new();
+    // Deferred market fills price at the fill bar's open. `next_open` decided on
+    // bar N == the open of bar N+1, which is exactly `Open` priced on the fill bar,
+    // so pending fills re-run under a policy with `price_selection = Open`.
+    let fill_policy = {
+        let mut p = policy.clone();
+        p.price_selection = PriceSelection::Open;
+        p
+    };
     let mut order_seq: u64 = 0;
     let mut signal_last_fired: HashMap<String, i64> = HashMap::new();
     let mut signal_fire_count: HashMap<String, u32> = HashMap::new();
@@ -249,10 +280,16 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
         // this tick (snapshots below recompute it post-action).
         let tick_equity = compute_equity(&ledger, &index, ts);
 
-        // Resting orders placed on earlier bars get a chance to fill/expire first.
+        // Prior decisions execute on this bar before any new ones are taken:
+        // resting limit orders placed on earlier bars get a chance to fill/expire,
+        // then market fills decided on the previous bar fill at this bar's open.
         fill_resting_orders(
             tick_index, ts, &ts_iso, &exec_graph, &mut ledger, &index, &policy, tick_equity,
-            &mut events, &mut resting, &mut order_seq,
+            &mut events, &mut resting, &mut pending_market, &mut order_seq,
+        );
+        fill_pending_market(
+            tick_index, ts, &ts_iso, &exec_graph, &mut ledger, &index, &fill_policy, tick_equity,
+            &mut events, &mut pending_market, &mut resting, &mut order_seq,
         );
 
         let ctx = TickContext { index: &index, ts };
@@ -261,7 +298,7 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
             for action_id in &exec_graph.initial_actions {
                 run_action_chain(
                     action_id, &exec_graph, &mut ledger, &ctx, &policy, &ts_iso, tick_index,
-                    tick_equity, &mut events, &mut resting, &mut order_seq,
+                    tick_equity, &mut events, &mut resting, &mut pending_market, &mut order_seq,
                 );
             }
             initial_done = true;
@@ -286,6 +323,7 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
             &variables,
             &mut warnings,
             &mut resting,
+            &mut pending_market,
             &mut order_seq,
         );
 
@@ -305,6 +343,22 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
             node_id: Some(order.node_id),
             reason: Some("backtest ended with order resting".into()),
             detail: Some(json!({ "order_id": order.id })),
+        });
+    }
+
+    // #116: a market fill decided on the final bar has no next bar to fill
+    // against, so it is dropped rather than filled at this bar's close — strict
+    // next_open never reuses the decision bar's price. (Same-bar price policies
+    // never enqueue here; their fills already happened on the decision bar.)
+    for order in pending_market.drain(..) {
+        events.push(Event {
+            ts: last_ts_iso.clone(),
+            event_type: "action_dropped".into(),
+            node_id: Some(order.node_id),
+            reason: Some(
+                "next_open market fill had no next bar at the end of the horizon; dropped to avoid same-bar look-ahead".into(),
+            ),
+            detail: None,
         });
     }
 
@@ -354,6 +408,7 @@ fn evaluate_signals(
     variables: &HashMap<String, Decimal>,
     warnings: &mut Vec<String>,
     resting: &mut Vec<RestingOrder>,
+    pending_market: &mut Vec<PendingMarket>,
     order_seq: &mut u64,
 ) {
     // Phase 1: compute every signal's boolean condition this tick. Signals are
@@ -459,7 +514,7 @@ fn evaluate_signals(
         for target in &signal.targets {
             run_action_chain(
                 target, exec_graph, ledger, ctx, policy, ts_iso, tick_index, equity, events,
-                resting, order_seq,
+                resting, pending_market, order_seq,
             );
         }
     }
@@ -618,6 +673,48 @@ fn signal_detail(
     serde_json::Value::Object(d)
 }
 
+/// Fill market orders deferred from an earlier bar, at THIS bar's open (#116).
+///
+/// Runs at the top of each tick (after accruals/liquidation, alongside resting
+/// limit fills) so a position decided on bar N appears in the ledger — and is
+/// funded — only from bar N+1, the bar where it actually fills. Each pending
+/// node is re-run via [`run_action_chain`] under `fill_policy` (the resolved
+/// policy with `price_selection` forced to `Open`): that prices the fill at this
+/// bar's open — provably the same price `next_open` computed on the decision bar,
+/// just booked on the fill bar — and, because `Open` is not `next_open`, the
+/// node executes inline (no further deferral) and its downstream chain runs here.
+#[allow(clippy::too_many_arguments)]
+fn fill_pending_market(
+    tick_index: usize,
+    ts: i64,
+    ts_iso: &str,
+    exec_graph: &ExecGraph,
+    ledger: &mut Ledger,
+    index: &BundleIndex,
+    fill_policy: &ResolvedPolicy,
+    equity: Decimal,
+    events: &mut Vec<Event>,
+    pending_market: &mut Vec<PendingMarket>,
+    resting: &mut Vec<RestingOrder>,
+    order_seq: &mut u64,
+) {
+    let ctx = TickContext { index, ts };
+    let ready: Vec<PendingMarket> = std::mem::take(pending_market);
+    let mut keep: Vec<PendingMarket> = Vec::new();
+    for order in ready {
+        // Next-bar eligibility: an order placed at tick T fills from T+1 on.
+        if order.placed_index >= tick_index {
+            keep.push(order);
+            continue;
+        }
+        run_action_chain(
+            &order.node_id, exec_graph, ledger, &ctx, fill_policy, ts_iso, tick_index, equity,
+            events, resting, pending_market, order_seq,
+        );
+    }
+    pending_market.extend(keep);
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_action_chain(
     action_id: &str,
@@ -630,6 +727,7 @@ fn run_action_chain(
     equity: Decimal,
     events: &mut Vec<Event>,
     resting: &mut Vec<RestingOrder>,
+    pending_market: &mut Vec<PendingMarket>,
     order_seq: &mut u64,
 ) {
     let mut stack = vec![action_id.to_string()];
@@ -703,6 +801,15 @@ fn run_action_chain(
                     downstream,
                 });
             }
+            ActionOutcome::DeferMarket => {
+                // #116: a market fill decided on this bar must land on the NEXT
+                // bar's open, not here. Queue the node (no ledger change) and stop
+                // this branch — `fill_pending_market` re-runs it (and its
+                // downstream) at the fill bar. A pending order with no next bar to
+                // fill against is dropped at end-of-run (no same-bar look-ahead).
+                pending_market
+                    .push(PendingMarket { node_id: id.clone(), placed_index: tick_index });
+            }
         }
     }
 }
@@ -723,6 +830,7 @@ fn fill_resting_orders(
     equity: Decimal,
     events: &mut Vec<Event>,
     resting: &mut Vec<RestingOrder>,
+    pending_market: &mut Vec<PendingMarket>,
     order_seq: &mut u64,
 ) {
     let ctx = TickContext { index, ts };
@@ -788,7 +896,7 @@ fn fill_resting_orders(
                 for target in &order.downstream {
                     run_action_chain(
                         target, exec_graph, ledger, &ctx, policy, ts_iso, tick_index, equity,
-                        events, resting, order_seq,
+                        events, resting, pending_market, order_seq,
                     );
                 }
             }
@@ -819,6 +927,12 @@ fn execute_action(
     match action.subtype.as_str() {
         "swap" => match serde_json::from_value::<SwapConfig>(action.config.clone()) {
             Ok(mut cfg) => {
+                // #116: a market swap under next_open fills at the NEXT bar's open,
+                // so defer it (sizing is resolved when it re-runs on the fill bar).
+                // Limit swaps and same-bar price policies fall through and run now.
+                if !is_limit(&cfg.order_type) && policy.price_selection == PriceSelection::NextOpen {
+                    return ActionOutcome::DeferMarket;
+                }
                 // A swap has no distinct "position"; both balance/position bases
                 // resolve against the from-asset balance. pct_portfolio converts
                 // the USD slice back into from-asset units via its price.
@@ -848,6 +962,11 @@ fn execute_action(
         },
         "perp_order" => match serde_json::from_value::<PerpOrderConfig>(action.config.clone()) {
             Ok(mut cfg) => {
+                // #116: a market perp under next_open fills at the NEXT bar's open,
+                // so defer it (sizing is resolved when it re-runs on the fill bar).
+                if !is_limit(&cfg.order_type) && policy.price_selection == PriceSelection::NextOpen {
+                    return ActionOutcome::DeferMarket;
+                }
                 let bal = ledger.balance(&cfg.chain, "USDC");
                 let position = ledger
                     .perp(&cfg.chain, &cfg.symbol)

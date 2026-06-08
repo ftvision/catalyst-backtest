@@ -93,11 +93,16 @@ fn g19_funding_carry_opens_both_legs() {
 
 #[test]
 fn g24_stop_loss_exits_to_flat() {
+    // #116 next_open deferral: the open swap decided on bar 0 fills at bar 1's
+    // open, and the stop-out swap decided on bar 1 (when price 1600 < 1700 stop)
+    // fills at bar 2's open. We extend the horizon to 3 bars so the stop-out has
+    // a next bar to fill against (a 2-bar horizon would drop it). The extra bar
+    // stays at 1600 so nothing new fires.
     let trace = run(&SimulationInput {
         graph: graph("g24_stop_loss.json"),
-        config: config("base", "1000", 2),
+        config: config("base", "1000", 3),
         policy: policy("crossing"),
-        market_data: bundle("base", &["2000", "1600"], json!([]), json!([])),
+        market_data: bundle("base", &["2000", "1600", "1600"], json!([]), json!([])),
     })
     .unwrap();
     assert_eq!(count(&trace, "action_executed"), 2, "open + stop-out");

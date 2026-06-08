@@ -1,5 +1,7 @@
-//! #41: `next_open` fills use the actual next bar's open (no intra-bar look-ahead),
-//! and fall back to the current close only on the final bar.
+//! #41 + #116: `next_open` fills use the actual next bar's open (no intra-bar
+//! look-ahead) and are booked on that fill bar. A market order decided on the
+//! final bar has no next bar to fill against and is dropped (not filled at the
+//! current close), so strict next_open never reuses the decision bar's price.
 
 use std::collections::BTreeMap;
 
@@ -92,9 +94,10 @@ fn strict_default_fills_at_next_bar_open_not_this_close() {
 }
 
 #[test]
-fn next_open_falls_back_to_close_on_final_bar() {
-    // A single-bar run has no "next" bar, so next_open honestly falls back to the
-    // current close (2000 * 1.001 = 2002) — the only case a next open can't exist.
+fn next_open_drops_on_final_bar() {
+    // #116: a single-bar run has no "next" bar, so a MARKET swap under next_open
+    // cannot fill at this bar's close (that would be same-bar look-ahead). It is
+    // DROPPED: no action_executed / no fill price, and an action_dropped event fires.
     let trace = run(&SimulationInput {
         graph: buy_graph(),
         config: config(1),
@@ -102,5 +105,21 @@ fn next_open_falls_back_to_close_on_final_bar() {
         market_data: bundle(&[("1900", "2005", "1895", "2000")]),
     })
     .unwrap();
-    assert_eq!(fill_price(&trace), 2002.0); // close 2000 * 1.001, not open 1900
+
+    // No fill happened: there is no action_executed event at all.
+    assert!(
+        !trace
+            .events
+            .iter()
+            .any(|e| e.event_type == "action_executed"),
+        "market order on the final bar must not execute"
+    );
+
+    // An action_dropped event fires for the buy node.
+    let dropped = trace
+        .events
+        .iter()
+        .find(|e| e.event_type == "action_dropped")
+        .expect("an action_dropped event on the final bar");
+    assert_eq!(dropped.node_id.as_deref(), Some("buy"));
 }

@@ -141,8 +141,8 @@ fn issue_113_yield_accrues_full_elapsed_across_a_one_bar_gap() {
     // Whole-run interest is the correct 1h + 2h elapsed total (0.0342...),
     // not the old under-accrued 2x1h figure (0.0228...).
     let sum: f64 = i0.parse::<f64>().unwrap() + i1.parse::<f64>().unwrap();
-    let under_accrued = 0.022_831_050_228_310_502_f64; // old bug: 2 x one-hour slices
-    let correct_total = 0.034_246_575_342_465_753_f64; // 1h + 2h
+    let under_accrued = 0.022_831_050_228_310_5_f64; // old bug: 2 x one-hour slices
+    let correct_total = 0.034_246_575_342_465_75_f64; // 1h + 2h
     assert!(
         (sum - correct_total).abs() < 1e-9,
         "ISSUE #113 FIXED: total interest {sum} matches the correct 1h+2h {correct_total}, not {under_accrued}"
@@ -159,11 +159,19 @@ fn issue_113_yield_accrues_full_elapsed_across_a_one_bar_gap() {
 /// `interval_secs` lookback, so a funding point that falls inside a data gap is
 /// still summed.
 ///
-/// Bundle: hyperliquid/ETH candles at 0h, 1h, 3h (2h candle MISSING -> gap),
-/// flat close 2000. funding hourly rate 0.001 at 1h, 2h, 3h — the 2h point
-/// lands INSIDE the gap. A 1000 USD long ETH (leverage 1) is opened at tick 0;
+/// Bundle: hyperliquid/ETH candles at -1h, 0h, 1h, 3h (2h candle MISSING ->
+/// gap), flat close 2000. funding hourly rate 0.001 at 1h, 2h, 3h — the 2h
+/// point lands INSIDE the gap. A 1000 USD long ETH (leverage 1) is decided on
+/// the initial -1h bar; under #116 next_open deferral the MARKET fill lands one
+/// bar later, at the 0h bar's open. The decision bar is pulled back by one bar
+/// (a -1h candle is prepended) precisely so the deferred fill still books at 0h
+/// and the position exists for the same funding windows the test originally
+/// intended (no funding points precede 1h, so the (-1h,0h] and (0h,1h] windows
+/// each carry at most the single 1h point — the gap-summing intent is unchanged).
 /// fill = 2000 + 10bps = 2002, size = 1000/2002, marked at 2000 ->
-/// notional = (1000/2002)*2000 = 999.000999000999000999000999.
+/// notional = (1000/2002)*2000 = 999.000999000999000999000999. (Deferral moved
+/// only the booking bar, not the price: a next_open decision == the next bar's
+/// open, and every candle open is 2000, so the fill price/size are unchanged.)
 ///
 /// At tick 3h, 2h elapsed since the 1h tick, so the window is (1h, 3h] and sums
 /// BOTH the in-gap 2h point AND the 3h point: rate "0.002", payment ~1.998 (NOT
@@ -171,7 +179,8 @@ fn issue_113_yield_accrues_full_elapsed_across_a_one_bar_gap() {
 /// two-point sum; if the static window returns, the gap-tick assertion fails.
 #[test]
 fn issue_118_funding_window_sums_all_points_inside_a_gap() {
-    let candle_pts: Vec<Value> = [0i64, 1, 3]
+    // candles at -1h (decision bar for the deferred fill), 0h, 1h, 3h (2h missing)
+    let candle_pts: Vec<Value> = [-1i64, 0, 1, 3]
         .iter()
         .map(|h| json!({"ts": iso(EPOCH + h * 3600), "open": "2000", "high": "2000", "low": "2000", "close": "2000"}))
         .collect();
@@ -183,7 +192,7 @@ fn issue_118_funding_window_sums_all_points_inside_a_gap() {
 
     let bundle: MarketDataBundle = serde_json::from_value(json!({
         "schema_version": "catalyst.backtest.market_data_bundle.v1",
-        "interval": "1h", "start": iso(EPOCH), "end": iso(EPOCH + 3 * 3600),
+        "interval": "1h", "start": iso(EPOCH - 3600), "end": iso(EPOCH + 3 * 3600),
         "candles": [{"venue": "hyperliquid", "symbol": "ETH", "quote": "USD", "points": candle_pts}],
         "funding": [{"venue": "hyperliquid", "symbol": "ETH", "points": funding_pts}],
         "gas": [],
@@ -197,7 +206,7 @@ fn issue_118_funding_window_sums_all_points_inside_a_gap() {
     let mut init = BTreeMap::new();
     init.insert("hyperliquid".to_string(), bal);
     let config = BacktestConfig {
-        start: iso(EPOCH),
+        start: iso(EPOCH - 3600),
         end: iso(EPOCH + 3 * 3600),
         interval: "1h".to_string(),
         initial_portfolio: init,

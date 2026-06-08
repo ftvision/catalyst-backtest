@@ -137,14 +137,19 @@ fn threshold_crossing_fires_once_while_condition_holds() {
 
 #[test]
 fn signal_refires_on_recross() {
-    // below, back above, below again -> two crossings
+    // below, back above, below again -> two crossings. Under #116 the second
+    // crossing's MARKET buy is decided on the last data bar and would have no
+    // next bar to fill against (dropped), so extend the horizon by one trailing
+    // bar (still below 1800, so no third re-cross) to let that deferred buy fill.
     let input = SimulationInput {
         graph: graph(signal_buy_graph()),
-        config: config("base", "1000", 4),
+        config: config("base", "1000", 5),
         policy: strict_policy(),
-        market_data: eth_bundle("base", &["2000", "1700", "2000", "1700"]),
+        market_data: eth_bundle("base", &["2000", "1700", "2000", "1700", "1700"]),
     };
     let trace = run(&input).unwrap();
+    // Two crossings (bars 1 and 3) -> two signal fires; both deferred market
+    // buys now fill (bar-1 buy at bar 2, bar-3 buy at bar 4).
     assert_eq!(count_events(&trace, "signal_fired"), 2);
     assert_eq!(count_events(&trace, "action_executed"), 2);
 }
@@ -164,12 +169,16 @@ fn action_chains_to_next_action() {
     }));
     let input = SimulationInput {
         graph: g,
-        config: config("hyperliquid", "1000", 1),
+        config: config("hyperliquid", "1000", 2),
         policy: strict_policy(),
-        market_data: eth_bundle("hyperliquid", &["2000"]),
+        // Two bars: the initial MARKET buy is decided on bar 0 but, under #116,
+        // fills at bar 1's open. With only one bar it would have no next bar and
+        // be dropped (and the chained sell would never run), so extend by one bar.
+        market_data: eth_bundle("hyperliquid", &["2000", "2000"]),
     };
     let trace = run(&input).unwrap();
-    // both the initial buy and the chained sell execute on the first tick
+    // The deferred buy fills at bar 1; its downstream sell re-runs inline at the
+    // same fill bar, so both still execute (now on bar 1 rather than bar 0).
     assert_eq!(count_events(&trace, "action_executed"), 2);
     let kinds: Vec<_> = trace
         .events
@@ -193,9 +202,12 @@ fn selling_more_than_held_is_rejected() {
     }));
     let input = SimulationInput {
         graph: g,
-        config: config("hyperliquid", "1000", 1), // USDC only, no ETH
+        config: config("hyperliquid", "1000", 2), // USDC only, no ETH
         policy: strict_policy(),
-        market_data: eth_bundle("hyperliquid", &["2000"]),
+        // Two bars: the MARKET sell is deferred from bar 0 and attempts its fill
+        // at bar 1, where the insufficient-ETH rejection fires. With a single bar
+        // it would be dropped at end-of-horizon (no rejection), defeating intent.
+        market_data: eth_bundle("hyperliquid", &["2000", "2000"]),
     };
     let trace = run(&input).unwrap();
     assert_eq!(count_events(&trace, "action_rejected"), 1);
