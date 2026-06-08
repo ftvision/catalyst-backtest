@@ -229,13 +229,20 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
     }
     let mut initial_done = false;
     let mut last_ts_iso = input.config.end.clone();
+    // The tick clock is data-driven and may be gapped or coarser than the configured
+    // interval, so accrual is scaled by the *actual* seconds since the previous tick
+    // rather than a fixed `interval_secs`. On the first tick there's no prior tick
+    // (and no positions yet), so the configured interval is a harmless default.
+    let mut prev_ts: Option<i64> = None;
 
     for (tick_index, ts) in ticks.into_iter().enumerate() {
         let ts_iso = format_ts(ts);
         last_ts_iso = ts_iso.clone();
+        let elapsed_secs = prev_ts.map(|p| ts - p).unwrap_or(interval_secs);
+        prev_ts = Some(ts);
 
-        accrue_funding(&mut ledger, &index, ts, interval_secs, &ts_iso, &policy, &mut events);
-        accrue_yield(&mut ledger, &index, ts, interval_secs, &ts_iso, &mut events);
+        accrue_funding(&mut ledger, &index, ts, elapsed_secs, &ts_iso, &policy, &mut events);
+        accrue_yield(&mut ledger, &index, ts, elapsed_secs, &ts_iso, &mut events);
         check_liquidations(&mut ledger, &index, ts, &ts_iso, &policy, &mut events);
 
         // Tick-start equity, used to resolve pct_portfolio sizing for any action
@@ -964,7 +971,7 @@ fn accrue_funding(
     ledger: &mut Ledger,
     index: &BundleIndex,
     ts: i64,
-    interval_secs: i64,
+    elapsed_secs: i64,
     ts_iso: &str,
     policy: &ResolvedPolicy,
     events: &mut Vec<Event>,
@@ -974,10 +981,11 @@ fn accrue_funding(
     }
     let perps: Vec<PerpPosition> = ledger.perps().cloned().collect();
     for p in perps {
-        // Sum every funding point in the bar `(ts - interval, ts]`, not just the
-        // one at `ts` — so a tick interval coarser than the funding interval
-        // (e.g. 4h ticks with hourly funding) accrues all of it rather than 1/N.
-        let rate = index.funding_sum(&p.venue, &p.symbol, ts - interval_secs, ts);
+        // Sum every funding point since the previous tick, `(ts - elapsed, ts]`,
+        // not just the one at `ts` — so a tick interval coarser than the funding
+        // interval (e.g. 4h ticks with hourly funding) accrues all of it rather
+        // than 1/N, and a gapped tick clock covers the whole elapsed window.
+        let rate = index.funding_sum(&p.venue, &p.symbol, ts - elapsed_secs, ts);
         if rate.is_zero() {
             continue;
         }
@@ -1012,12 +1020,12 @@ fn accrue_yield(
     ledger: &mut Ledger,
     index: &BundleIndex,
     ts: i64,
-    interval_secs: i64,
+    elapsed_secs: i64,
     ts_iso: &str,
     events: &mut Vec<Event>,
 ) {
     let positions: Vec<YieldPosition> = ledger.yields().cloned().collect();
-    let fraction = Decimal::from(interval_secs) / Decimal::from(YEAR_SECONDS);
+    let fraction = Decimal::from(elapsed_secs) / Decimal::from(YEAR_SECONDS);
     for y in positions {
         let key = (y.protocol.clone(), y.asset.clone(), y.chain.clone(), y.pool.clone());
         let Some(apr) = index.apr_at(&key, ts) else { continue };
