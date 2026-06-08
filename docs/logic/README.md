@@ -10,32 +10,37 @@ Each doc follows the same shape:
 - **Why choose one option over another** — tradeoffs and a decision guide.
 - **Tests that show the difference** — named, runnable, cited.
 
-This is an ongoing effort; the checklist below tracks coverage.
+**Start here:** [correctness-model.md](correctness-model.md) — the cross-cutting
+correctness guarantees (per-tick execution order, no-look-ahead, money
+conservation, elapsed-time accrual, determinism, valuation) and a registry of
+what's fixed vs. tracked. The per-component docs below fill in the details.
 
 ## Components
 
 ### Execution models
 - [x] [Slippage models](slippage-models.md) — `fixed_bps`, `amm_price_impact`, `volume_based`, `none`
-- [ ] Fill-price selection — `close` / `open` / `mid` / `next_open` / `worse_side_ohlc`
-- [ ] Fees — `fixed_bps` / `venue_fee_table` / `none`
-- [ ] Gas — `historical_fee_history` / `fixed_usd` / `fixed_native` / `none` (+ fallback)
-- [ ] Partial fills — `none` / `allow_if_configured` / `always_allow`
-- [ ] Limit orders — touch logic, time-in-force, resting/expiry
+- [x] [Fill-price selection](fill-price-selection.md) — `close` / `open` / `mid` / `next_open` / `worse_side_ohlc`
+- [x] [Fees](fees.md) — `fixed_bps` / `venue_fee_table` / `none`
+- [x] [Gas](gas.md) — `historical_fee_history` / `fixed_usd` / `fixed_native` / `none` (+ fallback)
+- [x] [Partial fills](partial-fills.md) — partial fills & insufficient-balance handling
+- [x] [Limit orders](limit-orders.md) — touch logic, time-in-force, resting/expiry
 
 ### Accrual
-- [ ] Funding accrual — sign, notional, intra-bar summation
-- [ ] Yield accrual — simple-APR math, elapsed-time scaling, valuation
+- [x] [Funding accrual](funding-accrual.md) — sign, notional, intra-bar summation, elapsed-time
+- [x] [Yield accrual](yield-accrual.md) — simple-APR math, elapsed-time scaling, valuation
 
 ### Strategy surface
-- [ ] Signals — triggers (`level`/`crossing`/…), repeat/cooldown
-- [ ] Derived sources — `sma`/`ema`/`rolling_high`/`rolling_low`/`roc`
-- [ ] Sizing — amount basis (`pct_balance`/`pct_position`/`pct_portfolio`)
-- [ ] Same-tick ordering
+- [x] [Signals](signals.md) — triggers (`level`/`crossing`/…), repeat/cooldown
+- [x] [Derived sources](derived-sources.md) — `sma`/`ema`/`rolling_high`/`rolling_low`/`roc`
+- [x] [Sizing](sizing.md) — amount basis (`pct_balance`/`pct_position`/`pct_portfolio`)
+- [x] [Same-tick ordering](same-tick-ordering.md)
 
 ### Risk & data
-- [ ] Liquidation — trigger, marking, settlement
-- [ ] Missing-data handling — `missing_required` / `missing_optional`
-- [ ] Coverage & intra-series gaps
+- [x] [Liquidation](liquidation.md) — trigger, marking, settlement
+- [x] [Missing-data & coverage](missing-data-and-coverage.md) — `missing_required` / `missing_optional`, intra-series gaps
+- [x] [Portfolio valuation](portfolio-valuation.md) — equity / mark-to-market
 
-See also: [simulation-policies.md](../simulation-policies.md) (the policy surface),
+See also: [correctness-model.md](correctness-model.md) (the cornerstone),
+[simulation-policies.md](../simulation-policies.md) (the policy surface),
+[production-readiness.md](../production-readiness.md) (the correctness roadmap),
 [system-design.md](../system-design.md) (architecture).
