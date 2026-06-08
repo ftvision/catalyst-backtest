@@ -102,6 +102,8 @@ Design:
   [intervals (1h vs 4h)](docs/market-data-intervals.md)
 - [ADR 0001 — language boundary](docs/adr/0001-language-boundary.md),
   [ADR 0002 — strategy surface](docs/adr/0002-strategy-surface.md)
+- [System logic reference](docs/logic/README.md) — per-component logic (what each
+  option does, why, when), backed by tests
 
 Beginner-friendly primers:
 

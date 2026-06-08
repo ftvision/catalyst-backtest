@@ -438,3 +438,62 @@ fn amm_falls_back_to_reference_without_reserves() {
     let out = execute_swap(&mut l, &market, &amm_policy(), &swap("USDC", "ETH", "100", "base"));
     assert_eq!(out.fill().unwrap().price, Some(d("2000"))); // close, no slippage applied
 }
+
+// --- slippage models: one trade, four models, distinct fills (executable doc) ---
+// Companion to docs/logic/slippage-models.md. The same Base-DEX buy (2000 USDC of
+// ETH into a 100 ETH / 200k USDC pool, mid 2000) fills differently per model.
+
+fn slip(model: SlippageModel, bps: &str) -> ResolvedPolicy {
+    ResolvedPolicy { slippage_model: model, slippage_bps: bps.into(), ..strict_v1() }
+}
+
+#[test]
+fn slippage_models_produce_distinct_swap_fills() {
+    let market = FakeMarket::new()
+        .with_bar("base", "ETH", "2000")
+        .with_reserves("base", "ETH", "100", "200000"); // mid 2000
+    let trade = swap("USDC", "ETH", "2000", "base");
+    let fill = |p: &ResolvedPolicy| {
+        execute_swap(&mut ledger_with("base", "USDC", "5000"), &market, p, &trade)
+            .fill()
+            .unwrap()
+            .price
+            .unwrap()
+    };
+
+    let none = fill(&slip(SlippageModel::None, "10"));
+    let volume = fill(&slip(SlippageModel::VolumeBased, "10"));
+    let fixed = fill(&slip(SlippageModel::FixedBps, "10"));
+    let amm = fill(&slip(SlippageModel::AmmPriceImpact, "10"));
+
+    // none = idealized mid fill.
+    assert_eq!(none, d("2000"));
+    // volume_based is declared but NOT implemented -> currently aliases `none`.
+    // (This assertion documents the stub; update it when volume_based ships.)
+    assert_eq!(volume, d("2000"));
+    // fixed_bps: flat +10bps adverse, size-independent.
+    assert_eq!(fixed, d("2002"));
+    // amm_price_impact: constant-product, size-dependent -> (200000+2000)/100 = 2020.
+    assert_eq!(amm, d("2020"));
+
+    // Adverse ordering: idealized < flat-bps < depth-aware (for this size/pool).
+    assert!(none < fixed && fixed < amm, "{none} < {fixed} < {amm}");
+}
+
+#[test]
+fn amm_price_impact_is_a_noop_for_perps() {
+    // amm_price_impact is swap-only (it reads pool reserves). A perp under it gets
+    // NO slippage (fills at the reference), unlike fixed_bps. Documented difference.
+    let market = FakeMarket::new().with_bar("hyperliquid", "ETH", "2000");
+
+    let mut l_fixed = ledger_with("hyperliquid", "USDC", "1000");
+    execute_perp(&mut l_fixed, &market, &slip(SlippageModel::FixedBps, "10"),
+                 &perp(PerpSide::Long, "500", Some("5"), false));
+    assert_eq!(l_fixed.perp("hyperliquid", "ETH").unwrap().entry_price, d("2002"));
+
+    let mut l_amm = ledger_with("hyperliquid", "USDC", "1000");
+    execute_perp(&mut l_amm, &market, &slip(SlippageModel::AmmPriceImpact, "10"),
+                 &perp(PerpSide::Long, "500", Some("5"), false));
+    // no reserves on a perp venue + swap-only model => fills at the reference 2000.
+    assert_eq!(l_amm.perp("hyperliquid", "ETH").unwrap().entry_price, d("2000"));
+}

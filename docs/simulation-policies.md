@@ -221,7 +221,9 @@ conservative worse-side fill: 2100
 
 ### Slippage Policy
 
-Defines execution price adjustment.
+Defines execution price adjustment. For the full per-model logic (formulas,
+which market each fits, how to choose, and the swap-vs-perp scope), see
+[logic/slippage-models.md](logic/slippage-models.md).
 
 Options:
 
