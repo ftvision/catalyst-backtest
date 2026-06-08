@@ -184,7 +184,12 @@ fn close_perp(
     let returned_margin = position.margin_usd * fraction;
     let notional_closed = close_base * price;
     let fee = fee_usd(notional_closed, policy);
-    let settlement = returned_margin + realized_pnl - fee;
+    // A position's loss can't exceed the margin posted for the closed fraction:
+    // floor the settlement at zero so an underwater close returns nothing rather
+    // than crediting a negative amount (which would claw back unposted collateral
+    // the trader never deposited). Beyond this the position is bankrupt — see
+    // liquidation handling.
+    let settlement = (returned_margin + realized_pnl - fee).max(Decimal::ZERO);
 
     if close_base == position.size {
         ledger

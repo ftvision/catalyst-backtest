@@ -169,10 +169,20 @@ fn swap_at(
         Direction::Sell => {
             let proceeds = amount * price;
             let fee = fee_usd(proceeds, policy);
+            let net: Decimal = proceeds - fee - gas;
+            // Reject (don't credit a negative `net`) when fee + gas swallow the
+            // proceeds — e.g. dust sold on an EVM chain where gas exceeds the
+            // trade value. Crediting a negative amount would mint phantom debt in
+            // the destination asset. Checked before debiting so the ledger is
+            // left untouched on rejection.
+            if net <= Decimal::ZERO {
+                return Execution::rejected(format!(
+                    "swap proceeds {proceeds} do not cover fee {fee} + gas {gas}"
+                ));
+            }
             if let Err(e) = ledger.debit(venue, &cfg.from_asset, amount) {
                 return Execution::rejected(e.to_string());
             }
-            let net: Decimal = proceeds - fee - gas;
             ledger.credit(venue, &cfg.to_asset, net);
             ledger.record_fee(fee);
             ledger.record_gas(gas);

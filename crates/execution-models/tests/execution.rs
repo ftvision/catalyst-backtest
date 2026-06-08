@@ -199,6 +199,47 @@ fn open_then_full_close_removes_position_and_settles() {
 }
 
 #[test]
+fn leveraged_long_loss_is_capped_at_posted_margin() {
+    // Real-world fidelity: a 10x ETH long opened near $3000, then ETH crashes ~15%
+    // to $2550 (a genuine single-day move). At 10x a 15% adverse move is 150% of
+    // margin — the position is bankrupt. The trader must lose *exactly the posted
+    // margin*, never more; the close must not claw back unposted collateral.
+    let open_mkt = FakeMarket::new().with_bar("hyperliquid", "ETH", "3000");
+    let mut l = ledger_with("hyperliquid", "USDC", "1000");
+    let policy = strict_v1();
+    // size_usd 1000 @ 10x -> margin 100, open fee 0.5 -> USDC 899.5 after open.
+    execute_perp(&mut l, &open_mkt, &policy, &perp(PerpSide::Long, "1000", Some("10"), false));
+    assert_eq!(l.balance("hyperliquid", "USDC"), d("899.5"));
+
+    // ETH crashes to 2550; close the whole position into the crash.
+    let crash_mkt = FakeMarket::new().with_bar("hyperliquid", "ETH", "2550");
+    let out = execute_perp(&mut l, &crash_mkt, &policy, &perp(PerpSide::Short, "1000", None, true));
+    assert!(out.is_executed());
+    assert!(l.perp("hyperliquid", "ETH").is_none());
+
+    // Loss capped at the margin (+ the open fee already paid): USDC == 899.5.
+    // Before the fix the negative settlement (~-52) was credited, driving USDC to
+    // ~847.4 — a ~152 loss, i.e. more than the 100 of posted margin.
+    let usdc = l.balance("hyperliquid", "USDC");
+    assert_eq!(usdc, d("899.5"), "leveraged loss must cap at posted margin, was {usdc}");
+    assert!(usdc >= d("899"), "trader lost more than posted margin: {usdc}");
+}
+
+#[test]
+fn dust_sell_where_gas_exceeds_proceeds_is_rejected_not_credited() {
+    // Real-world fidelity: selling dust on an EVM chain where gas ($0.50) exceeds
+    // the trade proceeds (~$0.40). The sell must be rejected — not credit a
+    // negative `net`, which would mint phantom debt in the destination asset.
+    let market = FakeMarket::new().with_bar("base", "ETH", "2000").with_gas("base", "0.5");
+    let mut l = ledger_with("base", "ETH", "1");
+    let out = execute_swap(&mut l, &market, &strict_v1(), &swap("ETH", "USDC", "0.0002", "base"));
+    assert!(matches!(out, Execution::Rejected { .. }), "dust sell under gas should reject");
+    // Ledger unchanged: ETH not debited, no negative USDC minted.
+    assert_eq!(l.balance("base", "ETH"), d("1"));
+    assert_eq!(l.balance("base", "USDC"), Decimal::ZERO);
+}
+
+#[test]
 fn adding_same_side_increases_size_and_blends_entry() {
     let market = FakeMarket::new().with_bar("hyperliquid", "ETH", "2000");
     let mut l = ledger_with("hyperliquid", "USDC", "1000");
