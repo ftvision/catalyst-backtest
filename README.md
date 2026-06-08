@@ -97,6 +97,7 @@ commands, and the R2 upload step are documented in
 Design:
 
 - [System design](docs/system-design.md) — current (transitional) + target layout
+- [Production readiness](docs/production-readiness.md) — gap analysis & roadmap
 - [Data sources](docs/data-sources.md) — what we fetch and how to publish it
 - [Market-data storage](docs/market-data-storage.md) and
   [intervals (1h vs 4h)](docs/market-data-intervals.md)
