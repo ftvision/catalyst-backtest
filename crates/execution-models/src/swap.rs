@@ -12,7 +12,9 @@ use catalyst_simulation_policies::{ResolvedPolicy, SlippageModel};
 
 use crate::context::MarketContext;
 use crate::outcome::{Execution, Fill};
-use crate::pricing::{fee_usd, fill_price, gas_usd, is_stable, parse, Direction};
+use crate::pricing::{
+    apply_bps, fee_usd, gas_usd, is_stable, parse, reference_price, slippage_bps, Direction,
+};
 
 /// Constant-product (x·y=k) average execution price including price impact, given
 /// the trade `amount` and pool reserves. A buy spends `amount` quote and receives
@@ -37,7 +39,37 @@ fn swap_direction(cfg: &SwapConfig) -> Result<(Direction, &str), String> {
     }
 }
 
-/// Market swap: fill at the current bar (reference price + slippage).
+/// Resolve a swap's requested amount: the "all" sentinel spends the full balance;
+/// relative amounts are pre-resolved to absolute by the engine before execution.
+fn resolve_amount(ledger: &Ledger, cfg: &SwapConfig, venue: &str) -> Decimal {
+    if cfg.amount.is_all() {
+        ledger.balance(venue, &cfg.from_asset)
+    } else {
+        parse(cfg.amount.as_str())
+    }
+}
+
+/// Depth-aware price impact (#40): under `amm_price_impact` with pool reserves,
+/// fill at the constant-product average price (size-dependent); otherwise use
+/// `fallback` (the market reference+slippage, or a resting order's limit price).
+fn maybe_amm(
+    ctx: &dyn MarketContext,
+    policy: &ResolvedPolicy,
+    venue: &str,
+    base: &str,
+    dir: Direction,
+    amount: Decimal,
+    fallback: Decimal,
+) -> Decimal {
+    match (policy.slippage_model, ctx.pool_reserves(venue, base)) {
+        (SlippageModel::AmmPriceImpact, Some((rb, rq))) if !rb.is_zero() && !rq.is_zero() => {
+            amm_price(dir, amount, rb, rq)
+        }
+        _ => fallback,
+    }
+}
+
+/// Market swap: fill at the current bar (reference price + model slippage).
 pub fn execute_swap(
     ledger: &mut Ledger,
     ctx: &dyn MarketContext,
@@ -53,8 +85,21 @@ pub fn execute_swap(
         Some(b) => b,
         None => return Execution::rejected(format!("no price for {base} on {venue}")),
     };
+    let amount = resolve_amount(ledger, cfg, venue);
+    if amount.is_zero() {
+        return Execution::rejected(format!("nothing to swap from {}", cfg.from_asset));
+    }
     let next = ctx.next_bar(venue, base);
-    swap_at(ledger, ctx, policy, cfg, dir, base, fill_price(&bar, next.as_ref(), dir, policy))
+    let reference = reference_price(&bar, next.as_ref(), dir, policy);
+    // Trade size in base units, for the volume model's participation rate.
+    let base_amount = match dir {
+        Direction::Buy if !reference.is_zero() => amount / reference,
+        Direction::Buy => Decimal::ZERO,
+        Direction::Sell => amount,
+    };
+    let reference_fill = apply_bps(reference, dir, slippage_bps(policy, base_amount, bar.volume));
+    let price = maybe_amm(ctx, policy, venue, base, dir, amount, reference_fill);
+    swap_at(ledger, ctx, policy, cfg, dir, base, amount, price)
 }
 
 /// Execute a swap at an explicit fill `price` (used by the engine's resting
@@ -66,11 +111,17 @@ pub fn execute_swap_at(
     cfg: &SwapConfig,
     price: Decimal,
 ) -> Execution {
+    let venue = cfg.chain.as_str();
     let (dir, base) = match swap_direction(cfg) {
         Ok(x) => x,
         Err(e) => return Execution::rejected(e),
     };
-    swap_at(ledger, ctx, policy, cfg, dir, base, price)
+    let amount = resolve_amount(ledger, cfg, venue);
+    if amount.is_zero() {
+        return Execution::rejected(format!("nothing to swap from {}", cfg.from_asset));
+    }
+    let price = maybe_amm(ctx, policy, venue, base, dir, amount, price);
+    swap_at(ledger, ctx, policy, cfg, dir, base, amount, price)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -81,34 +132,13 @@ fn swap_at(
     cfg: &SwapConfig,
     dir: Direction,
     base: &str,
+    amount: Decimal,
     price: Decimal,
 ) -> Execution {
     let venue = cfg.chain.as_str();
     if price.is_zero() {
         return Execution::rejected(format!("zero price for {base} on {venue}"));
     }
-
-    // Resolve the requested amount (supporting the "all" sentinel). Relative
-    // amounts are resolved to absolute by the engine before execution.
-    let amount = if cfg.amount.is_all() {
-        ledger.balance(venue, &cfg.from_asset)
-    } else {
-        parse(cfg.amount.as_str())
-    };
-    if amount.is_zero() {
-        return Execution::rejected(format!("nothing to swap from {}", cfg.from_asset));
-    }
-
-    // Depth-aware price impact (#40): when the policy selects `amm_price_impact`
-    // and pool reserves are available for this series, fill at the constant-product
-    // average price (size-dependent) instead of the fixed-bps reference price.
-    let price = match (policy.slippage_model, ctx.pool_reserves(venue, base)) {
-        (SlippageModel::AmmPriceImpact, Some((rb, rq))) if !rb.is_zero() && !rq.is_zero() => {
-            amm_price(dir, amount, rb, rq)
-        }
-        _ => price,
-    };
-
     let gas = gas_usd(venue, ctx, policy);
 
     match dir {

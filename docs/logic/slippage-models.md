@@ -15,7 +15,7 @@ Applied in two places:
 | --- | --- | --- | --- | --- |
 | `fixed_bps` | `price · (1 ± bps/10000)` | no | any venue (CEX, perp, simple DEX proxy) | implemented |
 | `amm_price_impact` | constant-product avg from pool reserves | **yes** | on-chain AMM DEX (needs a reserves series) | implemented (**swap-only**) |
-| `volume_based` | `base_bps + coef·√(amount/volume)` (√-law) | **yes** | thin / volume-limited markets | **design decided (#137); not yet implemented — still behaves as `none`** |
+| `volume_based` | `base_bps + coef·√(amount/volume)` (√-law) | **yes** | thin / volume-limited markets | implemented (#137); falls back to `fixed_bps` w/o volume |
 | `none` | `price` (no haircut) | no | research / idealized | implemented |
 
 ## `fixed_bps` — flat adverse haircut
@@ -59,10 +59,9 @@ is constant-product (x·y=k):
 
 ## `volume_based` — participation-scaled impact
 
-> **Status: design decided (square-root law); implementation tracked in #137.**
-> Until it ships, `volume_based` still returns **zero** slippage (behaves as
-> `none`) — don't rely on it yet. The slippage comparison test asserts this
-> aliasing so the gap stays visible.
+> **Status: implemented (#137) — square-root law.** A trade pays more the bigger
+> its share of the bar's volume; falls back to `fixed_bps` when the bar has no
+> volume. Applies to swaps and perps.
 
 **Intended market:** thin / volume-constrained venues where the cost of a trade
 depends on how much of the available volume it consumes. The driver is the
@@ -114,12 +113,14 @@ identical; they diverge only for large trades.
 - Cost is only a `√` (an f64 round-trip on the `Decimal`, fine for a slippage
   estimate).
 
-**Behavior details (to implement):**
+**Behavior details:**
 - Falls back to **`fixed_bps`** when the bar has **no volume** (Dune-derived
   candles carry none; Binance/HL do) or zero volume — never silently zero.
-- `base_bps` is the policy's `slippage_bps`; `coef` is a model constant (and a
-  candidate future policy knob).
+- `base_bps` is the policy's `slippage_bps`; `coef` is the model constant
+  `VOLUME_IMPACT_COEF_BPS` (50 bps at 100% participation) — a candidate future
+  policy knob.
 - Applies to both swaps and perps (unlike `amm_price_impact`, which is swap-only).
+  For a buy/perp, the base-unit size is `notional / reference_price`.
 
 ## `none` — idealized
 
@@ -146,20 +147,25 @@ Buy **2000 USDC of ETH** into a **100 ETH / 200,000 USDC** pool (mid 2000):
 | Model | Fill price | ETH received | Why |
 | --- | --- | --- | --- |
 | `none` | 2000 | 1.0000 | reference, no haircut |
-| `volume_based` | 2000 | 1.0000 | **stub — aliases `none`** |
 | `fixed_bps` (10) | 2002 | 0.9990 | +10 bps flat |
+| `volume_based` | 2002 | 0.9990 | this bar has **no volume** → `fixed_bps` fallback |
 | `amm_price_impact` | 2020 | 0.9901 | `(200000+2000)/100` — depth impact |
 
-Adverse ordering for this size/pool: `none = volume_based < fixed_bps < amm_price_impact`.
-A larger trade widens the `amm` gap further while `fixed_bps` stays flat — that's
-the whole point of the depth-aware model.
+Adverse ordering for this size/pool: `none < fixed_bps = volume_based < amm_price_impact`.
+(With **volume** on the bar, `volume_based` rises above `fixed_bps` as the trade's
+participation grows — see the volume test below: $20k→2003, $500k→2007, $2M→2012
+into a 1000-ETH bar.) A larger trade widens the `amm` gap further while
+`fixed_bps` stays flat — that's the point of the depth-aware models.
 
 ## Tests (executable documentation)
 
 `crates/execution-models/tests/execution.rs`:
 - `slippage_models_produce_distinct_swap_fills` — the same DEX buy under all four
-  models, asserting the prices above (and that `volume_based` currently aliases
-  `none`).
+  models, asserting the prices above.
+- `volume_based_charges_more_for_a_larger_share_of_bar_volume` — same bar (1000
+  ETH volume); $20k/$500k/$2M buys fill at 2003/2007/2012 (sub-linear in size).
+- `volume_based_falls_back_to_fixed_bps_when_bar_has_no_volume` — 2002, like
+  `fixed_bps`, never silently zero.
 - `amm_price_impact_falls_back_to_fixed_bps_for_perps` — a perp opens at 2002
   under both `fixed_bps` and `amm_price_impact` (the depth model is swap-only, so
   it falls back to bps — a real cost, not zero).

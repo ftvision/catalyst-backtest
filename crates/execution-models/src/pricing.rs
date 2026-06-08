@@ -46,16 +46,35 @@ pub fn reference_price(
     }
 }
 
-/// Apply slippage adverse to the trader: buys fill higher, sells fill lower.
-pub fn apply_slippage(price: Decimal, dir: Direction, policy: &ResolvedPolicy) -> Decimal {
-    let bps = match policy.slippage_model {
+/// Per-base-unit impact coefficient (bps) for the volume model at 100%
+/// participation. A model constant for now; a candidate future policy knob.
+const VOLUME_IMPACT_COEF_BPS: i64 = 50;
+
+/// Effective slippage in bps for the active model. `fixed_bps` (and the
+/// `amm_price_impact` fallback) use the configured bps; `volume_based` scales it
+/// by participation `p = base_amount / bar_volume` via the square-root law
+/// (`bps + coef·√p`), falling back to the configured bps when the bar has no
+/// volume; `none` is zero. See docs/logic/slippage-models.md.
+pub fn slippage_bps(policy: &ResolvedPolicy, base_amount: Decimal, bar_volume: Option<Decimal>) -> Decimal {
+    let base = parse(&policy.slippage_bps);
+    match policy.slippage_model {
         // amm_price_impact's depth model is applied from pool reserves in the swap
         // path; where reserves don't apply (perps, or swaps without a reserves
         // series) it falls back to the configured bps rather than charging nothing.
-        SlippageModel::FixedBps | SlippageModel::AmmPriceImpact => parse(&policy.slippage_bps),
-        // volume_based isn't modeled yet (#137); none is a deliberate zero.
-        SlippageModel::VolumeBased | SlippageModel::None => Decimal::ZERO,
-    };
+        SlippageModel::FixedBps | SlippageModel::AmmPriceImpact => base,
+        SlippageModel::VolumeBased => match bar_volume {
+            Some(v) if v > Decimal::ZERO && base_amount > Decimal::ZERO => {
+                base + Decimal::from(VOLUME_IMPACT_COEF_BPS) * dec_sqrt(base_amount / v)
+            }
+            // No (or zero) volume -> fall back to fixed bps, never silently zero.
+            _ => base,
+        },
+        SlippageModel::None => Decimal::ZERO,
+    }
+}
+
+/// Apply a bps haircut adverse to the trader: buys fill higher, sells fill lower.
+pub fn apply_bps(price: Decimal, dir: Direction, bps: Decimal) -> Decimal {
     let factor = bps / Decimal::from(BPS);
     match dir {
         Direction::Buy => price * (Decimal::ONE + factor),
@@ -63,14 +82,12 @@ pub fn apply_slippage(price: Decimal, dir: Direction, policy: &ResolvedPolicy) -
     }
 }
 
-/// The fill price: reference price (current + optional next bar) plus slippage.
-pub fn fill_price(
-    bar: &Bar,
-    next: Option<&Bar>,
-    dir: Direction,
-    policy: &ResolvedPolicy,
-) -> Decimal {
-    apply_slippage(reference_price(bar, next, dir, policy), dir, policy)
+/// √ on `Decimal` via an f64 round-trip (deterministic; precise enough for a
+/// slippage estimate).
+fn dec_sqrt(x: Decimal) -> Decimal {
+    use rust_decimal::prelude::*;
+    let f = x.to_f64().unwrap_or(0.0).max(0.0).sqrt();
+    Decimal::from_f64_retain(f).unwrap_or(Decimal::ZERO)
 }
 
 /// Trading fee in USD on a notional.
