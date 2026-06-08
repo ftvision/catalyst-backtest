@@ -622,6 +622,8 @@ export function MarketReplayChart({
         {eventRails.map((rail) => (
           <div
             key={rail.id}
+            data-event-id={rail.id}
+            data-event-status={rail.status}
             className={rail.selected ? "chart-event-rail selected" : "chart-event-rail"}
             style={
               {
