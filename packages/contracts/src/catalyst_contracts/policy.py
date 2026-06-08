@@ -18,7 +18,7 @@ class BalancePolicy(StrictModel):
 
 
 class SlippagePolicy(StrictModel):
-    model: Literal["fixed_bps", "volume_based", "none"] = "fixed_bps"
+    model: Literal["fixed_bps", "volume_based", "amm_price_impact", "none"] = "fixed_bps"
     bps: Decimal = "10"
 
 
