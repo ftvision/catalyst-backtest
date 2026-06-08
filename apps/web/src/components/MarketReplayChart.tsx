@@ -264,6 +264,7 @@ export function MarketReplayChart({
   granularityMode?: GranularityMode;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const overlayRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const resetRangeRef = useRef<() => void>(() => undefined);
   const [eventRails, setEventRails] = useState<EventRail[]>([]);
@@ -309,6 +310,28 @@ export function MarketReplayChart({
       return coordinateTime;
     };
     const fallbackCandlesForGranularity = () => candlesForGranularity(activeGranularity);
+    const plotAreaBounds = () => {
+      const row = container.querySelector(".tv-lightweight-charts table tr") as HTMLTableRowElement | null;
+      const cells = row ? Array.from(row.cells) : [];
+      const plotCell =
+        cells.length >= 3
+          ? cells[1]
+          : cells.reduce<HTMLTableCellElement | undefined>(
+              (widest, cell) => (cell.clientWidth > (widest?.clientWidth ?? 0) ? cell : widest),
+              undefined,
+            );
+
+      if (!plotCell || !overlayRef.current) {
+        return { left: 0, width: container.clientWidth };
+      }
+
+      const plotRect = plotCell.getBoundingClientRect();
+      const overlayRect = overlayRef.current.getBoundingClientRect();
+      return {
+        left: plotRect.left - overlayRect.left,
+        width: plotRect.width,
+      };
+    };
 
     const chart: IChartApi = createChart(container, {
       height: container.clientHeight,
@@ -523,6 +546,7 @@ export function MarketReplayChart({
     const updateEventRails = () => {
       if (disposed) return;
 
+      const plotBounds = plotAreaBounds();
       const visibleEvents = compact && selectedEvent ? [selectedEvent] : events;
       const nextRails = visibleEvents.flatMap((event, index) => {
         const fallbackCandles = fallbackCandlesForGranularity();
@@ -539,7 +563,7 @@ export function MarketReplayChart({
 
         const coordinate = chart.timeScale().timeToCoordinate(coordinateTime);
         if (coordinate === null) return [];
-        if (coordinate < 0 || coordinate > container.clientWidth) return [];
+        if (coordinate < 0 || coordinate > plotBounds.width) return [];
         const priceCoordinate =
           event.observedPrice === undefined || !Number.isFinite(event.observedPrice)
             ? null
@@ -552,7 +576,7 @@ export function MarketReplayChart({
         return [
           {
             id: event.id,
-            left: coordinate,
+            left: plotBounds.left + coordinate,
             top: dotTop,
             label: event.kind,
             node: event.node,
@@ -618,7 +642,7 @@ export function MarketReplayChart({
           resetRange={resetRange}
         />
       ) : null}
-      <div className="chart-event-overlay" aria-hidden="true">
+      <div ref={overlayRef} className="chart-event-overlay" aria-hidden="true">
         {eventRails.map((rail) => (
           <div
             key={rail.id}
