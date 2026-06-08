@@ -431,12 +431,13 @@ fn amm_sell_applies_price_impact_from_reserves() {
 }
 
 #[test]
-fn amm_falls_back_to_reference_without_reserves() {
-    // amm policy but no pool reserves present -> behaves like the reference fill.
+fn amm_falls_back_to_fixed_bps_without_reserves() {
+    // amm policy but no pool reserves present -> falls back to the configured bps
+    // (a real cost), not zero. strict_v1 default is 10 bps -> 2002 on a 2000 close.
     let market = FakeMarket::new().with_bar("base", "ETH", "2000");
     let mut l = ledger_with("base", "USDC", "5000");
     let out = execute_swap(&mut l, &market, &amm_policy(), &swap("USDC", "ETH", "100", "base"));
-    assert_eq!(out.fill().unwrap().price, Some(d("2000"))); // close, no slippage applied
+    assert_eq!(out.fill().unwrap().price, Some(d("2002")));
 }
 
 // --- slippage models: one trade, four models, distinct fills (executable doc) ---
@@ -481,9 +482,10 @@ fn slippage_models_produce_distinct_swap_fills() {
 }
 
 #[test]
-fn amm_price_impact_is_a_noop_for_perps() {
-    // amm_price_impact is swap-only (it reads pool reserves). A perp under it gets
-    // NO slippage (fills at the reference), unlike fixed_bps. Documented difference.
+fn amm_price_impact_falls_back_to_fixed_bps_for_perps() {
+    // amm_price_impact's depth model is swap-only (it reads pool reserves). A perp
+    // under it falls back to the configured bps (a real cost), NOT zero slippage —
+    // so it matches fixed_bps here, both entering at 2002 (#136).
     let market = FakeMarket::new().with_bar("hyperliquid", "ETH", "2000");
 
     let mut l_fixed = ledger_with("hyperliquid", "USDC", "1000");
@@ -494,6 +496,5 @@ fn amm_price_impact_is_a_noop_for_perps() {
     let mut l_amm = ledger_with("hyperliquid", "USDC", "1000");
     execute_perp(&mut l_amm, &market, &slip(SlippageModel::AmmPriceImpact, "10"),
                  &perp(PerpSide::Long, "500", Some("5"), false));
-    // no reserves on a perp venue + swap-only model => fills at the reference 2000.
-    assert_eq!(l_amm.perp("hyperliquid", "ETH").unwrap().entry_price, d("2000"));
+    assert_eq!(l_amm.perp("hyperliquid", "ETH").unwrap().entry_price, d("2002"));
 }

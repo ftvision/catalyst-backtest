@@ -49,12 +49,12 @@ pub fn reference_price(
 /// Apply slippage adverse to the trader: buys fill higher, sells fill lower.
 pub fn apply_slippage(price: Decimal, dir: Direction, policy: &ResolvedPolicy) -> Decimal {
     let bps = match policy.slippage_model {
-        SlippageModel::FixedBps => parse(&policy.slippage_bps),
-        // amm_price_impact is applied from pool reserves in the swap model, not as
-        // a flat bps here; volume_based isn't modeled yet.
-        SlippageModel::VolumeBased | SlippageModel::AmmPriceImpact | SlippageModel::None => {
-            Decimal::ZERO
-        }
+        // amm_price_impact's depth model is applied from pool reserves in the swap
+        // path; where reserves don't apply (perps, or swaps without a reserves
+        // series) it falls back to the configured bps rather than charging nothing.
+        SlippageModel::FixedBps | SlippageModel::AmmPriceImpact => parse(&policy.slippage_bps),
+        // volume_based isn't modeled yet (#137); none is a deliberate zero.
+        SlippageModel::VolumeBased | SlippageModel::None => Decimal::ZERO,
     };
     let factor = bps / Decimal::from(BPS);
     match dir {

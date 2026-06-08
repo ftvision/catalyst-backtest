@@ -88,8 +88,9 @@ fn amm_price_impact_uses_pool_reserves() {
 }
 
 #[test]
-fn amm_without_liquidity_falls_back_to_reference() {
-    // same policy, but no pool series -> reference price (2000), no impact
+fn amm_without_liquidity_falls_back_to_fixed_bps() {
+    // same policy, but no pool series -> falls back to the configured bps
+    // (strict_v1's 10 bps), a real cost rather than zero slippage (#136).
     let trace = run(&SimulationInput {
         graph: buy_graph(),
         config: config(),
@@ -97,5 +98,5 @@ fn amm_without_liquidity_falls_back_to_reference() {
         market_data: bundle(false),
     })
     .unwrap();
-    assert_eq!(fill_price(&trace), 2000.0);
+    assert_eq!(fill_price(&trace), 2002.0);
 }
