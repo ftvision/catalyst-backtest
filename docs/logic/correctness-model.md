@@ -28,9 +28,32 @@ loop):
    downstream actions *inline, in this same tick*.
 8. **Snapshot equity** and record the portfolio.
 
-Why the order matters: accrual happens *before* actions (a position decided this
-tick is not yet eligible for this tick's accrual), liquidations are checked before
-new risk is added, and resting orders fill before fresh market orders.
+⚠️ **This order is itself a correctness defect (#116).** A signal-driven market
+order is **executed inline in step 7, in the same tick it was decided**, and the
+fill is *booked at the decision bar* (the `action_executed` event is stamped with
+the current tick's `ts`, `engine.rs:653-654`). Under `next_open` the engine only
+changes the fill *price* to the next bar's open — it does **not** defer the fill —
+so the position is added to the ledger at bar *N*, then the step-8 snapshot marks
+it at bar *N*'s **close** (steps 4 and 8 both run on bar *N*). That injects
+phantom entry-bar P&L and conflates *decision time* with *fill time*.
+
+The **correct** order defers a signal-driven order to the bar it actually fills:
+a signal evaluated at bar *N*'s close should **queue** an order that fills at bar
+*N+1*'s **open** (like a resting order), so a position only appears once it has
+filled, and that bar's accrual / liquidation / snapshot see only positions that
+are really held:
+
+```
+fill orders queued from bar N-1 (at bar N's open) + resting limits
+  → accrue funding/yield → check liquidations
+  → evaluate signals on bar N → *queue* orders for bar N+1
+  → snapshot
+```
+
+(Same-bar selections like `close`/`mid` would still fill in-bar by design — that's
+the separate, deliberate same-bar look-ahead of those profiles, #122.) Until
+#116 lands, treat the per-tick order above as **descriptive of a buggy engine**,
+not as the intended semantics.
 
 ## Correctness invariants
 
