@@ -48,12 +48,12 @@ is constant-product (x·y=k):
 - **Choose it when:** backtesting DEX swaps where size vs. pool depth matters —
   this is the only model that charges a whale more than a minnow.
 - **Caveats (important):**
-  1. **Swap-only.** A *perp* under `amm_price_impact` gets **no** slippage —
-     perps don't read reserves, and `apply_slippage` returns zero for this model.
-     (See the perp test below.) For perps, use `fixed_bps`.
-  2. **Falls back to the reference price (no haircut)** when reserves are absent
-     for the series — so without a `liquidity` series it silently behaves like
-     `none`.
+  1. **Swap-only depth model; falls back to `fixed_bps` elsewhere.** A *perp*
+     under `amm_price_impact` doesn't read reserves, so it falls back to the
+     configured `slippage_bps` (a real cost), not zero (#136). For perps it's
+     therefore equivalent to `fixed_bps`.
+  2. **Falls back to `fixed_bps`** when reserves are absent for the series — so
+     without a `liquidity` series it charges the configured bps, not nothing.
   3. Models a single constant-product pool — not routed/multi-hop fills,
      concentrated liquidity (Uniswap v3), or MEV/sandwich effects.
 
@@ -81,7 +81,7 @@ Zero slippage; fills exactly at the reference price.
 | --- | --- |
 | DEX swap, size matters vs. pool depth | `amm_price_impact` (with a reserves series) |
 | CEX/perp, or a simple conservative proxy on any venue | `fixed_bps` (tune bps to liquidity) |
-| Perp (any) | `fixed_bps` — `amm_price_impact` is a no-op here |
+| Perp (any) | `fixed_bps` (`amm_price_impact` falls back to it for perps) |
 | Isolate strategy logic / idealized upper bound | `none` |
 | Thin/volume-limited market | *(`volume_based` once implemented; today falls back to `none`)* |
 
@@ -106,7 +106,8 @@ the whole point of the depth-aware model.
 - `slippage_models_produce_distinct_swap_fills` — the same DEX buy under all four
   models, asserting the prices above (and that `volume_based` currently aliases
   `none`).
-- `amm_price_impact_is_a_noop_for_perps` — a perp opens at 2002 under `fixed_bps`
-  but at 2000 (no slippage) under `amm_price_impact`, proving the swap-only scope.
-- `amm_buy_applies_price_impact_from_reserves` / `amm_falls_back_to_reference_without_reserves`
-  — the reserve-driven path and its no-reserves fallback.
+- `amm_price_impact_falls_back_to_fixed_bps_for_perps` — a perp opens at 2002
+  under both `fixed_bps` and `amm_price_impact` (the depth model is swap-only, so
+  it falls back to bps — a real cost, not zero).
+- `amm_buy_applies_price_impact_from_reserves` / `amm_falls_back_to_fixed_bps_without_reserves`
+  — the reserve-driven path and its no-reserves `fixed_bps` fallback.
