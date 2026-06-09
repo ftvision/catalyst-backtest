@@ -95,9 +95,12 @@ fn g19_funding_carry_opens_both_legs() {
 fn g24_stop_loss_exits_to_flat() {
     let trace = run(&SimulationInput {
         graph: graph("g24_stop_loss.json"),
-        config: config("base", "1000", 2),
+        config: config("base", "1000", 3),
         policy: policy("crossing"),
-        market_data: bundle("base", &["2000", "1600"], json!([]), json!([])),
+        // Under next_open the initial open fills on bar 1; the stop crosses below
+        // 1700 on bar 1 and its sell fills on bar 2 — so a 3-bar run (the last bar
+        // still below the stop, no new crossing) is needed for both legs to land.
+        market_data: bundle("base", &["2000", "1600", "1600"], json!([]), json!([])),
     })
     .unwrap();
     assert_eq!(count(&trace, "action_executed"), 2, "open + stop-out");

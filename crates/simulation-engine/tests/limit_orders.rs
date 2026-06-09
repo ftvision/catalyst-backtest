@@ -197,8 +197,12 @@ fn limit_expires_after_n_bars() {
 
 #[test]
 fn reduce_only_limit_take_profit_fills() {
-    // Open a market long on bar 0, and rest a take-profit (reduce-only) sell limit
-    // at 2200. Bar 1 rallies to a high of 2300, touching it -> the position closes.
+    // Open a market long, then chain a take-profit (reduce-only) sell limit at 2200.
+    // Under next_open (#116) the market entry decided on bar 0 fills on bar 1's open,
+    // and only THEN — once the position exists — can the reduce-only take-profit be
+    // placed (a reduce-only limit with no open position is rejected). The TP rests
+    // from bar 1 and is eligible from bar 2, where the rally to a high of 2300
+    // touches it and the position closes at 2200.
     let g = graph(json!({
         "nodes": [
             {"id": "open", "kind": "action", "subtype": "perp_order",
@@ -206,21 +210,25 @@ fn reduce_only_limit_take_profit_fills() {
                         "chain": "hyperliquid", "order_type": "market", "reduce_only": false}},
             perp_limit_graph("short", "2200", true)
         ],
-        "edges": []
+        "edges": [{"from": "open", "to": "tp"}]
     }));
     let input = SimulationInput {
         graph: g,
-        config: config("hyperliquid", "1000", 2),
+        config: config("hyperliquid", "1000", 3),
         policy: strict_policy(),
         market_data: ohlc_bundle(
             "hyperliquid",
-            &[("2000", "2010", "1990", "2000"), ("2100", "2300", "2090", "2250")],
+            &[
+                ("2000", "2010", "1990", "2000"),
+                ("2100", "2110", "2090", "2100"),
+                ("2200", "2300", "2190", "2250"),
+            ],
         ),
     };
     let trace = run(&input).unwrap();
-    assert_eq!(count(&trace, "action_executed"), 1); // the market open
-    assert_eq!(count(&trace, "order_placed"), 1); // the take-profit
-    assert_eq!(count(&trace, "order_filled"), 1); // touched at 2200
+    assert_eq!(count(&trace, "action_executed"), 1); // the market open (fills on bar 1)
+    assert_eq!(count(&trace, "order_placed"), 1); // the take-profit (placed on bar 1)
+    assert_eq!(count(&trace, "order_filled"), 1); // touched at 2200 on bar 2
     let filled = first(&trace, "order_filled");
     assert_eq!(detail(&filled, "price"), "2200");
     assert!(trace.final_portfolio.perp_positions.is_empty()); // closed out
