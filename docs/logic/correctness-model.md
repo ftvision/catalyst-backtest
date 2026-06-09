@@ -113,7 +113,7 @@ margin and unrealized PnL + yield principal and accrued (see
 [portfolio-valuation](portfolio-valuation.md)).
 - ⚠️ **Tracked limitations:** an unpriced non-stable holding (cash or yield)
   is silently dropped from equity and a perp without a mark loses its PnL (#119);
-  the price fallback is venue-blind and unbounded-stale (#119); cumulative
+  the venue-scoped carry-forward is unbounded-stale (#119); cumulative
   `total_yield_usd` / `interest_usd` carry asset units for non-stables (#166).
 
 ## What is correct today vs. tracked
@@ -127,7 +127,8 @@ margin and unrealized PnL + yield principal and accrued (see
 | Policy contract accepts every model the engine supports | ✅ fixed (#123) |
 | `next_open` market orders deferred to fill+book on the fill bar (no phantom entry P&L) | ✅ fixed (#116) |
 | Same-bar look-ahead under `close`/`open`/`mid` selection | ⚠️ open (#122) |
-| Inconsistent/stale/venue-blind price lookups; equity drops unpriced holdings | ⚠️ open (#119) |
+| Venue-scoped position marking (no cross-venue price borrowing) | ✅ fixed (#119(a)) |
+| Staleness bound, unpriced-leg warning, sizing unification, same-tick snapshot | ⚠️ open (#119(b-e)) |
 | Non-stable yield positions marked to price; gas converted to asset units | ✅ fixed (#115) |
 | `total_yield_usd` / `interest_usd` in asset units for non-stables | ⚠️ open (#166) |
 | Liquidation marks the intra-bar wick | ✅ fixed (#120 wick half) |

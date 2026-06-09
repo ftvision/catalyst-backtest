@@ -260,6 +260,49 @@ fn issue_119_unpriced_spot_silently_dropped() {
     );
 }
 
+/// INTENDED SEMANTICS of the (a) fix, pinned: a holding on a venue with NO
+/// candles of its own is EXCLUDED from equity even when another venue prices
+/// the same symbol. Pre-fix, the venue-blind `price_any` fallback would borrow
+/// venueA's 1000 and count the venueB ETH at $1000; post-fix venueB's ETH
+/// contributes 0 (still silently — surfacing it is sub-bug (c)).
+///
+/// Note the same window cannot arise for a *yield* position: a non-stable
+/// yield deposit is rejected without an exact bar on its chain (#115), and the
+/// venue-scoped carry-forward keeps it priced afterwards.
+#[test]
+fn issue_119_cross_venue_holding_excluded_not_borrowed() {
+    let market: MarketDataBundle = serde_json::from_value(json!({
+        "schema_version": "catalyst.backtest.market_data_bundle.v1",
+        "interval": "1h", "start": ts(0), "end": ts(2),
+        "candles": [
+            // ETH is priced ONLY on venueA. venueB has no candles at all.
+            {"venue": "venueA", "symbol": "ETH", "quote": "USD",
+             "points": [pt(0, "1000"), pt(1, "1000")]}
+        ],
+        "funding": [], "gas": [], "yields": [], "providers": [], "warnings": []
+    }))
+    .unwrap();
+
+    let config: BacktestConfig = serde_json::from_value(json!({
+        "start": ts(0), "end": ts(2), "interval": "1h",
+        "initial_portfolio": {"venueB": {"ETH": "1", "USDC": "500"}}
+    }))
+    .unwrap();
+
+    let input = SimulationInput { graph: inert_graph(), config, policy: research_policy(), market_data: market };
+    let trace = run(&input).unwrap();
+
+    assert_eq!(trace.snapshots.len(), 2);
+    for (i, snap) in trace.snapshots.iter().enumerate() {
+        assert_eq!(
+            snap.equity_usd.to_string(),
+            "500",
+            "#119(a) semantics: venueB's ETH must NOT borrow venueA's price; \
+             equity at ts{i} is the 500 USDC only"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // (d) pct_portfolio sizing rejected on a gap bar even though equity prices it.
 // ---------------------------------------------------------------------------
