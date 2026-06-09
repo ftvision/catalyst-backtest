@@ -1,24 +1,21 @@
-//! Issue #116: with `next_open` (strict_v1) fills, the position and cash debit are
-//! booked at the DECISION bar (bar 0) instead of the FILL bar (bar 1). This injects
-//! a phantom entry-bar P&L into the equity curve because the just-bought ETH is marked
-//! at close_0 even though it was acquired at open_1.
+//! Issue #116 (FIXED): with `next_open` (strict_v1) fills, a market order decided on
+//! bar N is now DEFERRED and booked at the FILL bar (bar N+1's open), not the
+//! decision bar. This removes the phantom entry-bar P&L that arose from marking the
+//! just-bought ETH at close_N even though it was acquired at open_{N+1}.
 //!
-//! Verdict per test (mode: demonstrate, bug PRESENT in current code):
-//! - issue_116_entry_bar_books_position_one_bar_early: PRESENT. Pins the buggy bar-0
-//!   ledger (ETH already present, USDC already debited). Correct: no fill on bar 0.
-//! - issue_116_entry_bar_equity_has_phantom_pnl: PRESENT. Pins the buggy bar-0 equity
-//!   (~975.21). Correct: 1000 (untouched cash).
+//! Verdict per test (mode: regression guard, bug FIXED in current code):
+//! - issue_116_entry_bar_books_position_one_bar_early: bar-0 ledger is untouched (no
+//!   ETH, USDC == 1000); the position/debit land on bar 1.
+//! - issue_116_entry_bar_equity_has_phantom_pnl: bar-0 equity == 1000 (no phantom mark).
 //! - issue_116_fill_bar_equity_is_correct_reference: ANCHOR. Bar-1 numbers and the fill
-//!   price are already correct; this passes before and after the fix.
+//!   price were always correct; this passes before and after the fix.
 //!
-//! SPEC (fail by default) — correct post-fix behavior:
-//! The three `issue_116_spec_*` tests below assert the CORRECT post-fix
-//! execution-timing semantics (an action decided on bar N is booked at bar N+1's
-//! OPEN; a signal firing on the LAST bar does NOT execute in strict mode because
-//! there is no next bar to fill against without look-ahead). The current (unfixed)
-//! engine VIOLATES these, so these tests FAIL in a normal `cargo test` run today —
-//! that red is the intentional, visible record that the logic is wrong. They turn
-//! green once #116 is fixed (next_open fills deferred to the fill bar).
+//! SPEC — correct execution-timing semantics (now PASSING):
+//! The three `issue_116_spec_*` tests assert that an action decided on bar N is booked
+//! at bar N+1's OPEN, and that a signal firing on the LAST bar does NOT execute in
+//! strict mode (no next bar to fill against without look-ahead). These were the
+//! red-by-default spec before the fix; they are green now that next_open fills are
+//! deferred to the fill bar.
 
 use std::collections::BTreeMap;
 
@@ -96,65 +93,51 @@ fn run_buy() -> SimulationTrace {
     .unwrap()
 }
 
-/// Issue #116 (PRESENT): the swap decided on bar 0 fills at bar 1's open (2102.1),
-/// yet the engine books the ETH position and the cash debit into the bar-0 snapshot.
-///
-/// The values asserted below are the CURRENT (INCORRECT) behavior. Correct behavior:
-/// on the decision bar no fill has occurred, so balances["base"] should have no "ETH"
-/// (or ETH == 0) and USDC should remain at the full initial 1000. The position and
-/// debit must appear only on snapshots[1] (the fill bar).
+/// Issue #116 (FIXED — regression guard): the swap decided on bar 0 fills at bar 1's
+/// open (2102.1), and the engine now defers the booking to the fill bar. On the
+/// decision bar (bar 0) no fill has occurred, so `balances["base"]` holds no `ETH`
+/// and `USDC` is the full initial 1000. The position and debit appear only on
+/// snapshots[1] (the fill bar). Before the #116 fix this bar-0 snapshot wrongly
+/// carried ETH == 0.2378573807… and USDC == 499.5.
 #[test]
 fn issue_116_entry_bar_books_position_one_bar_early() {
     let trace = run_buy();
     let b0 = trace.snapshots[0].portfolio.as_ref().unwrap();
     let base0 = &b0.balances["base"];
 
-    // BUG: ETH already present on the decision bar (should be absent / zero).
+    // FIXED: no ETH on the decision bar — the fill is deferred to bar 1's open.
     assert_eq!(
-        base0.get("ETH").map(|d| d.to_string()).as_deref(),
-        Some("0.2378573807145235716664288093"),
-        "issue #116: ETH position booked on bar 0 (decision bar) is INCORRECT; \
-         on bar 0 no fill has occurred so ETH should be absent/zero, the position \
-         belongs on bar 1 (the fill bar)"
+        base0.get("ETH").map(|d| d.to_string()),
+        None,
+        "issue #116: bar-0 (decision bar) must hold no ETH — the position belongs on \
+         the fill bar (bar 1). Pre-fix the engine wrongly booked it on bar 0."
     );
-    // BUG: cash already debited (500 notional + 0.25 fee + 0.25 gas) on the decision bar.
+    // FIXED: cash untouched on the decision bar — nothing is debited until bar 1.
     assert_eq!(
-        base0["USDC"].to_string(),
-        "499.5",
-        "issue #116: USDC debited on bar 0 is INCORRECT; it should still be the full \
-         initial 1000 until the fill on bar 1"
-    );
-    // Make the discrepancy explicit: this is NOT the correct deferred-booking value.
-    assert_ne!(
         base0["USDC"].to_string(),
         "1000",
-        "issue #116: bar-0 USDC differs from the correct untouched 1000"
+        "issue #116: bar-0 (decision bar) USDC must be the full initial 1000 — the \
+         500 notional + 0.25 fee + 0.25 gas debit lands on the fill bar (bar 1). \
+         Pre-fix the engine wrongly debited to 499.5 on bar 0."
     );
 }
 
-/// Issue #116 (PRESENT): phantom entry-bar P&L. Bar-0 equity marks the just-bought ETH
-/// at close_0 = 2000 even though it was acquired at open_1 = 2102.1, injecting a
-/// fictitious (2000 - 2102.1) * 0.2378573807... = -24.2852 loss into the equity curve.
-///
-/// The asserted value is CURRENT (INCORRECT). Correct bar-0 equity = 1000 (the unspent
-/// initial cash, with no ETH and no fees/gas booked yet).
+/// Issue #116 (FIXED — regression guard): no phantom entry-bar P&L. With the fill
+/// deferred to bar 1, the bar-0 equity is exactly the unspent initial cash (1000) —
+/// no ETH is marked, no fees/gas are booked. Before the fix, bar-0 equity was
+/// ~975.21 because the just-"bought" ETH was marked at close_0 = 2000 even though it
+/// was acquired at open_1 = 2102.1, injecting a fictitious
+/// (2000 - 2102.1) * 0.2378573807… = -24.2852 loss into the equity curve.
 #[test]
 fn issue_116_entry_bar_equity_has_phantom_pnl() {
     let trace = run_buy();
 
-    // BUG: bar-0 equity = 0.2378573807...*2000 (mark at close_0) + 499.5 USDC.
+    // FIXED: bar-0 equity = the untouched initial cash, no phantom mark.
     assert_eq!(
         trace.snapshots[0].equity_usd.to_string(),
-        "975.2147614290471433328576186",
-        "issue #116: bar-0 equity ~975.21 is INCORRECT; it carries a phantom \
-         -24.2852 loss from marking unfilled ETH at close_0. Correct bar-0 equity \
-         is 1000 (unspent initial cash)"
-    );
-    // Make the discrepancy explicit against the correct deferred value.
-    assert_ne!(
-        trace.snapshots[0].equity_usd.to_string(),
         "1000",
-        "issue #116: bar-0 equity differs from the correct 1000 by the phantom entry-bar P&L"
+        "issue #116: bar-0 equity must be 1000 (unspent initial cash). Pre-fix it was \
+         ~975.21, carrying a phantom -24.2852 loss from marking unfilled ETH at close_0."
     );
 }
 

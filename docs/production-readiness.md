@@ -89,7 +89,7 @@ Tiers 0–1 are the gap between *demo* and *a tool a strategist would trust*; ti
 ## Issue index
 
 **Tier 0 — correctness (must-fix):**
-- #116 next_open fills booked at the decision bar (phantom entry-bar P&L)
+- #116 next_open market orders deferred to fill+book on the fill bar (no phantom entry-bar P&L) — **fixed**
 - #117 leveraged perp loss not capped at posted margin
 - #118 accrual uses static `interval_secs` vs a gapped tick grid
 - #119 inconsistent price lookups misvalue equity/funding & reject sizing on gaps
