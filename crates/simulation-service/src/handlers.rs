@@ -174,7 +174,7 @@ pub async fn get_metadata(State(state): State<AppState>, Path(id): Path<String>)
             "id": j.id, "graph_hash": j.graph_hash, "status": j.status,
             "created_at": j.created_at, "started_at": j.started_at, "finished_at": j.finished_at,
             "config": { "start": j.start, "end": j.end, "interval": j.interval },
-            "resolved_policy": support::resolved_policy_json(&j.policy_profile),
+            "resolved_policy": support::executed_policy_json(j.trace.as_ref(), &j.policy_profile),
             "data_coverage": j.data_coverage, "warnings": j.warnings, "summary": j.summary,
         }))
         .into_response(),

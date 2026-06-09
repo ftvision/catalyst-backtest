@@ -83,7 +83,11 @@ str_enum!(
 
 str_enum!(
     /// What happens when required market data is missing.
-    MissingRequired { Fail, SkipTick, ForwardFill }
+    ///
+    /// `Warn` (warn-and-continue on the data-driven tick grid) and `Fail` are
+    /// implemented. `SkipTick` and `ForwardFill` are rejected by [`validate`]
+    /// until they do what they say (#159).
+    MissingRequired { Fail, Warn, SkipTick, ForwardFill }
 );
 
 str_enum!(
@@ -107,8 +111,10 @@ str_enum!(
 );
 
 str_enum!(
-    /// How yield positions accrue.
-    YieldAccrual { SimpleApr, CompoundApy, ProtocolIndex }
+    /// How yield positions accrue. `None` disables yield accrual (symmetric
+    /// with [`Funding::None`]); `ProtocolIndex` is rejected by [`validate`]
+    /// until implemented (#164).
+    YieldAccrual { SimpleApr, CompoundApy, ProtocolIndex, None }
 );
 
 /// A fully resolved policy: every knob populated, ready for the engine.

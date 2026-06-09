@@ -16,12 +16,12 @@ Two independent enums in the resolved policy
 | Knob | Variants | Meaning (as named) | Implemented? |
 | --- | --- | --- | --- |
 | `insufficient_balance` | `reject` | refuse the action, leave balances unchanged | **yes** |
-| | `partial_fill` | fill as much as the balance covers | **no** (no engine code path) |
-| | `clamp_to_available` | shrink the trade to the available balance | **no** (no engine code path) |
+| | `partial_fill` | fill as much as the balance covers | **no — rejected at validation** (#144) |
+| | `clamp_to_available` | shrink the trade to the available balance | **no — rejected at validation** (#144) |
 | | `allow_negative` | permit the balance to go negative | **yes** (disables the ledger's overdraw guard) |
 | `partial_fills` | `none` | actions are all-or-nothing | **yes** (the only real behavior) |
-| | `allow_if_configured` | partial fill allowed when other knobs ask for it | **no** (inert flag) |
-| | `always_allow` | always permit partial fills | **no** (inert flag) |
+| | `allow_if_configured` | partial fill allowed when other knobs ask for it | **no — rejected at validation** (#144) |
+| | `always_allow` | always permit partial fills | **no — rejected at validation** (#144) |
 
 What the engine actually does, end to end:
 
@@ -48,17 +48,12 @@ flips the ledger guard. The engine reads it once at
 `crates/simulation-engine/src/engine.rs:201-202`
 (`allow_negative = policy.insufficient_balance == InsufficientBalance::AllowNegative`)
 and threads the boolean into `initial_ledger` / `Ledger::with_initial`. The
-`partial_fill` and `clamp_to_available` variants are **never matched anywhere**
-in `simulation-engine` or `execution-models` — they fall through to the same
-reject behavior as `reject`, because nothing shrinks the order before `debit`
-runs.
-
-`partial_fills` is wholly a **stub**: `PartialFills` is read by nothing except
-the validator. The only place it has any effect is a consistency check in
-`validate` (`crates/simulation-policies/src/resolve.rs:172-178`), which rejects
-the contradictory combo `insufficient_balance = partial_fill` together with
-`partial_fills = none`. That guard exists to keep a config from *declaring*
-partial fills it can't get; it does not enable partial fills.
+`partial_fill` and `clamp_to_available` variants have **no engine code path**
+— and since the implement-or-reject change, `validate`
+(`crates/simulation-policies/src/resolve.rs`) refuses them outright (#144), so
+they can no longer silently behave as `reject`. The same applies to
+`partial_fills != none`: the flag was read by nothing, so the unimplemented
+variants are rejected with a pointer to #144 until partial execution exists.
 
 ### Trial-ledger commit-on-success (atomicity)
 
@@ -84,11 +79,12 @@ Resting-order fills use the same pattern
   This models implicit borrowing/leverage at the cash level and **breaks the
   no-overdraw invariant by design** — only use it deliberately, e.g. to study a
   strategy that assumes a credit line. Not set by any profile.
-- **`partial_fill` / `clamp_to_available` / `partial_fills != none`:** do **not**
-  select these expecting partial execution — the engine has no code for it, so
-  the action either fully fills (if affordable after sizing) or is fully
-  rejected. `research_v1` sets `partial_fills = allow_if_configured`
-  (`profiles.rs:54`), but that flag is inert; it does not change execution.
+- **`partial_fill` / `clamp_to_available` / `partial_fills != none`:** cannot
+  be selected — policy validation rejects them as unimplemented (#144). The
+  engine has no partial-execution code, so an action either fully fills (if
+  affordable after sizing) or is fully rejected. (`research_v1` previously
+  *declared* `partial_fills = allow_if_configured` while delivering none of it;
+  the profile no longer claims it.)
 
 ## Correctness notes / edge cases
 
@@ -119,13 +115,11 @@ Resting-order fills use the same pattern
   unimplemented variants that collapse to reject) are pure functions of the
   ledger state and the order, with no randomness. The `debit` guard is a plain
   `amount > available` comparison on `Decimal` (`lib.rs:91`).
-- **Known limitation — `partial_fill` and `clamp_to_available` are declared but
-  unimplemented.** Selecting either gives reject semantics, *not* a partial fill.
-  No engine code path reads them; treat them as reserved enum values until one
-  does. Tracked by [#144](https://github.com/ftvision/catalyst-backtest/issues/144).
-- **Known limitation — `partial_fills` is an inert flag.** It influences only the
-  `validate` consistency check (`resolve.rs:172-178`); it never reaches the
-  engine.
+- **Known limitation — `partial_fill`, `clamp_to_available`, and
+  `partial_fills != none` are unimplemented and therefore rejected at policy
+  validation** (#144, implement-or-reject). They are reserved enum values; the
+  engine has no code path for them, and they can no longer be selected to
+  silently mean `reject`.
 
 ## Tests (executable documentation)
 

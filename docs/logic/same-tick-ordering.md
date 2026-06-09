@@ -30,20 +30,19 @@ It is resolved from the request's `ordering.same_tick` string
 
 | Variant | Intended meaning | Implemented? |
 | --- | --- | --- |
-| `graph_order` | Execute signals/actions in the order nodes appear in the graph JSON. | **No dedicated branch.** The engine's actual order is close to this for actions (graph input order) and topological for signals. |
-| `topological_order` | Respect dependency edges: a node runs after the nodes it depends on. | **No dedicated branch**, but the hard-coded order *is* dependency-respecting (see below). Default for `strict_v1`/`research_v1`. |
-| `signals_first_then_actions` | Evaluate every signal, then run every action. | **No dedicated branch.** The hard-coded loop already computes all signal conditions in Phase 1 before firing/acting in Phase 2 (a partial form of this). |
-| `conservative_adverse_order` | Break ties in whichever order is *worst* for the trader. | **No dedicated branch.** No adverse re-ordering is applied. Default for `conservative_v1`. |
+| `graph_order` | Execute signals/actions in the order nodes appear in the graph JSON. | **Rejected at validation** (#141) — no dedicated branch exists. |
+| `topological_order` | Respect dependency edges: a node runs after the nodes it depends on. | **The only accepted value.** No dedicated branch, but the hard-coded order *is* dependency-respecting (see below); the variant names the executed behavior. Default for all three profiles. |
+| `signals_first_then_actions` | Evaluate every signal, then run every action. | **Rejected at validation** (#141). The hard-coded loop already computes all signal conditions in Phase 1 before firing/acting in Phase 2 (a partial form of this). |
+| `conservative_adverse_order` | Break ties in whichever order is *worst* for the trader. | **Rejected at validation** (#141). No adverse re-ordering exists; `conservative_v1` no longer claims it. |
 
 ### Profile defaults
 
-- `strict_v1` → `SameTick::TopologicalOrder` (`crates/simulation-policies/src/profiles.rs:27`)
-- `conservative_v1` → `SameTick::ConservativeAdverseOrder` (`profiles.rs:44`)
-- `research_v1` inherits strict's `TopologicalOrder` (`profiles.rs:51-61`, via `..strict_v1()` at `profiles.rs:59`)
-
-Because the engine ignores the field, **all three profiles execute identically
-within a tick.** The default values are accurate documentation of intent but do
-not change the trace.
+All three profiles resolve `SameTick::TopologicalOrder`
+(`crates/simulation-policies/src/profiles.rs`): `conservative_v1` previously
+declared `conservative_adverse_order` without implementing it; since the
+implement-or-reject change it inherits `topological_order`, and `validate`
+refuses the other three variants (#141) so a selected ordering can never be
+silently ignored.
 
 ### The actual (hard-coded) within-tick order
 
@@ -94,7 +93,7 @@ Action ordering:
 
 ## Which ordering / when
 
-Since the knob is inert, there is nothing to choose between today. The
+Only `topological_order` is selectable today (#141 tracks the rest). The
 **effective** ordering is best described as: *accruals and risk first, then
 prior resting orders, then this tick's new decisions, signals topologically and
 actions in graph order.* This is a sensible, dependency-respecting default that
@@ -142,22 +141,23 @@ the policy field.
   each other's mid-tick effects — a deliberate, deterministic choice (it does
   mean two `pct_portfolio` buys can jointly exceed 100% of equity if balances
   allow).
-- **Ordering knob is inert (limitation):** the central caveat — `same_tick` is
-  parsed and round-trips through the policy contract, but no engine code reads
-  it, so `graph_order`, `signals_first_then_actions`, and
-  `conservative_adverse_order` produce **identical** traces to
-  `topological_order`. In particular `conservative_v1`'s
-  `ConservativeAdverseOrder` does **not** re-sort same-tick actions into the
-  worst-case order; it is adverse only via its *other* knobs
-  (`worse_side_ohlc` price selection and 25 bps slippage — `profiles.rs:41-43`).
-  Tracked by [#141](https://github.com/ftvision/catalyst-backtest/issues/141) — `same_tick` is inert (the engine never branches on it).
+- **Only one ordering exists (limitation):** no engine code branches on
+  `same_tick`; the hard-coded order described above is the only behavior. Since
+  the implement-or-reject change, `validate` refuses `graph_order`,
+  `signals_first_then_actions`, and `conservative_adverse_order` (#141) — they
+  can no longer be selected and silently produce `topological_order` traces.
+  `conservative_v1` is adverse only via its *other* knobs (`worse_side_ohlc`
+  price selection and 25 bps slippage); it no longer declares an adverse
+  ordering it doesn't perform.
 - **Fallback / degenerate ticks:** with no market data in range the loop still
   runs one degenerate tick (`engine.rs:226-229`); ordering is unaffected.
 
 ## Tests
 
-There is **no test that exercises `same_tick` divergent behavior**, consistent
-with the field being inert — none of the engine/policy test files set
+There is **no test that exercises `same_tick` divergent behavior** — only one
+behavior exists. `unimplemented_policy_values_are_rejected_not_ignored`
+(`crates/simulation-policies/tests/policies.rs`) pins the rejection of the
+unimplemented variants. None of the engine test files set
 `ordering.same_tick` to a non-`None` value (`ordering: None` in
 `crates/simulation-engine/tests/engine.rs:64`,
 `crates/simulation-engine/tests/signals.rs:101`,
@@ -171,7 +171,7 @@ What *is* tested, and underpins the deterministic order:
   *before* the combinator (`pos("hi") < pos("band")`, `pos("lo") < pos("band")`
   at `compiler.rs:224-225`), which is exactly the Phase-1 ordering the engine
   relies on.
-- **Profile defaults round-trip (carrying the inert value indirectly)** —
+- **Profile defaults round-trip** —
   `crates/simulation-policies/tests/policies.rs::resolve_known_profiles`
   (`policies.rs:59`) asserts each profile resolves to its full `ResolvedPolicy`
   (which *includes* `same_tick`), and
@@ -191,4 +191,4 @@ What *is* tested, and underpins the deterministic order:
 
 ## Related issues
 
-- [#141](https://github.com/ftvision/catalyst-backtest/issues/141) — same_tick ordering is inert
+- [#141](https://github.com/ftvision/catalyst-backtest/issues/141) — non-default same_tick orderings (rejected until implemented)

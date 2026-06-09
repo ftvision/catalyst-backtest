@@ -113,7 +113,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "missing_required": { "type": "string", "enum": ["fail", "skip_tick", "forward_fill"] },
+        "missing_required": { "type": "string", "enum": ["fail", "warn", "skip_tick", "forward_fill"] },
         "missing_optional": { "type": "string", "enum": ["warn", "fail", "forward_fill", "fallback_provider"] }
       }
     },
@@ -130,7 +130,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "accrual": { "type": "string", "enum": ["simple_apr", "compound_apy", "protocol_index"] }
+        "accrual": { "type": "string", "enum": ["simple_apr", "compound_apy", "protocol_index", "none"] }
       }
     }
   },

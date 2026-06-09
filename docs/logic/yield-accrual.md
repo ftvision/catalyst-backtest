@@ -93,15 +93,15 @@ spot balance (`engine.rs:1300-1309`): a stable asset counts `y.value()`
 
 | Policy field | Variants | Honored? |
 | --- | --- | --- |
-| `yield_accrual` | `SimpleApr`, `CompoundApy`, `ProtocolIndex` | **No — not read.** The engine always compounds per tick (#164). |
+| `yield_accrual` | `CompoundApy` (default), `SimpleApr`, `None`, `ProtocolIndex` | **Yes — wired** (#164). `compound_apy` compounds on principal + accrued; `simple_apr` accrues on principal alone; `none` turns accrual off (symmetric with `perps.funding = none`); `protocol_index` is rejected at validation until implemented. |
 
-The `YieldAccrual` enum is defined at
-`crates/simulation-policies/src/lib.rs:111` and carried on `ResolvedPolicy`
-(`lib.rs:144`), but a grep of `crates/simulation-engine/src/` finds **no
-reference** to `yield_accrual` / `CompoundApy` / `ProtocolIndex` / `SimpleApr`.
-Every profile accrues identically (per-tick compounding), even though
-`strict_v1` *resolves* `yield_accrual: simple_apr` — the knob contradicts the
-behavior until #164 wires it.
+`accrue_yield` dispatches on the knob (`crates/simulation-engine/src/engine.rs`,
+the `policy.yield_accrual` match): `none` returns before any accrual, and the
+interest base is `principal` (simple) vs `principal + accrued` (compound). All
+three profiles default to `compound_apy` — the resolved policy now names the
+behavior that actually runs. The three variants are differentiated by
+`yield_accrual_variants_differentiate`
+(`crates/simulation-engine/tests/honest_policy_surface.rs`).
 
 ## Which market / when to use
 
@@ -146,11 +146,12 @@ the residual difference is the cumulative reporting counters (#166).
   this slightly double-compounds; (b) results are mildly grid-dependent —
   the same position over the same wall-clock accrues marginally more on a
   finer grid. Both tracked under #164.
-- **No yield-policy gate (#121/#164).** `accrue_yield` is called unconditionally
-  every tick (`engine.rs:268`) and never consults `policy.yield_accrual`. There
-  is no way to select simple interest or a protocol-index model, and no way to
-  turn yield accrual off via policy (unlike funding, which has a
-  `Funding::None` knob — `crates/simulation-policies/src/lib.rs:101`).
+- **The yield-policy gate exists (#121(b)/#164 — FIXED).** `accrue_yield`
+  consults `policy.yield_accrual`: `none` disables accrual entirely (the
+  off-switch, symmetric with `Funding::None`), `simple_apr` selects
+  principal-only interest, `compound_apy` (default) compounds. Remaining #164
+  scope: a `protocol_index` model (rejected until implemented) and the
+  APR-vs-APY input assumption below.
 - **Non-stable yield marked to price (#115 — FIXED).** `compute_equity` values
   a non-stable yield position as `y.value() × mark_price` like the spot branch;
   stables stay 1:1 (`engine.rs:1300-1309`; `is_stable`,

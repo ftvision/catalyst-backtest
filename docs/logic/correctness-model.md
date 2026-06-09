@@ -135,12 +135,17 @@ margin and unrealized PnL + yield principal and accrued (see
 | Liquidation triggers at full bankruptcy only; no maintenance margin | ⚠️ open (#120) |
 | Resting limit orders don't reserve balance | ⚠️ open (#124) |
 | Yield compounds per tick on principal + accrued | ✅ fixed (#114) |
-| `yield_accrual` policy knob unwired (reports `simple_apr`, engine compounds) | ⚠️ open (#164) |
-| `same_tick` ordering policy is inert | ⚠️ open (#141) |
-| `missing_optional` data policy is inert | ⚠️ open (#142) |
-| `venue_fee_table` fee model is a zero stub | ⚠️ open (#143) |
-| partial fills + `partial_fill`/`clamp_to_available` not implemented | ⚠️ open (#144) |
-| `gas.fallback.model` ignored; `fixed_native` = `fixed_usd` | ⚠️ open (#145, #146) |
+| `yield_accrual` knob wired: `compound_apy` default / `simple_apr` / `none` off-switch | ✅ fixed (#164) |
+| Trace/result metadata echoes the EXECUTED policy, per-run overrides included | ✅ fixed (#157) |
+| `slippage_bps` validated under every consuming model + after overrides | ✅ fixed (#163) |
+| Unimplemented policy values are REJECTED at validation, never silently ignored | ✅ implement-or-reject |
+| `same_tick` ordering variants beyond `topological_order` | ⚠️ rejected until implemented (#141) |
+| `missing_optional` variants beyond `warn` | ⚠️ rejected until implemented (#142) |
+| `missing_required` `skip_tick`/`forward_fill` (use `warn` or `fail`) | ⚠️ rejected until implemented (#159) |
+| `venue_fee_table` fee model | ⚠️ rejected until implemented (#143) |
+| Partial fills (`partial_fill`/`clamp_to_available`/`allow_*`) | ⚠️ rejected until implemented (#144) |
+| Non-`fixed_usd` gas fallback; `fixed_native` gas model | ⚠️ rejected until implemented (#145, #146) |
+| `reduce_only_validation = lenient`; `yield.accrual = protocol_index` | ⚠️ rejected until implemented (#158, #164) |
 
 The broader roadmap to production-grade correctness is in
 [production-readiness.md](../production-readiness.md) (Tier 0 = "the numbers are

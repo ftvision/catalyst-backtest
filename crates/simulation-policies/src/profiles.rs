@@ -30,32 +30,34 @@ pub fn strict_v1() -> ResolvedPolicy {
         liquidation_check: LiquidationCheck::EveryTick,
         funding: Funding::Historical,
         reduce_only_validation: ReduceOnlyValidation::Strict,
-        yield_accrual: YieldAccrual::SimpleApr,
+        yield_accrual: YieldAccrual::CompoundApy,
     }
 }
 
-/// Less optimistic, user-facing backtests: worse-side fills, higher slippage.
+/// Less optimistic, user-facing backtests: worse-side fills, higher slippage
+/// and fees. (It previously also *declared* adverse same-tick ordering and a
+/// fallback provider for optional data — neither was implemented, so the
+/// profile no longer claims them; see #141/#142.)
 pub fn conservative_v1() -> ResolvedPolicy {
     ResolvedPolicy {
         profile: Profile::ConservativeV1,
         price_selection: PriceSelection::WorseSideOhlc,
         slippage_bps: "25".to_string(),
         fee_bps: "8".to_string(),
-        same_tick: SameTick::ConservativeAdverseOrder,
-        missing_optional: MissingOptional::FallbackProvider,
         ..strict_v1()
     }
 }
 
-/// Quick exploratory analysis: close fills, tolerant of fallback data.
+/// Quick exploratory analysis: same-bar close fills (look-ahead caveat, #122),
+/// lower slippage, warn-and-continue on missing required data. (It previously
+/// declared partial fills and forward-fill — neither was implemented; see
+/// #144/#159.)
 pub fn research_v1() -> ResolvedPolicy {
     ResolvedPolicy {
         profile: Profile::ResearchV1,
-        partial_fills: PartialFills::AllowIfConfigured,
         price_selection: PriceSelection::Close,
         slippage_bps: "5".to_string(),
-        missing_required: MissingRequired::ForwardFill,
-        missing_optional: MissingOptional::FallbackProvider,
+        missing_required: MissingRequired::Warn,
         ..strict_v1()
     }
 }

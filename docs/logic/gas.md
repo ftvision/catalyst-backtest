@@ -29,7 +29,7 @@ steps (`crates/execution-models/src/pricing.rs:102-113`):
 | --- | --- | --- | --- |
 | `none` | returns `0` (no gas charged) | `pricing.rs:107` | implemented |
 | `fixed_usd` | returns `gas_fixed_amount` (a flat USD constant) | `pricing.rs:108` | implemented |
-| `fixed_native` | **identical to `fixed_usd`** — returns `gas_fixed_amount` verbatim; the value is *not* multiplied by a native-token price | `pricing.rs:108` | partial — enum variant exists but is treated as fixed USD |
+| `fixed_native` | *(intended: native-token units priced into USD)* | `pricing.rs:108` (unreachable) | **NOT implemented — REJECTED at policy validation** (#146) |
 | `historical_fee_history` | `ctx.gas_usd(venue)`, i.e. the per-chain gas series at this tick; falls back to `gas_fixed_amount` when no series point exists | `pricing.rs:109-111` | implemented |
 
 The `gas_fixed_amount` string is parsed by `parse` (`pricing.rs:117-119`), which
@@ -72,10 +72,10 @@ short-circuit zeroes gas on that venue.
   series, want a deterministic constant, or are stress-testing a worst-case
   fixed cost. It is also the *configured* fallback amount the historical model
   reverts to when a tick lacks data.
-- **`fixed_native`** — intended to express gas in native-token units priced into
-  USD, but **currently behaves exactly like `fixed_usd`** (the code path is
-  shared at `pricing.rs:108` and does no native→USD conversion). Treat it as
-  fixed USD until that is implemented.
+- **`fixed_native`** — cannot be selected: policy validation rejects it (#146,
+  implement-or-reject), so it can no longer silently behave as `fixed_usd`. The
+  shared `pricing.rs:108` arm is unreachable through a validated policy until
+  native→USD conversion is implemented.
 - **`none`** — idealized, zero gas. A research setting to isolate strategy P&L
   from on-chain cost; never trust a `none`-gas result as realistic on an EVM
   chain.
@@ -115,14 +115,12 @@ short-circuit zeroes gas on that venue.
 
 ### Known limitations
 
-- **`gas_fallback_model` is declared but unused by `gas_usd`.** The resolved
-  policy carries a separate `gas_fallback_model` field
-  (`crates/simulation-policies/src/lib.rs:131`), parsed from `gas.fallback.model`
-  (`resolve.rs:88-91`) and defaulted to `FixedUsd` in the profiles
-  (`profiles.rs:21`). It *is* consulted by policy validation (forcing
-  `gas_fixed_amount` to be a valid decimal, `resolve.rs:164-168`), but
-  **`gas_usd` does not dispatch through it**: the `historical_fee_history`
-  fallback hard-codes `gas_fixed_amount` (`pricing.rs:110`). So setting
+- **`gas_fallback_model` accepts only `fixed_usd`.** The resolved policy
+  carries a separate `gas_fallback_model` field, but `gas_usd` does not
+  dispatch through it: the `historical_fee_history` fallback hard-codes
+  `gas_fixed_amount` (`pricing.rs:110`). Since the only behavior that exists is
+  the fixed-USD fallback, validation now rejects every other value (#145,
+  implement-or-reject) instead of silently ignoring it. So setting
   `gas.fallback.model` to anything other than a fixed-amount model has **no
   effect** on the gas charged today; the fallback is always the fixed amount.
   (No tracking issue confirmed in-repo; flagged here as documentation-only —

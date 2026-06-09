@@ -46,11 +46,13 @@ fn conservative_profile_is_more_adverse() {
 }
 
 #[test]
-fn research_profile_tolerates_fallback_data() {
+fn research_profile_warns_on_missing_data() {
+    // research_v1 declares only behavior the engine implements (#159/#144):
+    // warn-and-continue on missing required data, and no partial fills.
     let p = research_v1();
     assert_eq!(p.profile, Profile::ResearchV1);
-    assert_eq!(p.missing_required, MissingRequired::ForwardFill);
-    assert_eq!(p.partial_fills, PartialFills::AllowIfConfigured);
+    assert_eq!(p.missing_required, MissingRequired::Warn);
+    assert_eq!(p.partial_fills, PartialFills::None);
 }
 
 // --- Resolution by name ---
@@ -205,4 +207,120 @@ fn bad_execution_override_value_is_rejected() {
         ..Default::default()
     });
     assert!(matches!(err, Err(PolicyError::UnknownValue { .. })));
+}
+
+// --- Implement-or-reject: unimplemented variants fail validation loudly ---
+
+/// Every policy value the engine does not implement must be rejected at
+/// resolution, never silently accepted (#141-#146, #158, #159, #164; epic #131).
+#[test]
+fn unimplemented_policy_values_are_rejected_not_ignored() {
+    let cases: &[(&str, serde_json::Value)] = &[
+        ("#144 partial_fill", serde_json::json!({"balance": {"insufficient_balance": "partial_fill"}})),
+        ("#144 clamp_to_available", serde_json::json!({"balance": {"insufficient_balance": "clamp_to_available"}})),
+        ("#144 partial_fills", serde_json::json!({"fills": {"partial_fills": "always_allow"}})),
+        ("#143 venue_fee_table", serde_json::json!({"fills": {"fees": {"model": "venue_fee_table"}}})),
+        ("#146 fixed_native", serde_json::json!({"gas": {"model": "fixed_native"}})),
+        ("#145 gas fallback", serde_json::json!({"gas": {"fallback": {"model": "none"}}})),
+        ("#141 same_tick", serde_json::json!({"ordering": {"same_tick": "conservative_adverse_order"}})),
+        ("#159 skip_tick", serde_json::json!({"data": {"missing_required": "skip_tick"}})),
+        ("#159 forward_fill", serde_json::json!({"data": {"missing_required": "forward_fill"}})),
+        ("#142 missing_optional", serde_json::json!({"data": {"missing_optional": "fallback_provider"}})),
+        ("#158 lenient", serde_json::json!({"perps": {"reduce_only_validation": "lenient"}})),
+        ("#164 protocol_index", serde_json::json!({"yield": {"accrual": "protocol_index"}})),
+    ];
+    for (label, section) in cases {
+        let mut v = serde_json::json!({
+            "schema_version": "catalyst.backtest.policy.v1",
+            "profile": "strict_v1"
+        });
+        v.as_object_mut().unwrap().extend(section.as_object().unwrap().clone());
+        let c: ContractPolicy = serde_json::from_value(v).unwrap();
+        let err = resolve_policy(&c);
+        assert!(
+            matches!(err, Err(PolicyError::Invalid(_))),
+            "{label}: expected loud rejection, got {err:?}"
+        );
+        let msg = format!("{}", err.unwrap_err());
+        assert!(
+            msg.contains("not implemented"),
+            "{label}: rejection should say the value is unimplemented; got {msg}"
+        );
+    }
+}
+
+/// Implemented variants of the same knobs still resolve.
+#[test]
+fn implemented_policy_values_still_resolve() {
+    for section in [
+        serde_json::json!({"balance": {"insufficient_balance": "allow_negative"}}),
+        serde_json::json!({"data": {"missing_required": "warn"}}),
+        serde_json::json!({"yield": {"accrual": "simple_apr"}}),
+        serde_json::json!({"yield": {"accrual": "none"}}),
+        serde_json::json!({"perps": {"funding": "none"}}),
+    ] {
+        let mut v = serde_json::json!({
+            "schema_version": "catalyst.backtest.policy.v1",
+            "profile": "strict_v1"
+        });
+        v.as_object_mut().unwrap().extend(section.as_object().unwrap().clone());
+        let c: ContractPolicy = serde_json::from_value(v).unwrap();
+        resolve_policy(&c).unwrap_or_else(|e| panic!("{section}: should resolve, got {e}"));
+    }
+}
+
+// --- #163: slippage_bps is validated under every consuming model ---
+
+#[test]
+fn malformed_slippage_bps_rejected_under_all_consuming_models() {
+    for model in ["fixed_bps", "volume_based", "amm_price_impact"] {
+        let mut c = contract("strict_v1");
+        c.fills = Some(FillsPolicy {
+            slippage: Some(SlippagePolicy {
+                model: Some(model.into()),
+                bps: Some("ten bps".into()),
+            }),
+            ..Default::default()
+        });
+        let err = resolve_policy(&c);
+        assert!(
+            matches!(err, Err(PolicyError::Invalid(_))),
+            "{model}: malformed slippage_bps must be rejected, not silently zero (#163); got {err:?}"
+        );
+    }
+}
+
+#[test]
+fn malformed_slippage_bps_override_is_rejected() {
+    use catalyst_contracts::request::ExecutionOverrides;
+    let mut p = strict_v1();
+    let err = p.apply_execution_overrides(&ExecutionOverrides {
+        slippage_bps: Some("not a number".into()),
+        ..Default::default()
+    });
+    assert!(
+        matches!(err, Err(PolicyError::Invalid(_))),
+        "#163: a malformed override must be rejected, not silently zero; got {err:?}"
+    );
+}
+
+// --- #157: to_contract echoes every executed knob and round-trips ---
+
+#[test]
+fn to_contract_echoes_full_policy_and_round_trips() {
+    let mut p = strict_v1();
+    p.slippage_bps = "42".to_string(); // simulate a per-run override
+    let c = p.to_contract();
+
+    // Every section is populated — no silent omissions.
+    let fills = c.fills.as_ref().expect("fills echoed");
+    assert_eq!(fills.slippage.as_ref().unwrap().bps.as_deref(), Some("42"));
+    assert_eq!(fills.price_selection.as_deref(), Some("next_open"));
+    assert_eq!(c.data.as_ref().unwrap().missing_required.as_deref(), Some("fail"));
+    assert_eq!(c.yield_.as_ref().unwrap().accrual.as_deref(), Some("compound_apy"));
+    assert_eq!(c.ordering.as_ref().unwrap().same_tick.as_deref(), Some("topological_order"));
+
+    // Re-resolving the echoed contract reproduces the executed policy exactly.
+    let round_tripped = resolve_policy(&c).expect("echoed policy re-resolves");
+    assert_eq!(round_tripped, p, "#157: trace policy must reproduce the executed policy");
 }
