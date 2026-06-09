@@ -129,9 +129,11 @@ margin and unrealized PnL + yield principal and accrued (see
 | Same-bar look-ahead under `close`/`open`/`mid` selection | ⚠️ open (#122) |
 | Inconsistent/stale/venue-blind price lookups; equity drops unpriced holdings | ⚠️ open (#119) |
 | Non-stable yield position valuation (1:1 USD, gas units) | ⚠️ open (#115) |
-| Liquidation marks at close only; no maintenance margin | ⚠️ open (#120) |
+| Liquidation marks the intra-bar wick | ✅ fixed (#120 wick half) |
+| Liquidation triggers at full bankruptcy only; no maintenance margin | ⚠️ open (#120) |
 | Resting limit orders don't reserve balance | ⚠️ open (#124) |
-| Yield is simple-interest, not compounding | ⚠️ fidelity (#121) |
+| Yield compounds per tick on principal + accrued | ✅ fixed (#114) |
+| `yield_accrual` policy knob unwired (reports `simple_apr`, engine compounds) | ⚠️ open (#164) |
 | `same_tick` ordering policy is inert | ⚠️ open (#141) |
 | `missing_optional` data policy is inert | ⚠️ open (#142) |
 | `venue_fee_table` fee model is a zero stub | ⚠️ open (#143) |
