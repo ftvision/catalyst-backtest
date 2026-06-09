@@ -131,6 +131,71 @@ fn issue_115_nonstable_yield_marked_to_price() {
     assert_ne!(e1, "1", "FIXED #115: equity is no longer collapsed to asset units");
 }
 
+/// Cross-product of #114 (compounding accrual) and #115 (USD marking): a
+/// NON-STABLE yield position that actually accrues interest is valued as
+/// `(principal + accrued) * mark_price` in equity.
+///
+/// Same scenario as above plus an aave/ETH APR series at 8.76% on every tick.
+/// The deposit (1 ETH) books at tick1; accrual runs at the start of tick2 for
+/// the 1h elapsed window: interest = (1 + 0) * 0.0876 * 3600/31_536_000
+/// = 0.00001 ETH. Equity at tick2 = 1.00001 ETH * 1800 = 1800.018 USD —
+/// the interest is ETH units marked to price, never added as raw dollars.
+///
+/// (The `yield_accrued` event's `interest_usd` field still carries asset units
+/// for non-stables — tracked as #166, asserted here only for presence.)
+#[test]
+fn issue_115_114_nonstable_yield_accrues_and_marks_to_price() {
+    let points: Vec<_> = ["2000", "1800", "1800"]
+        .iter()
+        .enumerate()
+        .map(|(i, c)| json!({"ts": ts(i as i64), "open": c, "high": c, "low": c, "close": c}))
+        .collect();
+    let aprs: Vec<_> = (0..3).map(|i| json!({"ts": ts(i), "apr": "0.0876"})).collect();
+    let market_data: MarketDataBundle = serde_json::from_value(json!({
+        "schema_version": "catalyst.backtest.market_data_bundle.v1",
+        "interval": "1h",
+        "start": ts(0),
+        "end": ts(3),
+        "candles": [{"venue": "base", "symbol": "ETH", "quote": "USD", "points": points}],
+        "funding": [],
+        "gas": [],
+        "yields": [{"protocol": "aave", "asset": "ETH", "chain": "base", "points": aprs}],
+        "providers": [],
+        "warnings": []
+    }))
+    .unwrap();
+
+    let trace = run(&SimulationInput {
+        graph: graph(),
+        config: config(),
+        policy: policy(),
+        market_data,
+    })
+    .unwrap();
+    assert_eq!(trace.snapshots.len(), 3);
+
+    // tick1: deposit books; no accrual yet (accrual runs at tick start, before
+    // the deposit existed). Equity = 1 ETH * 1800.
+    let e1: f64 = trace.snapshots[1].equity_usd.parse().unwrap();
+    assert!((e1 - 1800.0).abs() < 1e-9, "tick1 equity = 1 ETH * 1800, got {e1}");
+
+    // tick2: one hour of compounding-base accrual on the ETH position, marked
+    // at the ETH price — NOT counted 1:1 as dollars.
+    let accrued = trace
+        .events
+        .iter()
+        .find(|e| e.event_type == "yield_accrued")
+        .expect("#114x#115: the non-stable position must accrue interest");
+    assert_eq!(accrued.ts, ts(2), "first accrual is the tick after the deposit");
+
+    let e2: f64 = trace.snapshots[2].equity_usd.parse().unwrap();
+    let expected = (1.0 + 0.0876 * 3600.0 / 31_536_000.0) * 1800.0; // 1800.018
+    assert!(
+        (e2 - expected).abs() < 1e-6,
+        "#114x#115: equity must be (principal + accrued) * price = {expected}, got {e2}"
+    );
+}
+
 /// Bug #3 — FIXED: `execute_yield_deposit` reports `Fill.value_usd = amount * price`.
 ///
 /// A 1 ETH deposit at the tick1 price (1800) records value_usd = "1800" (the USD

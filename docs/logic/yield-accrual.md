@@ -7,8 +7,8 @@ wall-clock time and the position's current APR; a `yield_withdraw` redeems
 principal + accrued back to the chain balance. Correctness hinges on three
 things: accrual scaling with *actual* elapsed seconds, money conservation across
 deposit/accrue/withdraw, and being honest about what's simplified (compounding
-frequency follows the tick grid, 1:1 USD valuation of non-stable assets,
-USD-as-asset-units gas).
+frequency follows the tick grid; cumulative yield counters still report asset
+units for non-stables, #166).
 
 The deposit/withdraw execution lives in
 `crates/execution-models/src/yields.rs`; the per-tick accrual and valuation live
@@ -83,10 +83,11 @@ over positions it just snapshotted (`engine.rs:1027`).
 
 ### Valuation in equity
 
-`compute_equity` (`engine.rs:1087`) adds, for every open yield position,
-`y.value()` (= principal + accrued) directly into USD equity
-(`engine.rs:1108–1109`). It does **not** price the underlying asset — see the
-1:1 USD limitation below.
+`compute_equity` (`engine.rs:1279`) values every open yield position like a
+spot balance (`engine.rs:1300-1309`): a stable asset counts `y.value()`
+(= principal + accrued) 1:1; a non-stable asset counts
+`y.value() × mark_price`. An unpriced non-stable position is silently skipped
+(#119) — see the correctness notes below.
 
 ### Policy knobs (and which are honored)
 
@@ -112,9 +113,9 @@ test bundle for the shape: a `yields` entry with a `points` array of
 `{ts, apr}` points).
 
 There is currently only one accrual behavior (per-tick compounding), so there's
-no "choose one over another" decision to make at the policy level — the choice
-that matters is whether your deposit asset is a stablecoin (valuation is
-correct) vs. a volatile asset (valued 1:1 USD, which is wrong — see below).
+no "choose one over another" decision to make at the policy level. Stable and
+non-stable deposit assets are both valued correctly in equity (#115, fixed);
+the residual difference is the cumulative reporting counters (#166).
 
 ## Correctness notes / edge cases
 
@@ -150,24 +151,24 @@ correct) vs. a volatile asset (valued 1:1 USD, which is wrong — see below).
   is no way to select simple interest or a protocol-index model, and no way to
   turn yield accrual off via policy (unlike funding, which has a
   `Funding::None` knob — `crates/simulation-policies/src/lib.rs:101`).
-- **Non-stable yield valued 1:1 USD (#115).** `compute_equity` adds
-  `y.value()` (a quantity in *asset units*) straight into USD equity
-  without multiplying by a mark price (`engine.rs:1108–1109`). For a stablecoin
-  deposit (USDC/USDT/DAI; see `is_stable`,
-  `crates/execution-models/src/pricing.rs:15`) 1 unit ≈ \$1, so this is fine. For
-  a volatile asset (e.g. an ETH or wstETH deposit) the position value is wrong —
-  the asset's USD price is ignored. Note that, unlike chain balances (which *are*
-  priced via `mark_price` at `engine.rs:1096`), yield positions get no such
-  pricing. The accrual itself is also unit-agnostic: `apr` is applied to the
-  asset-unit principal.
-- **Gas charged in USD but debited as asset units (#115).** `gas_usd` returns a
-  USD figure (`crates/execution-models/src/pricing.rs:102`), but both deposit and
-  withdraw debit it via `ledger.debit(chain, cfg.asset, gas)`
-  (`yields.rs:45`, `yields.rs:86`) — i.e. `gas` USD is subtracted as if it were
-  `gas` *units of the deposit asset*. Correct for a stable deposit asset, but for
-  a non-stable asset the gas debit is mis-denominated. (`hyperliquid` gas is
-  zero, `pricing.rs:103`; `GasModel::HistoricalFeeHistory` falls back to the
-  policy's fixed amount when no gas series exists, `pricing.rs:109–111`.)
+- **Non-stable yield marked to price (#115 — FIXED).** `compute_equity` values
+  a non-stable yield position as `y.value() × mark_price` like the spot branch;
+  stables stay 1:1 (`engine.rs:1300-1309`; `is_stable`,
+  `crates/execution-models/src/pricing.rs:15`). An *unpriced* non-stable yield
+  position is silently skipped from equity — the same gap as the cash branch
+  (#119). The accrual itself stays unit-agnostic (`apr` applies to asset-unit
+  principal), which is correct: interest is earned in the deposited asset.
+  Residual: the cumulative `yield_usd` counter and the `yield_accrued` event's
+  `interest_usd` still carry asset units for non-stables (#166).
+- **Gas converted to asset units at the tick price (#115 — FIXED).** `gas_usd`
+  returns USD (`crates/execution-models/src/pricing.rs:102`); deposit and
+  withdraw now debit `gas / price` asset units (`yields.rs:44-52`, and the
+  `"all"` path reserves the converted amount). For a stable asset the price is
+  1 (unchanged). A non-stable deposit/withdraw with **no price this tick is
+  rejected** with the ledger untouched, rather than mixing units.
+  `record_gas(gas)` stays in USD. (`hyperliquid` gas is zero, `pricing.rs:103`;
+  `GasModel::HistoricalFeeHistory` falls back to the policy's fixed amount when
+  no gas series exists, `pricing.rs:109–111`.)
 - **Money conservation across the lifecycle.** Deposit moves exactly `amount`
   from chain balance into `principal` (`lib.rs:215`, `lib.rs:220`); accrual only
   ever *adds* to `accrued`/`yield_usd` (`lib.rs:248–249`); withdraw moves exactly
@@ -230,15 +231,19 @@ correct) vs. a volatile asset (valued 1:1 USD, which is wrong — see below).
 - `yield_deposit_failing_on_gas_leaves_ledger_untouched` — end-to-end atomicity:
   a deposit whose gas can't be covered leaves the real ledger unchanged.
 
-(Note: no test exercises a *non-stable* yield deposit, so the 1:1 USD valuation
-and asset-unit gas behaviors of #115 are not covered by tests — they are
-inferred from the code paths cited above. No test exercises `CompoundApy` /
-`ProtocolIndex`, since they have no behavior.)
+`crates/simulation-engine/tests/issue_115_nonstable_yield_equity.rs` and
+`issue_115_nonstable_yield_gas_and_value.rs` pin the non-stable paths: equity
+marked to price (2000 → 1800 on a price move, never $1/unit), gas debited as
+`gas/price` asset units, `value_usd = amount × price` on fills, the
+no-price-rejects-with-untouched-ledger case, and the #114×#115 cross-product
+(a non-stable position accruing compounded interest, equity =
+`(principal + accrued) × price`). (No test exercises `CompoundApy` /
+`ProtocolIndex`, since they have no behavior — #164.)
 
 ## Related issues
 
 - [#114](https://github.com/ftvision/catalyst-backtest/issues/114) — yield compounding — FIXED
-- [#115](https://github.com/ftvision/catalyst-backtest/issues/115) — non-stable yield valuation (1:1 USD, gas units)
+- [#115](https://github.com/ftvision/catalyst-backtest/issues/115) — non-stable yield valuation — FIXED (reporting-units residual → #166)
 - [#118](https://github.com/ftvision/catalyst-backtest/issues/118) — elapsed-time accrual — FIXED
 - [#121](https://github.com/ftvision/catalyst-backtest/issues/121) — fidelity backlog (pct_position, cooldown/TIF)
 - [#164](https://github.com/ftvision/catalyst-backtest/issues/164) — `yield_accrual` knob unwired; APR-vs-APY input assumption; no off-switch

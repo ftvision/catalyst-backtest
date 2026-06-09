@@ -111,10 +111,10 @@ in the engine — the `√` in `volume_based` slippage — is IEEE-754 determini
 Equity = stable balances (1:1) + non-stable balances (marked to close) + perp
 margin and unrealized PnL + yield principal and accrued (see
 [portfolio-valuation](portfolio-valuation.md)).
-- ⚠️ **Tracked limitations:** non-stable **yield** positions are valued 1:1 as USD
-  (wrong for a non-stable deposited asset, #115); an unpriced non-stable holding
+- ⚠️ **Tracked limitations:** an unpriced non-stable holding (cash or yield)
   is silently dropped from equity and a perp without a mark loses its PnL (#119);
-  the price fallback is venue-blind and unbounded-stale (#119).
+  the price fallback is venue-blind and unbounded-stale (#119); cumulative
+  `total_yield_usd` / `interest_usd` carry asset units for non-stables (#166).
 
 ## What is correct today vs. tracked
 
@@ -128,7 +128,8 @@ margin and unrealized PnL + yield principal and accrued (see
 | `next_open` market orders deferred to fill+book on the fill bar (no phantom entry P&L) | ✅ fixed (#116) |
 | Same-bar look-ahead under `close`/`open`/`mid` selection | ⚠️ open (#122) |
 | Inconsistent/stale/venue-blind price lookups; equity drops unpriced holdings | ⚠️ open (#119) |
-| Non-stable yield position valuation (1:1 USD, gas units) | ⚠️ open (#115) |
+| Non-stable yield positions marked to price; gas converted to asset units | ✅ fixed (#115) |
+| `total_yield_usd` / `interest_usd` in asset units for non-stables | ⚠️ open (#166) |
 | Liquidation marks the intra-bar wick | ✅ fixed (#120 wick half) |
 | Liquidation triggers at full bankruptcy only; no maintenance margin | ⚠️ open (#120) |
 | Resting limit orders don't reserve balance | ⚠️ open (#124) |
