@@ -985,9 +985,16 @@ fn execute_action(
     match action.subtype.as_str() {
         "swap" => match serde_json::from_value::<SwapConfig>(action.config.clone()) {
             Ok(mut cfg) => {
-                // A swap has no distinct "position"; both balance/position bases
-                // resolve against the from-asset balance. pct_portfolio converts
-                // the USD slice back into from-asset units via its price.
+                // A swap has no "position" to size against, so pct_position is
+                // meaningless here — reject it explicitly rather than silently
+                // aliasing it to pct_balance, which hid user mistakes (#121).
+                if matches!(&cfg.amount, Amount::Relative { basis: AmountBasis::PctPosition, .. }) {
+                    return ActionOutcome::Rejected(
+                        "pct_position is not valid for a swap (a swap has no position); use pct_balance or pct_portfolio".to_string(),
+                    );
+                }
+                // pct_balance resolves against the from-asset balance; pct_portfolio
+                // converts the USD slice back into from-asset units via its price.
                 let bal = ledger.balance(&cfg.chain, &cfg.from_asset);
                 let unit_price = asset_price(ctx, &cfg.chain, &cfg.from_asset);
                 match resolve_amount(&cfg.amount, bal, bal, equity, unit_price) {

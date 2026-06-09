@@ -1,15 +1,15 @@
-//! Issue #121 — simulation fidelity gaps. This file records the CURRENT engine
-//! behavior for five related sub-bugs. For the present defects (a, b, c, d) the
-//! assertions pin the INCORRECT value the engine produces today so the test
-//! passes and a reviewer can see the discrepancy versus the documented correct
-//! value. Sub-bug (e) is confirmed-as-intended and locked as a regression guard.
+//! Issue #121 — simulation fidelity backlog, triaged.
+//!
+//! Sub-bug (c) is FIXED here (the one clear footgun). The others are either
+//! confirmed-as-intended (locked as regression guards) or split out as their own
+//! work; their tests still pin current behavior.
 //!
 //! Verdicts per test:
-//! - issue_121_yield_no_off_switch          PRESENT  (a) yield accrual has no gate.
-//! - issue_121_perp_pct_position_off_entry  PRESENT  (b) pct_position sizes off entry notional, not mark.
-//! - issue_121_swap_pct_position_aliases    PRESENT  (c) pct_position on a swap silently aliases pct_balance.
-//! - issue_121_cooldown_boundary_inclusive  PRESENT  (d) cooldown guard `<` re-fires at exactly cd elapsed.
-//! - issue_121_tif_one_bar_eligibility      CONFIRM  (e) expire_after_bars=1 -> exactly one eligibility bar.
+//! - (c) FIXED `issue_121_swap_pct_position_rejected`: pct_position on a swap is now rejected, not aliased.
+//! - (b) INTENDED `issue_121_perp_pct_position_off_entry`: pct_position sizes off the original (entry) notional, a stable/predictable definition.
+//! - (d) INTENDED `issue_121_cooldown_boundary_inclusive`: cooldown `ts-last < cd` re-fires at exactly cd elapsed (standard "elapsed >= cd").
+//! - (e) INTENDED `issue_121_tif_one_bar_eligibility`: expire_after_bars=1 gives exactly one eligibility bar.
+//! - (a) SPLIT `issue_121_yield_no_off_switch`: the `yield_accrual` policy field is entirely unwired with no off-switch; wiring it (and reconciling with the #114 compounding PR) is its own task.
 
 use catalyst_contracts::{BacktestConfig, Graph, MarketDataBundle, SimulationPolicy, SimulationTrace};
 use catalyst_simulation_engine::{run, SimulationInput};
@@ -271,18 +271,15 @@ fn issue_121_perp_pct_position_off_entry() {
 //     passes the balance as the position basis), with no rejection or warning.
 // ---------------------------------------------------------------------------
 
-/// Issue #121 (c): `pct_position` on a swap silently behaves like pct_balance.
+/// Issue #121 (c) — FIXED: `pct_position` on a swap is REJECTED, not silently
+/// aliased to pct_balance.
 ///
-/// A swap has no distinct "position", yet writing pct_position is accepted: the
-/// engine resolves the amount with (balance, balance) as (bal, pos), so 50% of
-/// a 1.0 ETH balance = 0.5 ETH sold.
-///
-/// INCORRECT (engine today): action_executed == 1, action_rejected == 0, ETH
-/// balance -> ~0.5 (identical to pct_balance), no warning emitted.
-/// CORRECT: pct_position on a swap should be REJECTED (or warned) since a swap
-/// has no position basis — action_rejected == 1, ETH stays 1.0.
+/// A swap has no distinct "position", so `pct_position` is meaningless. The engine
+/// now rejects it explicitly (action_rejected == 1, ETH untouched at 1.0) instead
+/// of resolving against the balance and silently selling half — surfacing the user
+/// mistake rather than hiding it.
 #[test]
-fn issue_121_swap_pct_position_aliases() {
+fn issue_121_swap_pct_position_rejected() {
     let g = graph(json!({
         "nodes": [{
             "id": "sell", "kind": "action", "subtype": "swap",
@@ -299,22 +296,16 @@ fn issue_121_swap_pct_position_aliases() {
     };
     let trace = run(&input).unwrap();
 
-    assert_eq!(
-        count(&trace, "action_executed"),
-        1,
-        "issue #121(c): swap pct_position is silently EXECUTED; CORRECT behavior would reject it"
-    );
-    assert_eq!(
-        count(&trace, "action_rejected"),
-        0,
-        "issue #121(c): swap pct_position is NOT rejected (0) — this is INCORRECT, it should be 1"
+    // FIXED #121(c): swap pct_position is REJECTED, not silently aliased to pct_balance.
+    assert_eq!(count(&trace, "action_executed"), 0, "FIXED #121(c): swap pct_position must not execute");
+    assert_eq!(count(&trace, "action_rejected"), 1, "FIXED #121(c): swap pct_position is rejected");
+    assert!(
+        trace.events.iter().any(|e| e.event_type == "action_rejected"
+            && e.reason.as_deref().is_some_and(|r| r.contains("pct_position is not valid for a swap"))),
+        "FIXED #121(c): rejection explains pct_position is invalid for a swap"
     );
     let eth = trace.final_portfolio.balances["base"]["ETH"].parse::<f64>().unwrap();
-    assert!(
-        approx(eth, 0.5),
-        "issue #121(c): pct_position aliased pct_balance and sold half (ETH={eth}); \
-         CORRECT behavior would leave ETH at 1.0 (rejected)"
-    );
+    assert!(approx(eth, 1.0), "FIXED #121(c): ETH untouched at 1.0 (swap rejected), got {eth}");
 }
 
 // ---------------------------------------------------------------------------
