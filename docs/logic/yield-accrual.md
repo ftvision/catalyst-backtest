@@ -6,8 +6,9 @@ position; the engine then accrues interest **every tick** based on the elapsed
 wall-clock time and the position's current APR; a `yield_withdraw` redeems
 principal + accrued back to the chain balance. Correctness hinges on three
 things: accrual scaling with *actual* elapsed seconds, money conservation across
-deposit/accrue/withdraw, and being honest about what's simplified (no
-compounding, 1:1 USD valuation of non-stable assets, USD-as-asset-units gas).
+deposit/accrue/withdraw, and being honest about what's simplified (compounding
+frequency follows the tick grid, 1:1 USD valuation of non-stable assets,
+USD-as-asset-units gas).
 
 The deposit/withdraw execution lives in
 `crates/execution-models/src/yields.rs`; the per-tick accrual and valuation live
@@ -16,30 +17,32 @@ in `crates/simulation-engine/src/engine.rs`; the position math lives in
 
 ## What it is
 
-### The accrual rule (simple interest, per tick)
+### The accrual rule (per-tick compounding)
 
 Every tick, for every open yield position, the engine credits
 
 ```
-interest = principal · apr · fraction
+interest = (principal + accrued) · apr · fraction
 fraction = elapsed_secs / YEAR_SECONDS        (YEAR_SECONDS = 31_536_000)
 ```
 
-`crates/simulation-engine/src/engine.rs:1019` (`accrue_yield`):
+`crates/simulation-engine/src/engine.rs:1192` (`accrue_yield`):
 - `fraction` is computed once per tick from `elapsed_secs`
-  (`engine.rs:1028`); `YEAR_SECONDS = 31_536_000` (`engine.rs:27`).
+  (`engine.rs:1201`); `YEAR_SECONDS = 31_536_000` (`engine.rs:27`).
 - `elapsed_secs` is `ts - prev_ts` (the actual gap since the previous tick), or
   the configured `interval_secs` on the very first tick when there is no prior
-  tick (`engine.rs:241`).
+  tick (`engine.rs:264`).
 - `apr` is looked up per position via `index.apr_at(key, ts)`
-  (`engine.rs:1031`); if there's no APR series for the position at all, that
+  (`engine.rs:1204`); if there's no APR series for the position at all, that
   position is skipped this tick (`else { continue }`).
-- `interest = y.principal · apr · fraction` (`engine.rs:1032`). Note it uses
-  **`principal` only** — accrued interest is not part of the base, i.e. it does
-  **not compound** (see #114 below).
+- `interest = (y.principal + y.accrued) · apr · fraction` (`engine.rs:1209`).
+  The base is the position's full value — previously-accrued interest earns
+  interest, i.e. it **compounds** (#114, fixed). Because `withdraw_yield`
+  draws accrued-first-then-principal, the base equals `YieldPosition::value()`
+  regardless of how withdrawals were split.
 - Zero interest is skipped (no event); otherwise it calls
   `ledger.accrue_yield(...)` and emits a `yield_accrued` event carrying `apr` and
-  `interest_usd` (`engine.rs:1036–1049`).
+  `interest_usd` (`engine.rs:1211–1224`).
 
 `ledger.accrue_yield` (`crates/portfolio-ledger/src/lib.rs:233`) adds the
 interest to `position.accrued` and to the cumulative `yield_usd` counter
@@ -89,14 +92,15 @@ over positions it just snapshotted (`engine.rs:1027`).
 
 | Policy field | Variants | Honored? |
 | --- | --- | --- |
-| `yield_accrual` | `SimpleApr`, `CompoundApy`, `ProtocolIndex` | **No — not read.** The engine always does simple APR. |
+| `yield_accrual` | `SimpleApr`, `CompoundApy`, `ProtocolIndex` | **No — not read.** The engine always compounds per tick (#164). |
 
 The `YieldAccrual` enum is defined at
 `crates/simulation-policies/src/lib.rs:111` and carried on `ResolvedPolicy`
 (`lib.rs:144`), but a grep of `crates/simulation-engine/src/` finds **no
 reference** to `yield_accrual` / `CompoundApy` / `ProtocolIndex` / `SimpleApr`.
-So `CompoundApy` and `ProtocolIndex` are **enum stubs with no behavior**; every
-profile accrues identically as simple APR (#121, and compounding #114).
+Every profile accrues identically (per-tick compounding), even though
+`strict_v1` *resolves* `yield_accrual: simple_apr` — the knob contradicts the
+behavior until #164 wires it.
 
 ## Which market / when to use
 
@@ -107,10 +111,10 @@ chain, pool) yield series in the market-data bundle (see the `accrual_gaps.rs`
 test bundle for the shape: a `yields` entry with a `points` array of
 `{ts, apr}` points).
 
-There is currently only one accrual behavior (simple APR), so there's no
-"choose one over another" decision to make at the policy level — the choice that
-matters is whether your deposit asset is a stablecoin (valuation is correct) vs.
-a volatile asset (valued 1:1 USD, which is wrong — see below).
+There is currently only one accrual behavior (per-tick compounding), so there's
+no "choose one over another" decision to make at the policy level — the choice
+that matters is whether your deposit asset is a stablecoin (valuation is
+correct) vs. a volatile asset (valued 1:1 USD, which is wrong — see below).
 
 ## Correctness notes / edge cases
 
@@ -131,15 +135,21 @@ a volatile asset (valued 1:1 USD, which is wrong — see below).
   (`engine.rs:245`, ahead of `run_action_chain` / `evaluate_signals` later in the
   loop), so newly-deposited principal does not accrue for the tick on which it
   was deposited — interest first appears on the *next* tick.
-- **NOT compounding (#114).** Interest is `principal · apr · fraction`; the
-  `accrued` balance is never folded back into the principal base
-  (`engine.rs:1032`). So this is **simple interest**, not APY. The `CompoundApy`
-  policy variant exists but is not implemented.
-- **No yield-policy gate (#121).** `accrue_yield` is called unconditionally every
-  tick (`engine.rs:245`) and never consults `policy.yield_accrual`. There is no
-  way to select compounding or a protocol-index model, and no way to turn yield
-  accrual off via policy (unlike funding, which has a `Funding::None` knob —
-  `crates/simulation-policies/src/lib.rs:101`).
+- **Compounding follows the tick grid (#114 — FIXED).** Interest is
+  `(principal + accrued) · apr · fraction` (`engine.rs:1209`), i.e. discrete
+  compounding whose frequency is the **data-driven tick grid**: dense hourly
+  data compounds hourly; a long gap compounds once over the whole elapsed
+  window (simple within the gap). Two stated assumptions: (a) the input series
+  field is an **APR** (per-tick compounding of an APR approaches e^APR
+  effective on dense grids); if a provider actually delivers a published *APY*,
+  this slightly double-compounds; (b) results are mildly grid-dependent —
+  the same position over the same wall-clock accrues marginally more on a
+  finer grid. Both tracked under #164.
+- **No yield-policy gate (#121/#164).** `accrue_yield` is called unconditionally
+  every tick (`engine.rs:268`) and never consults `policy.yield_accrual`. There
+  is no way to select simple interest or a protocol-index model, and no way to
+  turn yield accrual off via policy (unlike funding, which has a
+  `Funding::None` knob — `crates/simulation-policies/src/lib.rs:101`).
 - **Non-stable yield valued 1:1 USD (#115).** `compute_equity` adds
   `y.value()` (a quantity in *asset units*) straight into USD equity
   without multiplying by a mark price (`engine.rs:1108–1109`). For a stablecoin
@@ -184,9 +194,15 @@ a volatile asset (valued 1:1 USD, which is wrong — see below).
 `crates/simulation-engine/tests/accrual_gaps.rs`:
 - `yield_accrues_full_elapsed_time_across_a_tick_gap` — deposits 10,000 USDC at
   5% APR over a series with a missing 2h candle (points at 0h/1h/3h). Accrual
-  fires 1h at tick 1 and 2h across the gap at tick 3, totaling the full 3h
-  (`10000 · 0.05 · 3·3600/31_536_000 ≈ 0.171233`), proving #118 — the pre-fix
-  static-interval value (2h, `0.114155`) is explicitly checked against.
+  fires 1h at tick 1 and 2h across the gap at tick 3 (the gap slice compounding
+  on the tick-1 interest), proving #118 — the pre-fix static-interval value is
+  explicitly checked against.
+
+`crates/simulation-engine/tests/issue_114_yield_simple_not_compounding.rs`:
+- exact-`Decimal` equality against an independently computed per-tick
+  compounding reference loop, a negative control against the old
+  simple-interest total, and a first-tick boundary case (compounding equals
+  simple interest while `accrued = 0`).
 
 `crates/portfolio-ledger/tests/ledger.rs`:
 - `deposit_yield_debits_and_creates_position` — principal moves off the balance,
@@ -221,7 +237,9 @@ inferred from the code paths cited above. No test exercises `CompoundApy` /
 
 ## Related issues
 
-- [#114](https://github.com/ftvision/catalyst-backtest/issues/114) — yield is simple, not compounding
+- [#114](https://github.com/ftvision/catalyst-backtest/issues/114) — yield compounding — FIXED
 - [#115](https://github.com/ftvision/catalyst-backtest/issues/115) — non-stable yield valuation (1:1 USD, gas units)
 - [#118](https://github.com/ftvision/catalyst-backtest/issues/118) — elapsed-time accrual — FIXED
-- [#121](https://github.com/ftvision/catalyst-backtest/issues/121) — no Yield policy gate
+- [#121](https://github.com/ftvision/catalyst-backtest/issues/121) — fidelity backlog (pct_position, cooldown/TIF)
+- [#164](https://github.com/ftvision/catalyst-backtest/issues/164) — `yield_accrual` knob unwired; APR-vs-APY input assumption; no off-switch
+- [#166](https://github.com/ftvision/catalyst-backtest/issues/166) — `total_yield_usd`/`interest_usd` in asset units for non-stables

@@ -1202,7 +1202,11 @@ fn accrue_yield(
     for y in positions {
         let key = (y.protocol.clone(), y.asset.clone(), y.chain.clone(), y.pool.clone());
         let Some(apr) = index.apr_at(&key, ts) else { continue };
-        let interest = y.principal * apr * fraction;
+        // Compound on the full position value (principal + already-accrued
+        // interest), not principal alone (#114): earned interest itself earns,
+        // matching real protocols (e.g. Aave aToken balances) rather than simple
+        // interest that drifts low over long horizons.
+        let interest = (y.principal + y.accrued) * apr * fraction;
         if interest.is_zero() {
             continue;
         }

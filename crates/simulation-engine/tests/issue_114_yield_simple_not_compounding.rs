@@ -1,19 +1,17 @@
-//! Issue #114: yield accrual uses SIMPLE interest, not compounding.
+//! Issue #114 (FIXED): yield accrual COMPOUNDS on `(principal + accrued)`, not
+//! simple interest on `principal` alone.
 //!
-//! BUG LOCATION: crates/simulation-engine/src/engine.rs:1024 in `accrue_yield`:
-//!   `let interest = y.principal * apr * fraction;`
-//! Interest is computed on `principal` only (a constant), so each tick adds the
-//! same amount and the position grows linearly (simple interest). A correct
-//! engine compounds on `(principal + accrued)`.
+//! `accrue_yield` now computes `interest = (y.principal + y.accrued) * apr *
+//! fraction`, so earned interest itself earns (matching real protocols such as
+//! Aave aToken balances) instead of growing linearly and drifting low over long
+//! horizons.
 //!
-//! VERDICT: bug is PRESENT. Both tests below pass by pinning the engine's
-//! current (incorrect, simple-interest) accrued value and documenting the
-//! correct (compounding) value it should produce instead.
-//!
-//! - issue_114_accrued_is_simple_interest: pins the exact simple-interest
-//!   accrued string the engine currently produces.
-//! - issue_114_accrued_strictly_less_than_compounded: shows the engine's
-//!   accrued is strictly below the per-tick-compounded reference.
+//! - issue_114_accrued_compounds_on_principal_plus_accrued: the accrued value
+//!   matches the per-tick-compounded figure, not the simple-interest one.
+//! - issue_114_accrued_equals_per_tick_compounded: the engine accrued EQUALS an
+//!   independently computed per-tick-compounding reference.
+//! - issue_114_first_tick_accrual_matches_simple: at the first accrual tick
+//!   (accrued still 0) compounding and simple coincide — the boundary case.
 
 use std::collections::BTreeMap;
 use std::str::FromStr;
@@ -90,21 +88,17 @@ fn run_scenario(n: i64) -> catalyst_contracts::trace::SimulationTrace {
     run(&SimulationInput { graph, config, policy, market_data }).unwrap()
 }
 
-/// Issue #114 (PRESENT): `accrue_yield` uses `y.principal` (constant) instead of
-/// `(y.principal + y.accrued)`. With 100 accrual ticks the total accrued equals
-/// the SIMPLE-interest value `100 * 10000 * 0.05 * (3600/31536000)` =
-/// "5.707762557077625570776255".
-///
-/// This is INCORRECT. A compounding engine would report
-/// "5.7093754961951401003444278894" (strictly larger). The exact-string
-/// assertion below pins the buggy behavior; a correct fix would change it.
+/// Issue #114 (FIXED): `accrue_yield` compounds on `(principal + accrued)`. With
+/// 100 accrual ticks the total accrued equals the per-tick-COMPOUNDED value
+/// "5.7093754961951401003444278894", strictly larger than the old simple-interest
+/// figure "5.707762557077625570776255".
 #[test]
-fn issue_114_accrued_is_simple_interest() {
+fn issue_114_accrued_compounds_on_principal_plus_accrued() {
     let trace = run_scenario(100);
 
     let yp = &trace.final_portfolio.yield_positions[0];
 
-    // Principal is never folded into the position (part of the same bug).
+    // Principal stays as the deposited amount; the growth lives in `accrued`.
     assert_eq!(yp.principal, "10000");
 
     // accrue_yield runs at the START of each tick, before the tick-0 deposit, so
@@ -116,28 +110,20 @@ fn issue_114_accrued_is_simple_interest() {
         .count();
     assert_eq!(accrual_events, 100, "expected one accrual per tick 1..=100");
 
-    // INCORRECT (simple interest) value the engine currently produces.
+    // FIXED: compounded value (interest earns interest).
     assert_eq!(
         yp.accrued.as_deref(),
-        Some("5.707762557077625570776255"),
-        "issue #114: engine produces simple-interest accrued; correct compounding \
-         value would be 5.7093754961951401003444278894"
-    );
-
-    // Make the discrepancy explicit: the engine value is NOT the compounding value.
-    assert_ne!(
-        yp.accrued.as_deref(),
         Some("5.7093754961951401003444278894"),
-        "issue #114: engine should (but does not) compound on principal+accrued"
+        "issue #114 FIXED: compounded accrued on principal+accrued"
     );
+    // And it is no longer the simple-interest value.
+    assert_ne!(yp.accrued.as_deref(), Some("5.707762557077625570776255"));
 }
 
-/// Issue #114 (PRESENT): simple interest under-accrues versus per-tick
-/// compounding. The engine's accrued is STRICTLY LESS than the compounded
-/// reference computed here with the same rust_decimal arithmetic. A correct
-/// engine would report a value EQUAL to `comp`, not strictly less.
+/// Issue #114 (FIXED): the engine accrued EQUALS an independently computed
+/// per-tick-compounding reference (same rust_decimal arithmetic).
 #[test]
-fn issue_114_accrued_strictly_less_than_compounded() {
+fn issue_114_accrued_equals_per_tick_compounded() {
     let trace = run_scenario(100);
     let yp = &trace.final_portfolio.yield_positions[0];
 
@@ -153,15 +139,32 @@ fn issue_114_accrued_strictly_less_than_compounded() {
 
     let actual = Decimal::from_str(yp.accrued.as_deref().unwrap()).unwrap();
 
-    // The engine under-accrues (simple < compounded) -- the issue #114 defect.
-    assert!(
-        actual < comp,
-        "issue #114: engine accrued {} should equal compounded {} but is strictly less (simple interest)",
-        actual,
-        comp
+    assert_eq!(
+        actual, comp,
+        "issue #114 FIXED: engine accrued {actual} should equal compounded {comp}"
     );
+    // The compounded value is strictly above the old simple-interest figure.
+    let simple = p * apr * frac * Decimal::from(100);
+    assert!(actual > simple, "compounded {actual} > simple {simple}");
+}
 
-    // Pin both endpoints for clarity.
-    assert_eq!(actual.normalize().to_string(), "5.707762557077625570776255");
-    assert_eq!(comp.normalize().to_string(), "5.7093754961951401003444278894");
+/// Issue #114 edge: at the FIRST accrual tick the accrued is still 0, so the
+/// compounding step `(principal + 0) * apr * frac` coincides with simple interest
+/// — the boundary where the fix and the old behavior agree.
+#[test]
+fn issue_114_first_tick_accrual_matches_simple() {
+    let trace = run_scenario(1); // deposit tick0, one accrual at tick1
+    let yp = &trace.final_portfolio.yield_positions[0];
+
+    let accrual_events =
+        trace.events.iter().filter(|e| e.event_type == "yield_accrued").count();
+    assert_eq!(accrual_events, 1, "exactly one accrual tick");
+
+    let p = Decimal::from(10000);
+    let apr = Decimal::from_str("0.05").unwrap();
+    let frac = Decimal::from(3600) / Decimal::from(31_536_000);
+    let one_tick = p * apr * frac; // == (p + 0) * apr * frac
+
+    let actual = Decimal::from_str(yp.accrued.as_deref().unwrap()).unwrap();
+    assert_eq!(actual, one_tick, "first accrual tick: compounding == simple");
 }
