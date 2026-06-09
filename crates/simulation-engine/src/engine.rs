@@ -1137,7 +1137,9 @@ impl ActionOutcome {
 }
 
 fn mark_price(index: &BundleIndex, venue: &str, symbol: &str, ts: i64) -> Option<Decimal> {
-    index.bar_at(venue, symbol, ts).map(|b| b.close).or_else(|| index.price_any(symbol, ts))
+    // Venue-scoped close at-or-before `ts` (#119): a position is valued from its
+    // OWN venue's candles, never another venue's that happens to share the symbol.
+    index.close_at(venue, symbol, ts)
 }
 
 fn accrue_funding(
