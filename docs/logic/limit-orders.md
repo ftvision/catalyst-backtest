@@ -61,8 +61,14 @@ the ledger at placement — placement only reads it (`engine.rs:674`–`676`), a
 downstream graph actions are deferred until the order actually fills (captured at
 `engine.rs:703`, run at the fill bar via `engine.rs:788`).
 
-Each tick, before any new actions run, `fill_resting_orders` (`engine.rs:715`,
-invoked at `engine.rs:253`) scans the book:
+Each tick, before any new actions run, `fill_resting_orders` scans the book. It
+runs **after** `fill_pending_market` (the deferred `next_open` market fills, #116):
+deferred market orders fill at the bar's **open** (the earliest price of the bar),
+resting limits at a later intra-bar **touch**, so when a reduce-only take-profit
+limit and a deferred market entry land on the same bar the entry opens first and
+the limit can then reduce it. (A reduce-only limit therefore can't be *placed* until
+its position exists — under `next_open` that means it chains off the entry's fill on
+the next bar, not the decision bar.) The scan itself:
 
 1. **Next-bar eligibility** (`engine.rs:734`): `if order.placed_index >= tick_index`
    the order is skipped and kept. An order placed at tick *T* is first eligible at

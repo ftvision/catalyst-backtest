@@ -159,31 +159,35 @@ fn issue_113_yield_accrues_full_elapsed_across_a_one_bar_gap() {
 /// `interval_secs` lookback, so a funding point that falls inside a data gap is
 /// still summed.
 ///
-/// Bundle: hyperliquid/ETH candles at 0h, 1h, 3h (2h candle MISSING -> gap),
-/// flat close 2000. funding hourly rate 0.001 at 1h, 2h, 3h — the 2h point
-/// lands INSIDE the gap. A 1000 USD long ETH (leverage 1) is opened at tick 0;
+/// Bundle: hyperliquid/ETH candles at 0h, 1h, 2h, 4h (3h candle MISSING -> gap),
+/// flat close 2000. funding hourly rate 0.001 at 2h, 3h, 4h — the 3h point lands
+/// INSIDE the gap. A 1000 USD long ETH (leverage 1) is opened at tick 0; under
+/// next_open the market order fills at the NEXT bar's open (tick 1h, #116):
 /// fill = 2000 + 10bps = 2002, size = 1000/2002, marked at 2000 ->
-/// notional = (1000/2002)*2000 = 999.000999000999000999000999.
+/// notional = (1000/2002)*2000 = 999.000999000999000999000999. The position is
+/// therefore held across the 2h and 4h funding windows (the 1h window (0h,1h] runs
+/// before the fill and carries no funding point anyway).
 ///
-/// At tick 3h, 2h elapsed since the 1h tick, so the window is (1h, 3h] and sums
-/// BOTH the in-gap 2h point AND the 3h point: rate "0.002", payment ~1.998 (NOT
-/// the single 3h point rate "0.001", ~0.999). This regression guard pins the
-/// two-point sum; if the static window returns, the gap-tick assertion fails.
+/// At tick 2h the window (1h, 2h] charges the single 2h point (rate 0.001). At tick
+/// 4h, 2h elapsed since the 2h tick, so the window is (2h, 4h] and sums BOTH the
+/// in-gap 3h point AND the 4h point: rate "0.002", payment ~1.998 (NOT the single
+/// 4h point rate "0.001", ~0.999). This regression guard pins the two-point sum; if
+/// the static window returns, the gap-tick assertion fails.
 #[test]
 fn issue_118_funding_window_sums_all_points_inside_a_gap() {
-    let candle_pts: Vec<Value> = [0i64, 1, 3]
+    let candle_pts: Vec<Value> = [0i64, 1, 2, 4]
         .iter()
         .map(|h| json!({"ts": iso(EPOCH + h * 3600), "open": "2000", "high": "2000", "low": "2000", "close": "2000"}))
         .collect();
-    // funding at 1h, 2h, 3h — the 2h point is inside the missing-candle gap.
-    let funding_pts: Vec<Value> = [1i64, 2, 3]
+    // funding at 2h, 3h, 4h — the 3h point is inside the missing-candle gap.
+    let funding_pts: Vec<Value> = [2i64, 3, 4]
         .iter()
         .map(|h| json!({"ts": iso(EPOCH + h * 3600), "rate": "0.001"}))
         .collect();
 
     let bundle: MarketDataBundle = serde_json::from_value(json!({
         "schema_version": "catalyst.backtest.market_data_bundle.v1",
-        "interval": "1h", "start": iso(EPOCH), "end": iso(EPOCH + 3 * 3600),
+        "interval": "1h", "start": iso(EPOCH), "end": iso(EPOCH + 4 * 3600),
         "candles": [{"venue": "hyperliquid", "symbol": "ETH", "quote": "USD", "points": candle_pts}],
         "funding": [{"venue": "hyperliquid", "symbol": "ETH", "points": funding_pts}],
         "gas": [],
@@ -198,7 +202,7 @@ fn issue_118_funding_window_sums_all_points_inside_a_gap() {
     init.insert("hyperliquid".to_string(), bal);
     let config = BacktestConfig {
         start: iso(EPOCH),
-        end: iso(EPOCH + 3 * 3600),
+        end: iso(EPOCH + 4 * 3600),
         interval: "1h".to_string(),
         initial_portfolio: init,
         execution: None,
@@ -215,22 +219,22 @@ fn issue_118_funding_window_sums_all_points_inside_a_gap() {
     let trace = run(&SimulationInput { graph, config, policy: gap_tolerant_policy(), market_data: bundle }).unwrap();
 
     let fe = events_of(&trace, "funding_applied");
-    assert_eq!(fe.len(), 2, "expected funding at ticks 1h and 3h");
+    assert_eq!(fe.len(), 2, "expected funding at ticks 2h and 4h");
 
-    // Tick 1h: a single 1h point.
-    assert_eq!(fe[0].ts, iso(EPOCH + 3600));
+    // Tick 2h: a single 2h point (the position, opened on bar 0, filled on bar 1).
+    assert_eq!(fe[0].ts, iso(EPOCH + 2 * 3600));
     assert_eq!(fe[0].detail.as_ref().unwrap()["rate"].as_str().unwrap(), "0.001");
 
-    // Tick 3h (gap tick): window (1h, 3h] sums the in-gap 2h point AND the 3h point.
-    assert_eq!(fe[1].ts, iso(EPOCH + 3 * 3600));
+    // Tick 4h (gap tick): window (2h, 4h] sums the in-gap 3h point AND the 4h point.
+    assert_eq!(fe[1].ts, iso(EPOCH + 4 * 3600));
     let rate = fe[1].detail.as_ref().unwrap()["rate"].as_str().unwrap();
     assert_eq!(
         rate, "0.002",
-        "ISSUE #118 FIXED: gap tick (3h) sums the 2h+3h points (rate 0.002), not just the 3h point (0.001)"
+        "ISSUE #118 FIXED: gap tick (4h) sums the 3h+4h points (rate 0.002), not just the 4h point (0.001)"
     );
     assert_ne!(
         rate, "0.001",
-        "ISSUE #118 regression: gap tick must NOT skip the in-gap 2h funding point"
+        "ISSUE #118 regression: gap tick must NOT skip the in-gap 3h funding point"
     );
 
     let pay: f64 = fe[1].detail.as_ref().unwrap()["payment_usd"].as_str().unwrap().parse().unwrap();
