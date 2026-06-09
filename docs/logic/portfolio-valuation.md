@@ -21,24 +21,28 @@ into a running `Decimal`:
 | Cash balance, **stable** (USDC/USDT/USD/DAI/USDC.E) | `amount × 1` (1:1 USD) | `engine.rs:1094-1095` |
 | Cash balance, **non-stable** (ETH, BTC, …) | `amount × mark_price` | `engine.rs:1096-1097` |
 | **Perp** position | `margin_usd + unrealized_pnl(mark)` | `engine.rs:1101-1106` |
-| **Yield** position | `principal + accrued` (the position's `value()`) | `engine.rs:1108-1110` |
+| **Yield** position, **stable** asset | `value()` = `principal + accrued` (1:1 USD) | `engine.rs:1304-1305` |
+| **Yield** position, **non-stable** asset | `value() × mark_price` | `engine.rs:1306-1307` |
 
 **Stable detection** is `is_stable` (`crates/execution-models/src/pricing.rs:15`):
 a case-insensitive match against `USDC | USDT | USD | DAI | USDC.E`. Anything
 else is a non-stable and must be priced.
 
 **The mark price** for non-stables and perps is `mark_price`
-(`engine.rs:966`):
+(`engine.rs:1139`):
 
 ```
-index.bar_at(venue, symbol, ts).map(|b| b.close)   // exact close on this venue/bar
-    .or_else(|| index.price_any(symbol, ts))         // else any-venue fallback
+index.close_at(venue, symbol, ts)   // venue-scoped close, exact else last <= ts
 ```
 
-i.e. **mark-to-close** of the bar at `ts` on the position's own venue, falling
-back to `price_any` (`crates/simulation-engine/src/market.rs:154`): the symbol's
-price on *any* venue, exact at `ts` or else the **last known value ≤ ts**
-(`market.rs:156`).
+i.e. **mark-to-close** of the bar at `ts` on the position's **own venue**,
+carried forward from the venue's last known close on a gap
+(`crates/simulation-engine/src/market.rs:close_at`). It is **venue-scoped**
+(#119(a), fixed): a holding is never valued at another venue's candle that
+happens to share the symbol. The carry-forward has **no staleness bound**
+(#119(b), open), and a venue with no candle at-or-before `ts` yields `None` —
+the caller silently skips the leg (#119(c), open). `price_any` survives only on
+the venue-less signal-source path, where no position is being valued.
 
 **Perp PnL** is `PerpPosition::unrealized_pnl`
 (`crates/portfolio-ledger/src/position.rs:48`):
@@ -48,7 +52,10 @@ current mark — never the full notional.
 
 **Yield value** is `YieldPosition::value`
 (`crates/portfolio-ledger/src/position.rs:89`): `principal + accrued`, the
-redeemable amount, with no separate price lookup.
+redeemable amount in **asset units**. Stables count 1:1; non-stables are
+marked to price like a spot balance (#115, fixed). A non-stable yield
+position with no price this tick is silently skipped — same gap as the cash
+branch (#119).
 
 ### When equity is snapshotted in the tick
 
@@ -73,8 +80,8 @@ within the tick uses the **start-of-tick** value.
 ## Correctness notes / edge cases
 
 - **No look-ahead in valuation.** Every leg is marked at the bar dated `ts` (the
-  current tick) or, via `price_any`, the last known price **≤ ts**
-  (`market.rs:156`). Valuation never reads a future bar. (This is distinct from
+  current tick) or the venue's last known close **≤ ts** (`close_at`).
+  Valuation never reads a future bar. (This is distinct from
   fill pricing, which can use `next_open`; mark-to-market is close-of-current-bar.)
 
 - **Stables are hard-coded to 1:1**, never priced (`engine.rs:1094`). A
@@ -95,11 +102,11 @@ within the tick uses the **start-of-tick** value.
 - **Accruals feed valuation over actual elapsed time.** Both funding
   (`accrue_funding`, `engine.rs:970`) and yield (`accrue_yield`,
   `engine.rs:1019`) scale by `elapsed_secs = ts − prev_ts`
-  (`engine.rs:241`), not a fixed interval (#118). Yield interest is
-  `principal × apr × (elapsed / YEAR_SECONDS)` (`engine.rs:1028,1032`) — note it
-  multiplies **`principal`**, not `principal + accrued`, so yield is **simple,
-  not compounding**. The accrued amount lands in the position before the
-  post-action `compute_equity`, so equity reflects it the same tick.
+  (`engine.rs:264`), not a fixed interval (#118). Yield interest is
+  `(principal + accrued) × apr × (elapsed / YEAR_SECONDS)` (`engine.rs:1209`) —
+  per-tick **compounding** on the position's full value (#114, fixed). The
+  accrued amount lands in the position before the post-action
+  `compute_equity`, so equity reflects it the same tick.
 
 - **Determinism.** Equity is a pure function of the ledger snapshot and the
   indexed market data at `ts`. Balances and positions iterate in `BTreeMap`
@@ -111,20 +118,25 @@ within the tick uses the **start-of-tick** value.
 
 ### Known limitations
 
-- **Yield is valued 1:1 in USD regardless of the underlying asset (#115).**
-  `compute_equity` adds `y.value()` — `principal + accrued`, raw **asset units** —
-  straight into a USD total (`engine.rs:1109`), with no `mark_price` call.
-  For a USDC/stable yield position this is correct. For a **non-stable** yield
-  position (e.g. ETH staked in a pool), the principal+accrued *asset amount* is
-  treated as if it were that many dollars — undervaluing or overvaluing the leg
-  by the asset's price. Only the stable case is faithful today.
+- **Non-stable yield equity is fixed (#115), but the cumulative counters are
+  not (#166).** `compute_equity` now marks non-stable yield positions at
+  `value() × mark_price` (`engine.rs:1300-1309`). However `total_yield_usd`
+  and the `yield_accrued` event's `interest_usd` still carry raw asset units
+  for non-stables — tracked as #166. An *unpriced* non-stable yield position
+  is silently skipped from equity (no warning), the same class of gap as the
+  cash-balance branch below (#119).
 
-- **An unpriced non-stable balance is silently dropped (#119).** The cash-balance
-  branch adds `amt × price` *only* `if let Some(price) = mark_price(...)`
-  (`engine.rs:1096`); there is no `else`. If a non-stable asset has no bar on its
-  venue and `price_any` finds nothing for the symbol, that holding contributes
-  **0** to equity with no warning — equity understates the portfolio rather than
-  erroring.
+- **An unpriced non-stable balance is silently dropped (#119(c)).** The
+  cash-balance branch adds `amt × price` *only* `if let Some(price) =
+  mark_price(...)`; there is no `else`. If the holding's venue has **no candle
+  at or before `ts`**, that holding contributes **0** to equity with no
+  warning — equity understates the portfolio rather than erroring. Note this
+  window **widened** with venue-scoping: previously a symbol priced on *any*
+  venue would be (wrongly) borrowed; now an `initial_portfolio` holding on a
+  candle-less venue is excluded outright. Pinned by
+  `issue_119_cross_venue_holding_excluded_not_borrowed`. (A *yield* position
+  cannot hit this window: a non-stable deposit is rejected without an exact bar
+  on its chain (#115), and the carry-forward keeps it priced afterwards.)
 
 - **An unpriced perp drops its PnL but keeps its margin (#119).** When
   `mark_price` returns `None`, the perp contributes only `margin_usd`
@@ -132,14 +144,11 @@ within the tick uses the **start-of-tick** value.
   posted margin is preserved, but a winning or losing position with no current
   mark is valued as flat.
 
-- **`price_any` fallback is venue-blind and can be stale (#119).** When the
-  position's own venue has no bar at `ts`, `mark_price` falls back to
-  `price_any`, which (1) ignores venue — it returns the symbol's price from *any*
-  venue's series (`market.rs:154-156`, keyed only on `by_symbol`) — and
-  (2) returns the **last known price ≤ ts** if there's no exact match
-  (`market.rs:156`). So a perp on venue A can be marked at venue B's price, and a
-  gappy series can mark a leg at a stale price carried forward from an earlier
-  bar. Both are silent.
+- **Venue-blind marking is fixed; staleness is not (#119(b)).** `mark_price`
+  no longer consults other venues. But the venue-scoped carry-forward returns
+  the **last known close ≤ ts with no staleness bound** — a gappy series can
+  mark a leg at an arbitrarily old price, silently. A bound (e.g. N intervals)
+  plus a warning is the open follow-up.
 
 ## Tests
 
@@ -168,14 +177,16 @@ i.e. `compute_equity` end-to-end through the tick):
   off this equity rather than checking the exact notional, confirming
   USD-denominated perp sizing draws on the same equity figure.
 
-Note: there is **no** dedicated unit test asserting the non-stable balance
-mark-to-close path, the unpriced-leg drop (#119), the `price_any` venue-blind
-fallback, or the non-stable yield 1:1 behavior (#115); those claims are grounded
-in the `compute_equity`/`mark_price` source above, not in an executable test.
+`crates/simulation-engine/tests/issue_119_price_lookups.rs` pins the marking
+semantics: venue-scoped marking (a, fixed), unbounded staleness (b, follow-up),
+the unpriced-leg drop including the cross-venue exclusion (c, follow-up),
+gap-bar sizing rejection (d, follow-up), and the same-tick equity snapshot
+(e, follow-up). `issue_115_nonstable_yield_equity.rs` covers the non-stable
+yield marking.
 
 ## Related issues
 
 - [#115](https://github.com/ftvision/catalyst-backtest/issues/115) — non-stable yield valuation
 - [#117](https://github.com/ftvision/catalyst-backtest/issues/117) — margin cap — FIXED
 - [#118](https://github.com/ftvision/catalyst-backtest/issues/118) — elapsed accrual — FIXED
-- [#119](https://github.com/ftvision/catalyst-backtest/issues/119) — inconsistent/stale/venue-blind price lookups; unpriced holdings dropped
+- [#119](https://github.com/ftvision/catalyst-backtest/issues/119) — price lookups: venue-scoping FIXED (a); staleness bound (b), unpriced-leg warning (c), sizing unification (d), same-tick snapshot (e) still open

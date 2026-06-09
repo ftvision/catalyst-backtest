@@ -17,8 +17,8 @@ use catalyst_execution_models::{
 };
 use catalyst_portfolio_ledger::{Ledger, PerpPosition, PerpSide, YieldPosition};
 use catalyst_simulation_policies::{
-    resolve_policy, Funding, InsufficientBalance, LiquidationCheck, MissingRequired, Repeat,
-    ResolvedPolicy, SignalTrigger,
+    resolve_policy, Funding, InsufficientBalance, LiquidationCheck, MissingRequired,
+    PriceSelection, Repeat, ResolvedPolicy, SignalTrigger,
 };
 
 use crate::exec_graph::{eval_threshold, ActionNode, CombinatorOp, ExecGraph, Signal, SignalDef};
@@ -84,11 +84,32 @@ struct RestingOrder {
     downstream: Vec<String>,
 }
 
+/// A market order decided on one bar but deferred to fill at the *next* bar's
+/// open, under `next_open` price selection. Unlike a [`RestingOrder`] it has no
+/// limit price — it fills unconditionally (taker) at the next bar's open — but it
+/// shares the same next-bar eligibility so the fill never uses decision-bar data.
+/// See #116: filling (and booking) a market order on its decision bar conflates
+/// decision time with fill time and injects phantom entry-bar P&L.
+struct PendingMarket {
+    id: String,
+    node_id: String,
+    /// Tick index at the decision; the fill happens from the next tick on.
+    placed_index: usize,
+    /// The swap/perp config to replay at the fill bar (amount already resolved
+    /// against the decision bar, like a resting order).
+    kind: RestingKind,
+    /// Action ids to chain when the order fills.
+    downstream: Vec<String>,
+}
+
 /// What happened when the engine attempted an action node.
 enum ActionOutcome {
     Executed(Fill),
     Rejected(String),
     Resting(RestingSpec),
+    /// A market order under `next_open`: queue it to fill at the next bar's open
+    /// instead of executing inline on the decision bar (#116).
+    DeferredMarket(RestingKind),
 }
 
 /// A validated limit placement ready to enter the resting book.
@@ -208,6 +229,8 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
     let mut signals_ever_fired: HashSet<String> = HashSet::new();
     // Resting limit orders awaiting a touch, plus a monotonic id counter.
     let mut resting: Vec<RestingOrder> = Vec::new();
+    // Market orders deferred to fill at the next bar's open (#116).
+    let mut pending: Vec<PendingMarket> = Vec::new();
     let mut order_seq: u64 = 0;
     let mut signal_last_fired: HashMap<String, i64> = HashMap::new();
     let mut signal_fire_count: HashMap<String, u32> = HashMap::new();
@@ -249,10 +272,20 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
         // this tick (snapshots below recompute it post-action).
         let tick_equity = compute_equity(&ledger, &index, ts);
 
-        // Resting orders placed on earlier bars get a chance to fill/expire first.
+        // Orders queued on earlier bars get a chance to fill before new actions —
+        // both booked on this bar, the bar they fill. Deferred next_open market
+        // orders fill FIRST, at this bar's open (the earliest price of the bar);
+        // resting limit orders fill SECOND, when the price touches their limit
+        // intra-bar (after the open). The order matters when a resting limit reduces
+        // a position a deferred market order opens on the same bar (a take-profit
+        // resting alongside a deferred entry).
+        fill_pending_market(
+            tick_index, ts, &ts_iso, &exec_graph, &mut ledger, &index, &policy, tick_equity,
+            &mut events, &mut resting, &mut pending, &mut order_seq,
+        );
         fill_resting_orders(
             tick_index, ts, &ts_iso, &exec_graph, &mut ledger, &index, &policy, tick_equity,
-            &mut events, &mut resting, &mut order_seq,
+            &mut events, &mut resting, &mut pending, &mut order_seq,
         );
 
         let ctx = TickContext { index: &index, ts };
@@ -261,7 +294,7 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
             for action_id in &exec_graph.initial_actions {
                 run_action_chain(
                     action_id, &exec_graph, &mut ledger, &ctx, &policy, &ts_iso, tick_index,
-                    tick_equity, &mut events, &mut resting, &mut order_seq,
+                    tick_equity, &mut events, &mut resting, &mut pending, &mut order_seq,
                 );
             }
             initial_done = true;
@@ -286,6 +319,7 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
             &variables,
             &mut warnings,
             &mut resting,
+            &mut pending,
             &mut order_seq,
         );
 
@@ -304,6 +338,18 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
             event_type: "order_expired".into(),
             node_id: Some(order.node_id),
             reason: Some("backtest ended with order resting".into()),
+            detail: Some(json!({ "order_id": order.id })),
+        });
+    }
+
+    // A market order deferred on the final bar has no next bar to fill against
+    // without look-ahead (#116), so it never executes — record that it lapsed.
+    for order in pending.drain(..) {
+        events.push(Event {
+            ts: last_ts_iso.clone(),
+            event_type: "order_expired".into(),
+            node_id: Some(order.node_id),
+            reason: Some("backtest ended before next_open fill bar".into()),
             detail: Some(json!({ "order_id": order.id })),
         });
     }
@@ -354,6 +400,7 @@ fn evaluate_signals(
     variables: &HashMap<String, Decimal>,
     warnings: &mut Vec<String>,
     resting: &mut Vec<RestingOrder>,
+    pending: &mut Vec<PendingMarket>,
     order_seq: &mut u64,
 ) {
     // Phase 1: compute every signal's boolean condition this tick. Signals are
@@ -459,7 +506,7 @@ fn evaluate_signals(
         for target in &signal.targets {
             run_action_chain(
                 target, exec_graph, ledger, ctx, policy, ts_iso, tick_index, equity, events,
-                resting, order_seq,
+                resting, pending, order_seq,
             );
         }
     }
@@ -630,6 +677,7 @@ fn run_action_chain(
     equity: Decimal,
     events: &mut Vec<Event>,
     resting: &mut Vec<RestingOrder>,
+    pending: &mut Vec<PendingMarket>,
     order_seq: &mut u64,
 ) {
     let mut stack = vec![action_id.to_string()];
@@ -703,6 +751,34 @@ fn run_action_chain(
                     downstream,
                 });
             }
+            ActionOutcome::DeferredMarket(kind) => {
+                // #116: the decision happens on this bar but the fill (and its
+                // ledger effect, event, and downstream chain) is deferred to the
+                // next bar's open. The ledger is left untouched here, so this
+                // bar's snapshot marks only positions actually held.
+                let downstream =
+                    exec_graph.out_action_edges.get(&id).cloned().unwrap_or_default();
+                let order_id = format!("{id}#{}", *order_seq);
+                *order_seq += 1;
+                events.push(Event {
+                    ts: ts_iso.to_string(),
+                    event_type: "order_deferred".into(),
+                    node_id: Some(id.clone()),
+                    reason: None,
+                    detail: Some(json!({
+                        "order_id": order_id,
+                        "kind": kind.label(),
+                        "fills_at": "next_open",
+                    })),
+                });
+                pending.push(PendingMarket {
+                    id: order_id,
+                    node_id: id.clone(),
+                    placed_index: tick_index,
+                    kind,
+                    downstream,
+                });
+            }
         }
     }
 }
@@ -723,6 +799,7 @@ fn fill_resting_orders(
     equity: Decimal,
     events: &mut Vec<Event>,
     resting: &mut Vec<RestingOrder>,
+    pending: &mut Vec<PendingMarket>,
     order_seq: &mut u64,
 ) {
     let ctx = TickContext { index, ts };
@@ -788,7 +865,7 @@ fn fill_resting_orders(
                 for target in &order.downstream {
                     run_action_chain(
                         target, exec_graph, ledger, &ctx, policy, ts_iso, tick_index, equity,
-                        events, resting, order_seq,
+                        events, resting, pending, order_seq,
                     );
                 }
             }
@@ -807,6 +884,95 @@ fn fill_resting_orders(
     // Orders placed by downstream chains this tick are already in `resting`;
     // append the ones that are still waiting.
     resting.extend(keep);
+}
+
+/// Fill market orders deferred from an *earlier* bar (#116) at THIS bar's open.
+///
+/// A `next_open` market order decided at tick T is queued (see `run_action_chain`)
+/// and filled here from tick T+1 on — at the current bar's open, with taker
+/// slippage — exactly the price `next_open` would have used at T, but now *booked*
+/// on the bar it actually fills. We fill with a `price_selection = Open` clone of
+/// the policy so `reference_price` returns this bar's open (the deferred order's
+/// next-open), not the bar after it.
+///
+/// A deferred order whose next bar never arrives (it was decided on the final bar)
+/// is simply never filled — there is no next open to fill against without
+/// look-ahead — and is dropped at end of run.
+#[allow(clippy::too_many_arguments)]
+fn fill_pending_market(
+    tick_index: usize,
+    ts: i64,
+    ts_iso: &str,
+    exec_graph: &ExecGraph,
+    ledger: &mut Ledger,
+    index: &BundleIndex,
+    policy: &ResolvedPolicy,
+    equity: Decimal,
+    events: &mut Vec<Event>,
+    resting: &mut Vec<RestingOrder>,
+    pending: &mut Vec<PendingMarket>,
+    order_seq: &mut u64,
+) {
+    let ready: Vec<PendingMarket> = std::mem::take(pending);
+    let mut keep: Vec<PendingMarket> = Vec::new();
+
+    // Fill the deferred order at this bar's open (its "next open"): a policy clone
+    // with Open selection makes `reference_price` return this bar's open.
+    let mut fill_policy = policy.clone();
+    fill_policy.price_selection = PriceSelection::Open;
+    let ctx = TickContext { index, ts };
+
+    for order in ready {
+        // Next-bar eligibility: an order deferred at tick T fills from T+1 on.
+        if order.placed_index >= tick_index {
+            keep.push(order);
+            continue;
+        }
+
+        let mut trial = ledger.clone();
+        let outcome = match &order.kind {
+            RestingKind::Swap(cfg) => execute_swap(&mut trial, &ctx, &fill_policy, cfg),
+            RestingKind::Perp(cfg) => execute_perp(&mut trial, &ctx, &fill_policy, cfg),
+        };
+        match outcome {
+            Execution::Executed(fill) => {
+                *ledger = trial;
+                let mut detail = serde_json::to_value(&fill).unwrap_or(Value::Null);
+                if let Value::Object(map) = &mut detail {
+                    map.insert("order_id".into(), json!(order.id));
+                }
+                // Booked on the fill bar (#116): the action_executed event carries
+                // this bar's ts, not the decision bar's.
+                events.push(Event {
+                    ts: ts_iso.to_string(),
+                    event_type: "action_executed".into(),
+                    node_id: Some(order.node_id.clone()),
+                    reason: None,
+                    detail: Some(detail),
+                });
+                // Downstream actions chain now, at the fill bar.
+                for target in &order.downstream {
+                    run_action_chain(
+                        target, exec_graph, ledger, &ctx, policy, ts_iso, tick_index, equity,
+                        events, resting, pending, order_seq,
+                    );
+                }
+            }
+            Execution::Rejected { reason } => {
+                events.push(Event {
+                    ts: ts_iso.to_string(),
+                    event_type: "action_rejected".into(),
+                    node_id: Some(order.node_id.clone()),
+                    reason: Some(reason),
+                    detail: Some(json!({ "order_id": order.id })),
+                });
+            }
+        }
+    }
+
+    // Orders deferred by chains this tick are already in `pending`; keep the
+    // still-waiting ones (decided this tick) for next bar.
+    pending.extend(keep);
 }
 
 fn execute_action(
@@ -847,6 +1013,10 @@ fn execute_action(
                         }),
                         LimitPlacement::Rejected(e) => ActionOutcome::Rejected(e),
                     }
+                } else if policy.price_selection == PriceSelection::NextOpen {
+                    // #116: a market order under next_open must fill at the *next*
+                    // bar's open, so defer it instead of booking it on this bar.
+                    ActionOutcome::DeferredMarket(RestingKind::Swap(cfg))
                 } else {
                     execute_swap(ledger, ctx, policy, &cfg).into()
                 }
@@ -877,6 +1047,9 @@ fn execute_action(
                         }),
                         LimitPlacement::Rejected(e) => ActionOutcome::Rejected(e),
                     }
+                } else if policy.price_selection == PriceSelection::NextOpen {
+                    // #116: defer a next_open market perp to the next bar's open.
+                    ActionOutcome::DeferredMarket(RestingKind::Perp(cfg))
                 } else {
                     execute_perp(ledger, ctx, policy, &cfg).into()
                 }
@@ -971,7 +1144,9 @@ impl ActionOutcome {
 }
 
 fn mark_price(index: &BundleIndex, venue: &str, symbol: &str, ts: i64) -> Option<Decimal> {
-    index.bar_at(venue, symbol, ts).map(|b| b.close).or_else(|| index.price_any(symbol, ts))
+    // Venue-scoped close at-or-before `ts` (#119): a position is valued from its
+    // OWN venue's candles, never another venue's that happens to share the symbol.
+    index.close_at(venue, symbol, ts)
 }
 
 fn accrue_funding(
@@ -1036,7 +1211,11 @@ fn accrue_yield(
     for y in positions {
         let key = (y.protocol.clone(), y.asset.clone(), y.chain.clone(), y.pool.clone());
         let Some(apr) = index.apr_at(&key, ts) else { continue };
-        let interest = y.principal * apr * fraction;
+        // Compound on the full position value (principal + already-accrued
+        // interest), not principal alone (#114): earned interest itself earns,
+        // matching real protocols (e.g. Aave aToken balances) rather than simple
+        // interest that drifts low over long horizons.
+        let interest = (y.principal + y.accrued) * apr * fraction;
         if interest.is_zero() {
             continue;
         }
@@ -1070,8 +1249,23 @@ fn check_liquidations(
     }
     let perps: Vec<PerpPosition> = ledger.perps().cloned().collect();
     for p in perps {
-        let Some(mark) = mark_price(index, &p.venue, &p.symbol, ts) else { continue };
-        if p.unrealized_pnl(mark) <= -p.margin_usd {
+        // Liquidation triggers on the worst price the position touches *within* the
+        // bar, not just the close (#120): a long is most underwater at the bar's
+        // low, a short at its high. Marking only the close lets a position that
+        // breaches its margin intrabar but recovers by close wrongly escape — a
+        // real venue would have closed it on the wick.
+        let adverse = match index.bar_at(&p.venue, &p.symbol, ts) {
+            Some(bar) => match p.side {
+                PerpSide::Long => bar.low,
+                PerpSide::Short => bar.high,
+            },
+            // No candle this tick: fall back to the last-known mark.
+            None => match mark_price(index, &p.venue, &p.symbol, ts) {
+                Some(m) => m,
+                None => continue,
+            },
+        };
+        if p.unrealized_pnl(adverse) <= -p.margin_usd {
             // Liquidation: margin is lost, position removed (settle nothing back).
             let _ = ledger.close_perp(&p.venue, &p.symbol, Decimal::ZERO);
             events.push(Event {
@@ -1082,7 +1276,7 @@ fn check_liquidations(
                 detail: Some(json!({
                     "venue": p.venue,
                     "symbol": p.symbol,
-                    "mark": mark.normalize().to_string(),
+                    "mark": adverse.normalize().to_string(),
                     "margin_lost_usd": p.margin_usd.normalize().to_string(),
                 })),
             });
@@ -1113,7 +1307,14 @@ fn compute_equity(ledger: &Ledger, index: &BundleIndex, ts: i64) -> Decimal {
         }
     }
     for y in ledger.yields() {
-        equity += y.value();
+        // A yield position is denominated in `asset` units; value it in USD like a
+        // spot balance (#115). A USD stablecoin is 1:1; anything else marks to its
+        // price, so e.g. ETH deposited into a vault isn't counted as $1/unit.
+        if is_stable(&y.asset) {
+            equity += y.value();
+        } else if let Some(price) = mark_price(index, &y.chain, &y.asset, ts) {
+            equity += y.value() * price;
+        }
     }
     equity
 }

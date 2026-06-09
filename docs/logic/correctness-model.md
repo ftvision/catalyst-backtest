@@ -21,39 +21,40 @@ loop):
 3. **Check liquidations** — `check_liquidations` (marks at the bar close).
 4. **Snapshot tick-start equity** (`tick_equity`) — used to size `pct_portfolio`
    actions this tick.
-5. **Fill resting limit orders** placed on *earlier* bars — `fill_resting_orders`
-   (they get first claim on the bar before new actions).
-6. **Run initial actions** (first tick only) — graph actions with no signal gate.
-7. **Evaluate signals** — `evaluate_signals`; a firing signal executes its
-   downstream actions *inline, in this same tick*.
-8. **Snapshot equity** and record the portfolio.
+5. **Fill deferred `next_open` market orders** queued on *earlier* bars —
+   `fill_pending_market` (fills at *this* bar's **open**, the earliest price of
+   the bar, with taker slippage).
+6. **Fill resting limit orders** placed on *earlier* bars — `fill_resting_orders`
+   (they fill when the price *touches* their limit intra-bar, after the open).
+7. **Run initial actions** (first tick only) — graph actions with no signal gate.
+8. **Evaluate signals** — `evaluate_signals`; a firing signal runs its downstream
+   actions, which **decide** this tick but, under `next_open`, **queue** (don't
+   execute) their market orders for the next bar.
+9. **Snapshot equity** and record the portfolio.
 
-⚠️ **This order is itself a correctness defect (#116).** A signal-driven market
-order is **executed inline in step 7, in the same tick it was decided**, and the
-fill is *booked at the decision bar* (the `action_executed` event is stamped with
-the current tick's `ts`, `engine.rs:653-654`). Under `next_open` the engine only
-changes the fill *price* to the next bar's open — it does **not** defer the fill —
-so the position is added to the ledger at bar *N*, then the step-8 snapshot marks
-it at bar *N*'s **close** (steps 4 and 8 both run on bar *N*). That injects
-phantom entry-bar P&L and conflates *decision time* with *fill time*.
-
-The **correct** order defers a signal-driven order to the bar it actually fills:
-a signal evaluated at bar *N*'s close should **queue** an order that fills at bar
-*N+1*'s **open** (like a resting order), so a position only appears once it has
-filled, and that bar's accrual / liquidation / snapshot see only positions that
-are really held:
+A market order (initial or signal-driven) decided at bar *N* under `next_open`
+(the `strict_v1` default) is **deferred**: it is queued in step 8 and *filled and
+booked* at bar *N+1*'s open in step 5, with the `action_executed` event stamped at
+bar *N+1*'s `ts` (`fill_pending_market`). So a position only appears once it has
+actually filled, and bar *N*'s accrual / liquidation / snapshot see only positions
+really held — no phantom entry-bar P&L (#116, fixed). The deferral mirrors the
+resting-limit discipline: deferred markets fill at the **open** (step 5), resting
+limits at a later intra-bar **touch** (step 6), so when a take-profit limit and a
+deferred entry land on the same bar the entry opens before the limit can reduce it.
 
 ```
-fill orders queued from bar N-1 (at bar N's open) + resting limits
-  → accrue funding/yield → check liquidations
-  → evaluate signals on bar N → *queue* orders for bar N+1
-  → snapshot
+bar N:  fill markets queued from bar N-1 (at bar N's open) + resting limits
+          → ... → evaluate signals on bar N → *queue* market orders for bar N+1
+          → snapshot (sees only filled positions)
+bar N+1: fill the queued order at bar N+1's open, book it here
 ```
 
-(Same-bar selections like `close`/`mid` would still fill in-bar by design — that's
-the separate, deliberate same-bar look-ahead of those profiles, #122.) Until
-#116 lands, treat the per-tick order above as **descriptive of a buggy engine**,
-not as the intended semantics.
+A market order decided on the **final** bar has no next bar to fill against, so it
+lapses unfilled (recorded as `order_expired`) rather than falling back to the
+final close — that fallback would be the same-bar look-ahead the deferral exists to
+prevent. Same-bar selections like `close`/`mid`/`worse_side_ohlc` still fill in-bar
+by design — that's the separate, deliberate same-bar look-ahead of those profiles
+(#122).
 
 ## Correctness invariants
 
@@ -67,15 +68,15 @@ A backtest must never act on information unavailable at decision time.
 - **Signals** read the current and past bars only; **derived sources**
   (sma/ema/rolling/roc) look strictly backward (see
   [derived-sources](derived-sources.md)).
-- **Fill price**: under `next_open` (the `strict_v1` default) an order decided on
-  bar *N*'s close fills at bar *N+1*'s **open** — no same-bar look-ahead on price
-  (see [fill-price-selection](fill-price-selection.md)).
+- **Fill price & timing**: under `next_open` (the `strict_v1` default) an order
+  decided on bar *N*'s close is deferred and **both filled and booked** at bar
+  *N+1*'s **open** — no same-bar look-ahead on price, and no phantom entry-bar P&L
+  from booking on the decision bar (#116, fixed; see
+  [fill-price-selection](fill-price-selection.md)).
 - ⚠️ **Partial gaps remain (tracked):**
   - `close`/`open`/`mid`/`worse_side_ohlc` selections fill on the *just-observed*
     bar, so a signal computed from bar *N*'s close that fills at bar *N*'s close
     is **same-bar look-ahead** — and `research_v1` defaults to `close` (#122).
-  - Even under `next_open`, the fill is currently *booked* at the decision bar,
-    injecting phantom entry-bar P&L (#116).
 
 ### 2. Money conservation (no value created or destroyed out of thin air)
 
@@ -110,10 +111,10 @@ in the engine — the `√` in `volume_based` slippage — is IEEE-754 determini
 Equity = stable balances (1:1) + non-stable balances (marked to close) + perp
 margin and unrealized PnL + yield principal and accrued (see
 [portfolio-valuation](portfolio-valuation.md)).
-- ⚠️ **Tracked limitations:** non-stable **yield** positions are valued 1:1 as USD
-  (wrong for a non-stable deposited asset, #115); an unpriced non-stable holding
+- ⚠️ **Tracked limitations:** an unpriced non-stable holding (cash or yield)
   is silently dropped from equity and a perp without a mark loses its PnL (#119);
-  the price fallback is venue-blind and unbounded-stale (#119).
+  the venue-scoped carry-forward is unbounded-stale (#119); cumulative
+  `total_yield_usd` / `interest_usd` carry asset units for non-stables (#166).
 
 ## What is correct today vs. tracked
 
@@ -124,13 +125,17 @@ margin and unrealized PnL + yield principal and accrued (see
 | `amm_price_impact` falls back to `fixed_bps` (never silent zero) | ✅ fixed (#136) |
 | `volume_based` slippage (square-root law) | ✅ implemented (#137) |
 | Policy contract accepts every model the engine supports | ✅ fixed (#123) |
-| `next_open` fills booked at the decision bar (phantom entry P&L) | ⚠️ open (#116) |
+| `next_open` market orders deferred to fill+book on the fill bar (no phantom entry P&L) | ✅ fixed (#116) |
 | Same-bar look-ahead under `close`/`open`/`mid` selection | ⚠️ open (#122) |
-| Inconsistent/stale/venue-blind price lookups; equity drops unpriced holdings | ⚠️ open (#119) |
-| Non-stable yield position valuation (1:1 USD, gas units) | ⚠️ open (#115) |
-| Liquidation marks at close only; no maintenance margin | ⚠️ open (#120) |
+| Venue-scoped position marking (no cross-venue price borrowing) | ✅ fixed (#119(a)) |
+| Staleness bound, unpriced-leg warning, sizing unification, same-tick snapshot | ⚠️ open (#119(b-e)) |
+| Non-stable yield positions marked to price; gas converted to asset units | ✅ fixed (#115) |
+| `total_yield_usd` / `interest_usd` in asset units for non-stables | ⚠️ open (#166) |
+| Liquidation marks the intra-bar wick | ✅ fixed (#120 wick half) |
+| Liquidation triggers at full bankruptcy only; no maintenance margin | ⚠️ open (#120) |
 | Resting limit orders don't reserve balance | ⚠️ open (#124) |
-| Yield is simple-interest, not compounding | ⚠️ fidelity (#121) |
+| Yield compounds per tick on principal + accrued | ✅ fixed (#114) |
+| `yield_accrual` policy knob unwired (reports `simple_apr`, engine compounds) | ⚠️ open (#164) |
 | `same_tick` ordering policy is inert | ⚠️ open (#141) |
 | `missing_optional` data policy is inert | ⚠️ open (#142) |
 | `venue_fee_table` fee model is a zero stub | ⚠️ open (#143) |

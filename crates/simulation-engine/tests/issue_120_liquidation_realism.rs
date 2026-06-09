@@ -1,24 +1,19 @@
-//! Issue #120 — liquidation realism. Both sub-bugs are PRESENT in the current engine.
+//! Issue #120 — liquidation realism.
 //!
-//! The engine's `check_liquidations` marks each perp at the bar CLOSE only
-//! (`mark_price` in engine.rs returns `bar.close`) and liquidates ONLY when
-//! `unrealized_pnl(mark) <= -margin` — i.e. full bankruptcy, with no maintenance
-//! buffer. Two consequences are recorded here:
+//! Sub-bug (a) — CLOSE-ONLY MARKING — is now FIXED: `check_liquidations` marks
+//! each perp at the worst price it touches *within* the bar (a long at the bar
+//! LOW, a short at the bar HIGH), so a position that breaches its margin intrabar
+//! can no longer escape just because it recovers by the close. Sub-bug (b) — no
+//! MAINTENANCE-MARGIN buffer (liquidation only at full bankruptcy) — remains a
+//! tracked fidelity enhancement and is NOT addressed here.
 //!
-//!   (a) `issue_120_long_escapes_liquidation_via_intrabar_wick`
-//!       A long that goes deeply underwater on the bar LOW (wick) but recovers by
-//!       the CLOSE is NOT liquidated, because only the close is used to mark.
-//!       PRESENT: position survives (no "liquidation" event, ETH perp remains).
+//!   (a) FIXED — regression guards:
+//!       - `issue_120_long_liquidated_on_intrabar_wick`
+//!       - `issue_120_short_liquidated_on_intrabar_wick`
+//!       - `issue_120_no_liquidation_when_wick_does_not_breach_margin`
+//!   (b) PRESENT (fidelity gap): `issue_120_long_survives_right_up_to_full_bankruptcy_no_maintenance_buffer`
 //!
-//!   (b) `issue_120_long_survives_right_up_to_full_bankruptcy_no_maintenance_buffer`
-//!       A long whose close-marked pnl is -99.9001 (only 0.0999 of 100 margin left)
-//!       still survives, because the trigger is full bankruptcy (pnl <= -margin),
-//!       with no maintenance-margin buffer.
-//!       PRESENT: position survives (no "liquidation" event, ETH perp remains).
-//!
-//! Each test asserts the CURRENT (incorrect) behavior so it PASSES on buggy code,
-//! and would FAIL once intrabar-extreme marking / a maintenance-margin model is
-//! implemented. See per-test docs for the exact pnl numbers.
+//! See per-test docs for the exact pnl numbers.
 
 use std::collections::BTreeMap;
 
@@ -86,41 +81,107 @@ fn open_long_graph() -> Graph {
     .unwrap()
 }
 
-/// Issue #120 sub-bug (a): CLOSE-ONLY MARKING.
+/// Open a 10x SHORT ETH perp at tick0. strict_v1 => NextOpen fill at tick1.open*0.999
+/// (sell slippage). size_usd=1000, leverage=10 => margin_usd=100, entry_price=1998,
+/// size_base=1000/1998=0.5005005005...
+fn open_short_graph() -> Graph {
+    serde_json::from_value(json!({
+        "nodes": [{"id": "open", "kind": "action", "subtype": "perp_order",
+            "config": {"symbol": "ETH", "side": "short", "size_usd": "1000", "leverage": "10",
+                       "chain": "hyperliquid", "order_type": "market", "reduce_only": false}}],
+        "edges": []
+    }))
+    .unwrap()
+}
+
+/// Issue #120 sub-bug (a) — FIXED: a long is liquidated on the intrabar LOW even
+/// when the bar recovers by its CLOSE.
 ///
-/// tick1 has LOW=1700 but CLOSE=2000. Entry price 2002, size_base 0.4995004995.
-///   - At the bar LOW: unrealized_pnl = (1700 - 2002) * 0.4995004995 = -150.85 USD,
-///     which is <= -100 (margin) => a wick-aware engine WOULD liquidate at tick1.
-///   - At the bar CLOSE: unrealized_pnl = (2000 - 2002) * 0.4995004995 = -0.999 USD,
-///     which is > -100 => the current close-only engine does NOT liquidate.
-///   (liquidation threshold mark for this position is 1801.8: pnl <= -100.)
-///
-/// CURRENT (INCORRECT) behavior recorded below: no "liquidation" event, ETH perp
-/// survives. CORRECT behavior (issue #120): liquidate at the wick (LOW=1700).
+/// The position is open by tick1 (NextOpen fill, entry 2002, size 0.4995004995,
+/// margin 100). The wick is on the LAST bar (tick2) — where the position exists
+/// regardless of whether next_open fills are booked on the decision bar (current)
+/// or deferred to the fill bar (#116). At tick2 LOW=1700: pnl = (1700-2002)*0.4995
+/// = -150.85 <= -100 margin => LIQUIDATE, even though CLOSE=2000 (pnl -0.999) would
+/// not. Close-only marking (the old bug) would have let it escape.
 #[test]
-fn issue_120_long_escapes_liquidation_via_intrabar_wick() {
+fn issue_120_long_liquidated_on_intrabar_wick() {
     let trace = run(&SimulationInput {
         graph: open_long_graph(),
         config: config(),
         policy: policy(),
         market_data: bundle([
             ("2000", "2000", "2000", "2000"),
-            ("2000", "2000", "1700", "2000"), // deep wick to 1700, recovers to close 2000
+            ("2000", "2000", "2000", "2000"), // open fills here (NextOpen)
+            ("2000", "2000", "1700", "2000"), // wick to 1700, recovers to close 2000
+        ]),
+    })
+    .unwrap();
+
+    assert!(
+        trace.events.iter().any(|e| e.event_type == "liquidation"),
+        "issue #120(a) FIXED: the long must be liquidated on the bar LOW (1700, pnl \
+         -150.85 <= -100 margin) even though the close (2000) recovers."
+    );
+    assert!(
+        !trace.final_portfolio.perp_positions.iter().any(|p| p.symbol == "ETH"),
+        "issue #120(a) FIXED: the liquidated ETH long must be gone from final_portfolio."
+    );
+}
+
+/// Issue #120 sub-bug (a) — FIXED, SHORT side: a short is liquidated on the
+/// intrabar HIGH even when the bar recovers by its CLOSE.
+///
+/// Short entry 1998 (sell slippage), size 0.5005005005, margin 100. At tick2
+/// HIGH=2300: pnl = (1998-2300)*0.5005 = -151.15 <= -100 => LIQUIDATE, though the
+/// close (2000, pnl -1.001) would not.
+#[test]
+fn issue_120_short_liquidated_on_intrabar_wick() {
+    let trace = run(&SimulationInput {
+        graph: open_short_graph(),
+        config: config(),
+        policy: policy(),
+        market_data: bundle([
             ("2000", "2000", "2000", "2000"),
+            ("2000", "2000", "2000", "2000"), // open fills here (NextOpen)
+            ("2000", "2300", "2000", "2000"), // spikes to 2300, recovers to close 2000
+        ]),
+    })
+    .unwrap();
+
+    assert!(
+        trace.events.iter().any(|e| e.event_type == "liquidation"),
+        "issue #120(a) FIXED (short): liquidate on the bar HIGH (2300, pnl -151.15 <= -100)."
+    );
+    assert!(
+        !trace.final_portfolio.perp_positions.iter().any(|p| p.symbol == "ETH"),
+        "issue #120(a) FIXED (short): the liquidated ETH short must be gone."
+    );
+}
+
+/// Issue #120 — guard against OVER-liquidation: a wick that does NOT breach the
+/// margin must leave the position open. Long entry 2002, margin 100; tick2 LOW=1900
+/// gives pnl = (1900-2002)*0.4995 = -50.95 > -100 => NO liquidation.
+#[test]
+fn issue_120_no_liquidation_when_wick_does_not_breach_margin() {
+    let trace = run(&SimulationInput {
+        graph: open_long_graph(),
+        config: config(),
+        policy: policy(),
+        market_data: bundle([
+            ("2000", "2000", "2000", "2000"),
+            ("2000", "2000", "2000", "2000"),
+            ("2000", "2000", "1900", "2000"), // shallow wick: pnl -50.95, within margin
         ]),
     })
     .unwrap();
 
     assert!(
         trace.events.iter().all(|e| e.event_type != "liquidation"),
-        "issue #120(a): engine emitted NO liquidation, marking only the bar close (2000, \
-         pnl -0.999) and ignoring the intrabar LOW (1700, pnl -150.85 <= -100 margin). \
-         A wick-aware engine SHOULD liquidate at tick1."
+        "issue #120: a wick to 1900 (pnl -50.95 > -100 margin) must NOT liquidate."
     );
     assert!(
         trace.final_portfolio.perp_positions.iter().any(|p| p.symbol == "ETH"),
-        "issue #120(a): ETH long survived (INCORRECT). It should have been liquidated by \
-         the bar LOW of 1700 (pnl -150.85 <= -100 margin) and removed from final_portfolio."
+        "issue #120: the ETH long must survive a non-breaching wick."
     );
 }
 

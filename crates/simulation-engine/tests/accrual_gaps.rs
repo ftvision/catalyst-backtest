@@ -88,14 +88,17 @@ fn yield_accrues_full_elapsed_time_across_a_tick_gap() {
 
     // Deposited 10,000 at 5% APR, held from 0h to 3h = 3 hours. Accrual fires at
     // tick 1 (elapsed 1h since deposit) and tick 3 (elapsed 2h across the gap),
-    // for 3h total: 10000 * 0.05 * 3*3600/31_536_000 = 0.171233.
-    // The pre-fix static-interval accrual charged only 1h at tick 3, giving 2h
-    // total (0.114155) — the gap hour was silently dropped.
+    // for 3h total elapsed — the key #134 property (the gap hour is NOT dropped;
+    // the pre-fix static-interval accrual charged only 1h at tick 3 = 2h total).
+    // Interest compounds (#114): tick 3 accrues on principal + tick-1 interest.
     let total = accrued_total(&trace);
-    let expected_3h = 10000.0 * 0.05 * (3.0 * 3600.0 / 31_536_000.0);
-    let buggy_2h = 10000.0 * 0.05 * (2.0 * 3600.0 / 31_536_000.0);
+    let (p, apr, yr) = (10000.0, 0.05, 31_536_000.0);
+    let i1 = p * apr * (3600.0 / yr); // tick 1: 1h on principal
+    let i2 = (p + i1) * apr * (2.0 * 3600.0 / yr); // tick 3: 2h on principal + accrued
+    let expected_3h = i1 + i2;
+    let buggy_2h = p * apr * (2.0 * 3600.0 / yr); // static-interval bug (gap hour dropped)
     assert!(
         (total - expected_3h).abs() < 1e-9,
-        "expected ~{expected_3h:.6} (3h elapsed), got {total:.6}; buggy value is {buggy_2h:.6}"
+        "expected ~{expected_3h:.6} (3h elapsed, compounded), got {total:.6}; buggy value is {buggy_2h:.6}"
     );
 }

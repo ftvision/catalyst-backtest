@@ -1,34 +1,25 @@
 //! Issue #119 — price-lookup defects in the simulation engine.
 //!
-//! All tests below record bugs that are STILL PRESENT in the current engine.
-//! Each PINS the current (incorrect) value so it PASSES today, and documents
-//! the CORRECT value a fixed engine should produce.
+//! Sub-bug (a) is FIXED here (the one genuine wrong-valuation bug); (b), (c),
+//! (d), (e) remain tracked follow-ups and their tests still pin current behavior.
 //!
-//!   * `issue_119_mark_price_venue_blind` (sub-bug a): `mark_price` falls back
-//!     to a venue-blind `price_any`, so a holding on venue A is valued using
-//!     venue B's candle when both share the symbol string.
+//!   * `issue_119_mark_price_venue_scoped` (sub-bug a, FIXED): `mark_price` now
+//!     uses a VENUE-SCOPED close (`close_at`), so a holding on venue A is valued
+//!     from venue A's own candles (carry-forward), never venue B's that happens
+//!     to share the symbol.
 //!
-//!   * `issue_119_price_any_unbounded_staleness` (sub-bug b): `price_any`
-//!     carries forward a stale last-known price across an arbitrary gap with no
-//!     staleness bound and no warning.
+//!   * `issue_119_price_any_unbounded_staleness` (sub-bug b, FOLLOW-UP): a stale
+//!     mark is still carried forward with no staleness bound / warning.
 //!
-//!   * `issue_119_unpriced_spot_silently_dropped` (sub-bug c): `compute_equity`
-//!     silently drops a non-stable spot holding (contributes 0, no warning)
-//!     when it has no mark.
+//!   * `issue_119_unpriced_spot_silently_dropped` (sub-bug c, FOLLOW-UP):
+//!     `compute_equity` still silently drops a never-priced non-stable holding.
 //!
-//!   * `issue_119_pct_portfolio_rejected_on_gap` (sub-bug d): `pct_portfolio`
-//!     sizing is rejected on a gap bar because `asset_price` uses an exact
-//!     `bar_at` -> 0 -> the `unit_price.is_zero()` guard, even though equity's
-//!     `mark_price` could still price the asset (carry-forward).
+//!   * `issue_119_pct_portfolio_rejected_on_gap` (sub-bug d, FOLLOW-UP): sizing
+//!     still rejects on a gap (cosmetic — the swap couldn't fill on a gap anyway).
 //!
-//!   * `issue_119_same_tick_stale_tick_equity` (sub-bug e): `tick_equity` is a
-//!     tick-start snapshot reused for all of a tick's actions, so a 2nd
-//!     same-tick action's `pct_portfolio` sizes off pre-1st-action equity.
-//!
-//! Sub-bug (c)-perp (drop a perp's unrealized PnL when mark missing) is NOT
-//! tested: opening a perp populates the symbol price, so `price_any` always
-//! returns a carried-forward mark and the `else { margin only }` branch is dead
-//! under the current fallback. See the issue notes.
+//!   * `issue_119_same_tick_stale_tick_equity` (sub-bug e, FOLLOW-UP):
+//!     `tick_equity` is still a tick-start snapshot reused for all same-tick
+//!     actions.
 
 use catalyst_contracts::policy::SignalPolicy;
 use catalyst_contracts::{BacktestConfig, Graph, MarketDataBundle, SimulationPolicy};
@@ -81,15 +72,12 @@ fn count(t: &catalyst_contracts::SimulationTrace, k: &str) -> usize {
 // (a) mark_price is venue-blind: venueA/ETH priced off venueB/ETH candle.
 // ---------------------------------------------------------------------------
 
-/// ISSUE #119 (sub-bug a): a 1 ETH holding on `venueA` is valued at ts(1) using
-/// `venueB`'s ETH candle (3000) because `venueA/ETH` has no ts(1) bar and
-/// `mark_price` falls back to the venue-blind `price_any("ETH", ts1)`.
-///
-/// The engine reports `snapshots[1].equity_usd == "3000"`, which is INCORRECT.
-/// The CORRECT value is "1000": venue-scoped pricing should carry forward
-/// venueA's own last-known close (1000), never borrow venueB's 3000.
+/// ISSUE #119 (sub-bug a) — FIXED: a 1 ETH holding on `venueA` is valued at ts(1)
+/// from venueA's OWN candles. venueA/ETH has no ts(1) bar, so the venue-scoped
+/// `mark_price` carries forward venueA's last-known close (1000) — it never
+/// borrows venueB's 3000 candle just because the symbol string matches.
 #[test]
-fn issue_119_mark_price_venue_blind() {
+fn issue_119_mark_price_venue_scoped() {
     let market: MarketDataBundle = serde_json::from_value(json!({
         "schema_version": "catalyst.backtest.market_data_bundle.v1",
         "interval": "1h", "start": ts(0), "end": ts(2),
@@ -114,20 +102,48 @@ fn issue_119_mark_price_venue_blind() {
     let trace = run(&input).unwrap();
 
     assert_eq!(trace.snapshots.len(), 2);
-    // ts0: venueA/ETH bar exists -> correctly 1000.
+    // ts0: venueA/ETH bar exists -> 1000.
     assert_eq!(trace.snapshots[0].equity_usd.to_string(), "1000");
-    // PIN THE BUG: ts1 has no venueA/ETH bar, so the 1 ETH on venueA is priced
-    // at venueB's 3000. CORRECT would be "1000" (carry forward venueA's close).
+    // FIXED #119(a): ts1 has no venueA/ETH bar, so the 1 ETH on venueA carries
+    // forward venueA's OWN close (1000) — NOT venueB's 3000.
     assert_eq!(
         trace.snapshots[1].equity_usd.to_string(),
-        "3000",
-        "BUG #119(a): venueA ETH valued at venueB's candle (venue-blind price_any); correct is 1000"
+        "1000",
+        "FIXED #119(a): venue-scoped mark carries venueA's 1000, never venueB's 3000"
     );
     assert_ne!(
         trace.snapshots[1].equity_usd.to_string(),
-        "1000",
-        "BUG #119(a) witness: a venue-scoped fix would give 1000, never venueB's 3000"
+        "3000",
+        "FIXED #119(a): the venue-blind 3000 must no longer appear"
     );
+}
+
+/// ISSUE #119 (sub-bug a) edge — both venues priced at the same tick: each ETH
+/// holding is marked at its OWN venue's close, not a single shared price.
+/// venueA/ETH @1000 + venueB/ETH @3000, holding 1 ETH on each -> equity 4000.
+#[test]
+fn issue_119_each_venue_marked_at_its_own_price() {
+    let market: MarketDataBundle = serde_json::from_value(json!({
+        "schema_version": "catalyst.backtest.market_data_bundle.v1",
+        "interval": "1h", "start": ts(0), "end": ts(2),
+        "candles": [
+            {"venue": "venueA", "symbol": "ETH", "quote": "USD", "points": [pt(0, "1000"), pt(1, "1000")]},
+            {"venue": "venueB", "symbol": "ETH", "quote": "USD", "points": [pt(0, "3000"), pt(1, "3000")]}
+        ],
+        "funding": [], "gas": [], "yields": [], "providers": [], "warnings": []
+    }))
+    .unwrap();
+    let config: BacktestConfig = serde_json::from_value(json!({
+        "start": ts(0), "end": ts(2), "interval": "1h",
+        "initial_portfolio": {"venueA": {"ETH": "1"}, "venueB": {"ETH": "1"}}
+    }))
+    .unwrap();
+    let trace = run(&SimulationInput { graph: inert_graph(), config, policy: research_policy(), market_data: market }).unwrap();
+
+    assert_eq!(trace.snapshots.len(), 2);
+    // 1 ETH @1000 (venueA) + 1 ETH @3000 (venueB) = 4000, at both ticks.
+    assert_eq!(trace.snapshots[0].equity_usd.to_string(), "4000");
+    assert_eq!(trace.snapshots[1].equity_usd.to_string(), "4000");
 }
 
 // ---------------------------------------------------------------------------
@@ -244,6 +260,49 @@ fn issue_119_unpriced_spot_silently_dropped() {
     );
 }
 
+/// INTENDED SEMANTICS of the (a) fix, pinned: a holding on a venue with NO
+/// candles of its own is EXCLUDED from equity even when another venue prices
+/// the same symbol. Pre-fix, the venue-blind `price_any` fallback would borrow
+/// venueA's 1000 and count the venueB ETH at $1000; post-fix venueB's ETH
+/// contributes 0 (still silently — surfacing it is sub-bug (c)).
+///
+/// Note the same window cannot arise for a *yield* position: a non-stable
+/// yield deposit is rejected without an exact bar on its chain (#115), and the
+/// venue-scoped carry-forward keeps it priced afterwards.
+#[test]
+fn issue_119_cross_venue_holding_excluded_not_borrowed() {
+    let market: MarketDataBundle = serde_json::from_value(json!({
+        "schema_version": "catalyst.backtest.market_data_bundle.v1",
+        "interval": "1h", "start": ts(0), "end": ts(2),
+        "candles": [
+            // ETH is priced ONLY on venueA. venueB has no candles at all.
+            {"venue": "venueA", "symbol": "ETH", "quote": "USD",
+             "points": [pt(0, "1000"), pt(1, "1000")]}
+        ],
+        "funding": [], "gas": [], "yields": [], "providers": [], "warnings": []
+    }))
+    .unwrap();
+
+    let config: BacktestConfig = serde_json::from_value(json!({
+        "start": ts(0), "end": ts(2), "interval": "1h",
+        "initial_portfolio": {"venueB": {"ETH": "1", "USDC": "500"}}
+    }))
+    .unwrap();
+
+    let input = SimulationInput { graph: inert_graph(), config, policy: research_policy(), market_data: market };
+    let trace = run(&input).unwrap();
+
+    assert_eq!(trace.snapshots.len(), 2);
+    for (i, snap) in trace.snapshots.iter().enumerate() {
+        assert_eq!(
+            snap.equity_usd.to_string(),
+            "500",
+            "#119(a) semantics: venueB's ETH must NOT borrow venueA's price; \
+             equity at ts{i} is the 500 USDC only"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // (d) pct_portfolio sizing rejected on a gap bar even though equity prices it.
 // ---------------------------------------------------------------------------
@@ -256,18 +315,14 @@ fn level_research_policy() -> SimulationPolicy {
     p
 }
 
-/// ISSUE #119 (sub-bug d): at ts1 the funding signal fires and tries to SELL ETH
-/// sized `pct_portfolio: 10`. `compute_equity` prices the 1 ETH via
-/// `mark_price` -> `price_any` carry-forward (2000), so equity at ts1 is 2000.
-/// But `execute_action`'s `asset_price(venueA, ETH)` uses the EXACT `bar_at`
-/// which is None at ts1 -> 0 -> `resolve_amount` hits the `unit_price.is_zero()`
-/// guard and REJECTS.
-///
-/// The engine produces 1 `action_rejected` ("pct_portfolio sizing needs a price
-/// for the action asset") and 0 `action_executed`, which is INCORRECT. Sizing
-/// should use the same priced lookup as equity (carry-forward 2000), sizing the
-/// sell at 10% of 2000 = $200 = 0.1 ETH and EXECUTING it (1 executed, 0
-/// rejected).
+/// ISSUE #119 (sub-bug d, FOLLOW-UP): at ts1 the funding signal fires and tries
+/// to SELL ETH sized `pct_portfolio: 10`. `compute_equity` prices the 1 ETH via
+/// the venue-scoped carry-forward (2000), so equity at ts1 is 2000, but
+/// `execute_action`'s `asset_price(venueA, ETH)` uses the EXACT `bar_at` which is
+/// None at ts1 -> 0 -> `resolve_amount` hits the `unit_price.is_zero()` guard and
+/// REJECTS. (Even with sizing fixed, the swap couldn't fill on a gap bar anyway —
+/// you can't trade at a stale price — so unifying the price source here is a
+/// cosmetic consistency change deferred as a follow-up, not a wrong-outcome bug.)
 #[test]
 fn issue_119_pct_portfolio_rejected_on_gap() {
     let market: MarketDataBundle = serde_json::from_value(json!({
@@ -321,24 +376,16 @@ fn issue_119_pct_portfolio_rejected_on_gap() {
         "equity carries ETH forward to 2000 at ts1, so sizing could too"
     );
 
-    // PIN THE BUG: the sell is rejected for lack of a price even though equity
-    // priced the asset. CORRECT: 1 executed, 0 rejected.
-    assert_eq!(
-        count(&trace, "action_executed"),
-        0,
-        "BUG #119(d): sell rejected on the gap bar; correct behavior executes 1"
-    );
-    assert_eq!(
-        count(&trace, "action_rejected"),
-        1,
-        "BUG #119(d): exactly one rejection on the gap bar"
-    );
+    // FOLLOW-UP #119(d): the sell is rejected for lack of an exact-bar price even
+    // though equity priced the asset via carry-forward (sizing/equity mismatch).
+    assert_eq!(count(&trace, "action_executed"), 0, "#119(d) follow-up: sell rejected on the gap bar");
+    assert_eq!(count(&trace, "action_rejected"), 1, "#119(d) follow-up: exactly one rejection");
     assert!(
         trace.events.iter().any(|e| {
             e.event_type == "action_rejected"
                 && e.reason.as_deref() == Some("pct_portfolio sizing needs a price for the action asset")
         }),
-        "BUG #119(d): rejection cites the missing exact-bar price even though mark_price has one"
+        "#119(d) follow-up: rejection cites the missing exact-bar price even though mark_price has one"
     );
 }
 

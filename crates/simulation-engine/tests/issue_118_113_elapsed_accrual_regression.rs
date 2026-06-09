@@ -26,6 +26,9 @@
 //!     gap; here we assert summing across an actual one-bar data gap.
 
 use std::collections::BTreeMap;
+use std::str::FromStr;
+
+use rust_decimal::Decimal;
 
 use catalyst_contracts::{BacktestConfig, Graph, MarketDataBundle, SimulationPolicy, SimulationTrace};
 use catalyst_simulation_engine::{run, SimulationInput};
@@ -117,36 +120,31 @@ fn issue_113_yield_accrues_full_elapsed_across_a_one_bar_gap() {
     let ye = events_of(&trace, "yield_accrued");
     assert_eq!(ye.len(), 2, "expected accrual at ticks 1h and 3h");
 
-    // Correct/expected magnitudes.
-    const ONE_HOUR: &str = "0.01141552511415525114155251"; // 1000*0.10*3600/31536000
-    const TWO_HOUR: &str = "0.02283105022831050228310502"; // 1000*0.10*7200/31536000 (correct gap accrual)
+    // Expected magnitudes. Interest COMPOUNDS on (principal + accrued) (#114), so
+    // the gap tick accrues 2h elapsed on principal + the tick-1h interest.
+    let p = Decimal::from(1000);
+    let apr = Decimal::from_str("0.10").unwrap();
+    let frac1 = Decimal::from(3600) / Decimal::from(31_536_000);
+    let frac2 = Decimal::from(7200) / Decimal::from(31_536_000);
+    let i_1h = p * apr * frac1; // tick 1h: accrued was 0, so == simple 1h slice
+    let i_gap = (p + i_1h) * apr * frac2; // tick 3h: 2h elapsed, on principal + accrued
 
-    // Tick 1h: a normal 1h slice.
+    // Tick 1h: a normal 1h slice (compounding coincides with simple at the first accrual).
     assert_eq!(ye[0].ts, iso(EPOCH + 3600));
-    let i0 = ye[0].detail.as_ref().unwrap()["interest_usd"].as_str().unwrap();
-    assert_eq!(i0, ONE_HOUR, "first (non-gap) tick accrues exactly one 1h slice");
+    let i0 = Decimal::from_str(ye[0].detail.as_ref().unwrap()["interest_usd"].as_str().unwrap()).unwrap();
+    assert_eq!(i0, i_1h, "first (non-gap) tick accrues exactly one 1h slice");
 
-    // Tick 3h (the gap tick): 2h elapsed since the 1h tick -> the full 2h figure.
+    // Tick 3h (the gap tick): 2h elapsed since the 1h tick -> the full 2h figure (#113),
+    // compounded on principal + accrued (#114).
     assert_eq!(ye[1].ts, iso(EPOCH + 3 * 3600));
-    let i1 = ye[1].detail.as_ref().unwrap()["interest_usd"].as_str().unwrap();
-    assert_eq!(
-        i1, TWO_HOUR,
-        "ISSUE #113 FIXED: gap tick (3h, 2h elapsed) accrues the full 2h ({TWO_HOUR}), not 1h ({ONE_HOUR})"
-    );
-    assert_ne!(
-        i1, ONE_HOUR,
-        "ISSUE #113 regression: gap tick must NOT under-accrue to a single 1h slice"
-    );
+    let i1 = Decimal::from_str(ye[1].detail.as_ref().unwrap()["interest_usd"].as_str().unwrap()).unwrap();
+    assert_eq!(i1, i_gap, "ISSUE #113 FIXED: gap tick accrues 2h elapsed, compounded (#114)");
+    // #113 elapsed property: the 2h gap tick accrues strictly more than a single 1h slice.
+    assert!(i1 > i_1h, "ISSUE #113: gap tick must NOT under-accrue to a single 1h slice");
 
-    // Whole-run interest is the correct 1h + 2h elapsed total (0.0342...),
-    // not the old under-accrued 2x1h figure (0.0228...).
-    let sum: f64 = i0.parse::<f64>().unwrap() + i1.parse::<f64>().unwrap();
-    let under_accrued = 0.022_831_050_228_310_502_f64; // old bug: 2 x one-hour slices
-    let correct_total = 0.034_246_575_342_465_753_f64; // 1h + 2h
-    assert!(
-        (sum - correct_total).abs() < 1e-9,
-        "ISSUE #113 FIXED: total interest {sum} matches the correct 1h+2h {correct_total}, not {under_accrued}"
-    );
+    // Whole-run interest covers the full 1h + 2h elapsed, not the old 2x1h under-accrual.
+    let sum = i0 + i1;
+    let under_accrued = i_1h * Decimal::from(2); // old static-interval bug: 2 x one-hour slices
     assert!(sum > under_accrued, "ISSUE #113: total interest covers the full elapsed gap");
 }
 
@@ -159,31 +157,35 @@ fn issue_113_yield_accrues_full_elapsed_across_a_one_bar_gap() {
 /// `interval_secs` lookback, so a funding point that falls inside a data gap is
 /// still summed.
 ///
-/// Bundle: hyperliquid/ETH candles at 0h, 1h, 3h (2h candle MISSING -> gap),
-/// flat close 2000. funding hourly rate 0.001 at 1h, 2h, 3h — the 2h point
-/// lands INSIDE the gap. A 1000 USD long ETH (leverage 1) is opened at tick 0;
+/// Bundle: hyperliquid/ETH candles at 0h, 1h, 2h, 4h (3h candle MISSING -> gap),
+/// flat close 2000. funding hourly rate 0.001 at 2h, 3h, 4h — the 3h point lands
+/// INSIDE the gap. A 1000 USD long ETH (leverage 1) is opened at tick 0; under
+/// next_open the market order fills at the NEXT bar's open (tick 1h, #116):
 /// fill = 2000 + 10bps = 2002, size = 1000/2002, marked at 2000 ->
-/// notional = (1000/2002)*2000 = 999.000999000999000999000999.
+/// notional = (1000/2002)*2000 = 999.000999000999000999000999. The position is
+/// therefore held across the 2h and 4h funding windows (the 1h window (0h,1h] runs
+/// before the fill and carries no funding point anyway).
 ///
-/// At tick 3h, 2h elapsed since the 1h tick, so the window is (1h, 3h] and sums
-/// BOTH the in-gap 2h point AND the 3h point: rate "0.002", payment ~1.998 (NOT
-/// the single 3h point rate "0.001", ~0.999). This regression guard pins the
-/// two-point sum; if the static window returns, the gap-tick assertion fails.
+/// At tick 2h the window (1h, 2h] charges the single 2h point (rate 0.001). At tick
+/// 4h, 2h elapsed since the 2h tick, so the window is (2h, 4h] and sums BOTH the
+/// in-gap 3h point AND the 4h point: rate "0.002", payment ~1.998 (NOT the single
+/// 4h point rate "0.001", ~0.999). This regression guard pins the two-point sum; if
+/// the static window returns, the gap-tick assertion fails.
 #[test]
 fn issue_118_funding_window_sums_all_points_inside_a_gap() {
-    let candle_pts: Vec<Value> = [0i64, 1, 3]
+    let candle_pts: Vec<Value> = [0i64, 1, 2, 4]
         .iter()
         .map(|h| json!({"ts": iso(EPOCH + h * 3600), "open": "2000", "high": "2000", "low": "2000", "close": "2000"}))
         .collect();
-    // funding at 1h, 2h, 3h — the 2h point is inside the missing-candle gap.
-    let funding_pts: Vec<Value> = [1i64, 2, 3]
+    // funding at 2h, 3h, 4h — the 3h point is inside the missing-candle gap.
+    let funding_pts: Vec<Value> = [2i64, 3, 4]
         .iter()
         .map(|h| json!({"ts": iso(EPOCH + h * 3600), "rate": "0.001"}))
         .collect();
 
     let bundle: MarketDataBundle = serde_json::from_value(json!({
         "schema_version": "catalyst.backtest.market_data_bundle.v1",
-        "interval": "1h", "start": iso(EPOCH), "end": iso(EPOCH + 3 * 3600),
+        "interval": "1h", "start": iso(EPOCH), "end": iso(EPOCH + 4 * 3600),
         "candles": [{"venue": "hyperliquid", "symbol": "ETH", "quote": "USD", "points": candle_pts}],
         "funding": [{"venue": "hyperliquid", "symbol": "ETH", "points": funding_pts}],
         "gas": [],
@@ -198,7 +200,7 @@ fn issue_118_funding_window_sums_all_points_inside_a_gap() {
     init.insert("hyperliquid".to_string(), bal);
     let config = BacktestConfig {
         start: iso(EPOCH),
-        end: iso(EPOCH + 3 * 3600),
+        end: iso(EPOCH + 4 * 3600),
         interval: "1h".to_string(),
         initial_portfolio: init,
         execution: None,
@@ -215,22 +217,22 @@ fn issue_118_funding_window_sums_all_points_inside_a_gap() {
     let trace = run(&SimulationInput { graph, config, policy: gap_tolerant_policy(), market_data: bundle }).unwrap();
 
     let fe = events_of(&trace, "funding_applied");
-    assert_eq!(fe.len(), 2, "expected funding at ticks 1h and 3h");
+    assert_eq!(fe.len(), 2, "expected funding at ticks 2h and 4h");
 
-    // Tick 1h: a single 1h point.
-    assert_eq!(fe[0].ts, iso(EPOCH + 3600));
+    // Tick 2h: a single 2h point (the position, opened on bar 0, filled on bar 1).
+    assert_eq!(fe[0].ts, iso(EPOCH + 2 * 3600));
     assert_eq!(fe[0].detail.as_ref().unwrap()["rate"].as_str().unwrap(), "0.001");
 
-    // Tick 3h (gap tick): window (1h, 3h] sums the in-gap 2h point AND the 3h point.
-    assert_eq!(fe[1].ts, iso(EPOCH + 3 * 3600));
+    // Tick 4h (gap tick): window (2h, 4h] sums the in-gap 3h point AND the 4h point.
+    assert_eq!(fe[1].ts, iso(EPOCH + 4 * 3600));
     let rate = fe[1].detail.as_ref().unwrap()["rate"].as_str().unwrap();
     assert_eq!(
         rate, "0.002",
-        "ISSUE #118 FIXED: gap tick (3h) sums the 2h+3h points (rate 0.002), not just the 3h point (0.001)"
+        "ISSUE #118 FIXED: gap tick (4h) sums the 3h+4h points (rate 0.002), not just the 4h point (0.001)"
     );
     assert_ne!(
         rate, "0.001",
-        "ISSUE #118 regression: gap tick must NOT skip the in-gap 2h funding point"
+        "ISSUE #118 regression: gap tick must NOT skip the in-gap 3h funding point"
     );
 
     let pay: f64 = fe[1].detail.as_ref().unwrap()["payment_usd"].as_str().unwrap().parse().unwrap();

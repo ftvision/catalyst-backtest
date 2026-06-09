@@ -156,6 +156,22 @@ impl BundleIndex {
         m.get(&ts).copied().or_else(|| m.range(..=ts).next_back().map(|(_, v)| *v))
     }
 
+    /// Close for a specific (venue, symbol) at `ts` (exact, else the most recent
+    /// close <= ts, carried forward without a staleness bound). Unlike
+    /// [`price_any`] this is VENUE-SCOPED: a position on one venue is never
+    /// valued at another venue's candle that happens to share the symbol (#119).
+    /// Used by `mark_price` for marking positions (equity, funding notional,
+    /// liquidation). Sizing's unit price still uses the exact-ts bar and rejects
+    /// on gaps — unifying it with this lookup is #119's open sub-bug (d).
+    /// Returns `None` when the venue has no candle at or before `ts`; callers
+    /// silently skip the holding (#119 sub-bug (c)).
+    pub fn close_at(&self, venue: &str, symbol: &str, ts: i64) -> Option<Decimal> {
+        let m = self.candles.get(&(venue.to_string(), symbol.to_string()))?;
+        m.get(&ts)
+            .map(|b| b.close)
+            .or_else(|| m.range(..=ts).next_back().map(|(_, b)| b.close))
+    }
+
     pub fn funding_at(&self, venue: &str, symbol: &str, ts: i64) -> Option<Decimal> {
         self.funding.get(&(venue.to_string(), symbol.to_string())).and_then(|m| m.get(&ts).copied())
     }

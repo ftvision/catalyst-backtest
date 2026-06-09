@@ -1,21 +1,14 @@
-//! Issue #115 — non-stable yield position is valued 1:1 as USD, not marked to price.
+//! Issue #115 (FIXED) — non-stable yield positions are marked to price, not 1:1 USD.
 //!
-//! Both tests below record bugs that are STILL PRESENT in the current engine:
+//!   * `issue_115_nonstable_yield_marked_to_price` (Bug #1): `compute_equity` now
+//!     values a non-stable yield position as `y.value() * mark_price` (like the
+//!     spot branch), so 1 ETH in a vault is worth ~$1800, not $1. Depositing it is
+//!     value-neutral — the equity change across the deposit reflects only the ETH
+//!     price, not a phantom collapse to $1.
 //!
-//!   * `issue_115_nonstable_yield_deposit_collapses_equity` (Bug #1): when a
-//!     non-stable asset (ETH) is deposited into a yield position,
-//!     `compute_equity` adds `y.value()` (asset units) directly to equity
-//!     WITHOUT multiplying by the mark price (unlike the spot-balance branch).
-//!     So 1 ETH worth ~$2000 is counted as $1 and equity collapses 2000 -> 1
-//!     across the deposit (a discontinuity).
-//!
-//!   * `issue_115_yield_deposit_fill_value_usd_is_asset_units` (Bug #3):
-//!     `execute_yield_deposit` sets `Fill.value_usd = Some(amount)` (asset
-//!     units) instead of `amount * price`, so the action_executed trade record
-//!     reports value_usd=1 for a 1 ETH deposit instead of the USD notional 1800.
-//!
-//! Each test PINS the current (incorrect) value so it PASSES today, and
-//! documents the CORRECT value a fixed engine should produce.
+//!   * `issue_115_yield_deposit_value_usd_is_usd_notional` (Bug #3):
+//!     `execute_yield_deposit` reports `Fill.value_usd = amount * price`, so a
+//!     1 ETH deposit at price 1800 records value_usd = 1800 (the USD notional).
 
 use std::collections::BTreeMap;
 
@@ -109,16 +102,16 @@ fn input() -> SimulationInput {
     }
 }
 
-/// Bug #1 — non-stable yield principal is valued 1:1 as USD instead of marked
-/// to price. The engine's `compute_equity` does `equity += y.value()` for yield
-/// positions (no `is_stable` check, no `* mark_price`), unlike the spot branch
-/// which does `equity += amt * price`.
+/// Bug #1 — FIXED: a non-stable yield position is marked to price, not 1:1 USD.
+/// `compute_equity` now values a non-stable yield position as `y.value() * mark`,
+/// like the spot branch.
 ///
-/// ISSUE #115: the engine reports equity = "1" at tick1 (1 ETH deposited),
-/// which is WRONG. The CORRECT value is "2000" — 1 ETH marked at its ~$2000
-/// price — so equity should stay CONTINUOUS across the deposit (gas is 0).
+/// closes [2000, 1800, 1800]; the deposit (1 ETH) executes at tick1. The yield
+/// ETH is marked at each tick's price, so equity = 1 * close: 2000, 1800, 1800.
+/// The deposit itself is value-neutral (1 ETH spot @1800 == 1 ETH vault @1800);
+/// the 2000 -> 1800 step is the ETH price move, NOT a collapse to $1.
 #[test]
-fn issue_115_nonstable_yield_deposit_collapses_equity() {
+fn issue_115_nonstable_yield_marked_to_price() {
     let trace = run(&input()).unwrap();
     assert_eq!(trace.snapshots.len(), 3);
 
@@ -126,34 +119,90 @@ fn issue_115_nonstable_yield_deposit_collapses_equity() {
     let e1 = &trace.snapshots[1].equity_usd;
     let e2 = &trace.snapshots[2].equity_usd;
 
-    // Pre-deposit: 1 ETH spot, correctly marked 1 * 2000.
-    assert_eq!(e0, "2000", "pre-deposit ETH spot marked to USD");
-
-    // PIN THE BUG: after depositing 1 ETH into yield, equity collapses to "1"
-    // (asset units counted as USD). CORRECT would be "2000".
+    assert_eq!(e0, "2000", "pre-deposit: 1 ETH spot marked 1 * 2000");
     assert_eq!(
-        e1, "1",
-        "BUG #115: 1 ETH in a yield position is counted as $1, not ~$2000 (mark price ignored)"
+        e1, "1800",
+        "FIXED #115: 1 ETH in the vault is marked at close_1 (1800), not counted as $1"
     );
-    assert_eq!(e2, "1", "BUG #115: collapse persists at tick2 (still in yield)");
+    assert_eq!(e2, "1800", "FIXED #115: still 1 ETH in the vault @1800");
 
-    // Make the defect explicit: the equity is discontinuous across the deposit.
-    // A FIXED engine would mark the yield principal to price, giving e1 == e0.
-    assert_ne!(
-        e1, e0,
-        "BUG #115 witness: equity is discontinuous across the deposit; once fixed e1 should equal e0 (\"2000\")"
+    // Value-neutral across the deposit: the vault ETH is worth exactly what the
+    // spot ETH was at tick1 (1 * 1800), i.e. no phantom collapse to $1.
+    assert_ne!(e1, "1", "FIXED #115: equity is no longer collapsed to asset units");
+}
+
+/// Cross-product of #114 (compounding accrual) and #115 (USD marking): a
+/// NON-STABLE yield position that actually accrues interest is valued as
+/// `(principal + accrued) * mark_price` in equity.
+///
+/// Same scenario as above plus an aave/ETH APR series at 8.76% on every tick.
+/// The deposit (1 ETH) books at tick1; accrual runs at the start of tick2 for
+/// the 1h elapsed window: interest = (1 + 0) * 0.0876 * 3600/31_536_000
+/// = 0.00001 ETH. Equity at tick2 = 1.00001 ETH * 1800 = 1800.018 USD —
+/// the interest is ETH units marked to price, never added as raw dollars.
+///
+/// (The `yield_accrued` event's `interest_usd` field still carries asset units
+/// for non-stables — tracked as #166, asserted here only for presence.)
+#[test]
+fn issue_115_114_nonstable_yield_accrues_and_marks_to_price() {
+    let points: Vec<_> = ["2000", "1800", "1800"]
+        .iter()
+        .enumerate()
+        .map(|(i, c)| json!({"ts": ts(i as i64), "open": c, "high": c, "low": c, "close": c}))
+        .collect();
+    let aprs: Vec<_> = (0..3).map(|i| json!({"ts": ts(i), "apr": "0.0876"})).collect();
+    let market_data: MarketDataBundle = serde_json::from_value(json!({
+        "schema_version": "catalyst.backtest.market_data_bundle.v1",
+        "interval": "1h",
+        "start": ts(0),
+        "end": ts(3),
+        "candles": [{"venue": "base", "symbol": "ETH", "quote": "USD", "points": points}],
+        "funding": [],
+        "gas": [],
+        "yields": [{"protocol": "aave", "asset": "ETH", "chain": "base", "points": aprs}],
+        "providers": [],
+        "warnings": []
+    }))
+    .unwrap();
+
+    let trace = run(&SimulationInput {
+        graph: graph(),
+        config: config(),
+        policy: policy(),
+        market_data,
+    })
+    .unwrap();
+    assert_eq!(trace.snapshots.len(), 3);
+
+    // tick1: deposit books; no accrual yet (accrual runs at tick start, before
+    // the deposit existed). Equity = 1 ETH * 1800.
+    let e1: f64 = trace.snapshots[1].equity_usd.parse().unwrap();
+    assert!((e1 - 1800.0).abs() < 1e-9, "tick1 equity = 1 ETH * 1800, got {e1}");
+
+    // tick2: one hour of compounding-base accrual on the ETH position, marked
+    // at the ETH price — NOT counted 1:1 as dollars.
+    let accrued = trace
+        .events
+        .iter()
+        .find(|e| e.event_type == "yield_accrued")
+        .expect("#114x#115: the non-stable position must accrue interest");
+    assert_eq!(accrued.ts, ts(2), "first accrual is the tick after the deposit");
+
+    let e2: f64 = trace.snapshots[2].equity_usd.parse().unwrap();
+    let expected = (1.0 + 0.0876 * 3600.0 / 31_536_000.0) * 1800.0; // 1800.018
+    assert!(
+        (e2 - expected).abs() < 1e-6,
+        "#114x#115: equity must be (principal + accrued) * price = {expected}, got {e2}"
     );
 }
 
-/// Bug #3 — `execute_yield_deposit` sets `Fill.value_usd = Some(amount)`
-/// (asset units) rather than `amount * price`.
+/// Bug #3 — FIXED: `execute_yield_deposit` reports `Fill.value_usd = amount * price`.
 ///
-/// ISSUE #115: the action_executed trade record reports value_usd = "1" for a
-/// 1 ETH deposit, which is WRONG. The CORRECT value is "1800" — the USD notional
-/// amount * ETH price at the deposit tick (1 * 1800). We also confirm gas_usd is
-/// "0" so the equity-collapse test (Bug #1) is isolated from the gas bug.
+/// A 1 ETH deposit at the tick1 price (1800) records value_usd = "1800" (the USD
+/// notional), while `amount` stays in asset units ("1"). gas_usd is "0" (gas model
+/// "none").
 #[test]
-fn issue_115_yield_deposit_fill_value_usd_is_asset_units() {
+fn issue_115_yield_deposit_value_usd_is_usd_notional() {
     let trace = run(&input()).unwrap();
 
     let evt = trace
@@ -165,18 +214,11 @@ fn issue_115_yield_deposit_fill_value_usd_is_asset_units() {
 
     assert_eq!(d["kind"], "yield_deposit");
     assert_eq!(d["side"], "deposit");
-    assert_eq!(d["amount"], "1");
+    assert_eq!(d["amount"], "1"); // amount stays in asset units
 
-    // PIN THE BUG: value_usd reports asset units (1), not USD notional (1800).
     assert_eq!(
-        d["value_usd"], "1",
-        "BUG #115: yield_deposit Fill.value_usd reports asset units (1) not USD (amount * price = 1800)"
-    );
-    assert_ne!(
         d["value_usd"], "1800",
-        "BUG #115 witness: a fixed engine would report the USD notional \"1800\""
+        "FIXED #115: value_usd = amount * price = 1 ETH * 1800 USD"
     );
-
-    // gas model "none" zeroes gas, isolating Bug #1 from the gas-units bug.
-    assert_eq!(d["gas_usd"], "0", "gas excluded so equity-collapse test isolates Bug #1");
+    assert_eq!(d["gas_usd"], "0", "gas model 'none' -> zero gas");
 }

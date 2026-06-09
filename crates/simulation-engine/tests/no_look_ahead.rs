@@ -1,5 +1,7 @@
-//! #41: `next_open` fills use the actual next bar's open (no intra-bar look-ahead),
-//! and fall back to the current close only on the final bar.
+//! #41: `next_open` fills use the actual next bar's open (no intra-bar look-ahead).
+//! #116: a market order with no next bar (decided on the final bar) does NOT fill —
+//! it is deferred and lapses rather than falling back to the final close, which would
+//! be same-bar look-ahead.
 
 use std::collections::BTreeMap;
 
@@ -92,9 +94,12 @@ fn strict_default_fills_at_next_bar_open_not_this_close() {
 }
 
 #[test]
-fn next_open_falls_back_to_close_on_final_bar() {
-    // A single-bar run has no "next" bar, so next_open honestly falls back to the
-    // current close (2000 * 1.001 = 2002) — the only case a next open can't exist.
+fn next_open_on_final_bar_does_not_fill() {
+    // A single-bar run has no "next" bar to fill against. Under #116 the market order
+    // is deferred and then lapses unfilled — it does NOT fall back to the final close
+    // (that would be the same-bar look-ahead the deferral exists to prevent). So there
+    // is no action_executed, the order is recorded as expired, and the ledger is
+    // untouched (full initial cash, no ETH).
     let trace = run(&SimulationInput {
         graph: buy_graph(),
         config: config(1),
@@ -102,5 +107,18 @@ fn next_open_falls_back_to_close_on_final_bar() {
         market_data: bundle(&[("1900", "2005", "1895", "2000")]),
     })
     .unwrap();
-    assert_eq!(fill_price(&trace), 2002.0); // close 2000 * 1.001, not open 1900
+
+    assert_eq!(
+        trace.events.iter().filter(|e| e.event_type == "action_executed").count(),
+        0,
+        "a market order on the final bar must not fill (no next open without look-ahead)"
+    );
+    assert!(
+        trace.events.iter().any(|e| e.event_type == "order_expired"),
+        "the deferred final-bar order should be recorded as expired; events: {:?}",
+        trace.events
+    );
+    let base = &trace.snapshots[0].portfolio.as_ref().unwrap().balances["base"];
+    assert_eq!(base["USDC"].to_string(), "1000", "cash untouched — no fill occurred");
+    assert_eq!(base.get("ETH"), None, "no ETH acquired — the order never filled");
 }

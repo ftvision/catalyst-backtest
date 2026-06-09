@@ -136,12 +136,13 @@ fn perp_pct_position_reduces_the_open_position() {
     }));
     let input = SimulationInput {
         graph: g,
-        config: config(json!({"hyperliquid": {"USDC": "5000"}}), 2),
+        config: config(json!({"hyperliquid": {"USDC": "5000"}}), 3),
         policy: strict(),
-        market_data: bundle("hyperliquid", &["2000", "2000"]),
+        market_data: bundle("hyperliquid", &["2000", "2000", "2000"]),
     };
     let trace = run(&input).unwrap();
-    // both the open and the relative-sized reduce execute
+    // Under next_open the open fills on bar 1, then the chained reduce decided on
+    // bar 1 fills on bar 2 — so a 3-bar run is needed for both to execute.
     assert_eq!(count(&trace, "action_executed"), 2);
     assert_eq!(count(&trace, "action_rejected"), 0);
 }
