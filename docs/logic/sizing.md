@@ -29,7 +29,7 @@ literal string `"all"`. `AmountBasis` (`graph.rs:77-86`) has three variants:
 | Basis | Resolves against | Used by |
 | --- | --- | --- |
 | `pct_balance` | the relevant asset balance (swap from-asset, yield asset, perp cash/USDC) | swap, yield, perp |
-| `pct_position` | the relevant open position notional/principal | perp, yield (perp swap aliases balance — see below) |
+| `pct_position` | the relevant open position notional/principal | perp, yield (**rejected** for swaps — see below) |
 | `pct_portfolio` | total portfolio equity in USD (tick-start) | all |
 
 Relative amounts are resolved to **absolute** *before* execution, by the engine,
@@ -45,12 +45,15 @@ PctPortfolio -> pct * equity / unit_price   (rejects if unit_price == 0)
 The bases (`balance`, `position`, `equity`, `unit_price`) are supplied per
 subtype in `execute_action` (`engine.rs:812-895`):
 
-- **swap** (`engine.rs:820-848`): `balance = position = ledger.balance(chain, from_asset)`
-  — a swap has no distinct "position", so **both** `pct_balance` and
-  `pct_position` resolve against the from-asset balance (they alias;
-  `engine.rs:825-827` passes `bal` twice). `unit_price` is the from-asset mark
-  (`asset_price`, 1 for stables) so `pct_portfolio` converts the USD slice back
-  into from-asset units.
+- **swap** (`engine.rs:986-1000`): `pct_position` is **rejected up front** —
+  a swap has no position to size against (#121, fixed; previously it silently
+  aliased `pct_balance`, hiding user mistakes). The rejection sits before the
+  market/limit branch, so resting limit swaps are covered too.
+  `balance = ledger.balance(chain, from_asset)` resolves `pct_balance`;
+  `unit_price` is the from-asset mark (`asset_price`, 1 for stables) so
+  `pct_portfolio` converts the USD slice back into from-asset units.
+  Note the rejection is at **fire time** (an `action_rejected` trace event per
+  firing), not graph validation — the run still completes.
 - **perp** (`engine.rs:849-878`): `balance = ledger.balance(chain, "USDC")`;
   `position = (p.size * p.entry_price).abs()` — the open position's **entry**
   notional (`engine.rs:854`); `unit_price = Decimal::ONE` because `size_usd` is
@@ -117,11 +120,13 @@ subtype in `execute_action` (`engine.rs:812-895`):
   so a `reduce_only` `size_usd` matching the opened notional closes the whole
   position, clamped to the open size at `perp.rs:176`.)
 
-- **`pct_position` on a swap aliases `pct_balance`.** A swap has no distinct
-  position, so `execute_action` passes the from-asset balance as **both** the
-  balance and position bases (`engine.rs:825-827`). A `pct_position` swap
-  therefore resolves identically to `pct_balance`. This is intentional aliasing,
-  not position tracking; documented here as a known shape, not a bug.
+- **`pct_position` on a swap is rejected (#121 — FIXED).** A swap has no
+  distinct position, and the old behavior — silently aliasing `pct_position`
+  to `pct_balance` — masked configuration mistakes. `execute_action` now
+  rejects it with `"pct_position is not valid for a swap"` before resolving
+  the order (`engine.rs:991-996`), for market and limit swaps alike. The
+  rejection surfaces as an `action_rejected` event each time the signal fires;
+  promoting it to graph-validation time is a candidate follow-up.
 
 - **`pct_portfolio` requires a price; rejects otherwise.** If `unit_price` is zero
   — e.g. a non-stable from-asset with no bar this tick (`asset_price` returns 0) —
@@ -161,8 +166,8 @@ subtype in `execute_action` (`engine.rs:812-895`):
   `parse`, `pricing.rs:117-119`). Only swaps and yields honor `"all"`.
 - **Intra-tick `pct_portfolio` staleness** (above) — by design, but a caveat for
   multi-action ticks.
-- `pct_position` for a swap is an **alias** for `pct_balance`, not real
-  position-aware sizing.
+- `pct_position` for a swap is **rejected** at fire time (#121, fixed) — use
+  `pct_balance` or `pct_portfolio`.
 
 ## Tests
 
@@ -190,4 +195,4 @@ The `"all"` sentinel paths are covered in the execution-model crate's own tests
 ## Related issues
 
 - [#117](https://github.com/ftvision/catalyst-backtest/issues/117) — margin cap — FIXED
-- [#121](https://github.com/ftvision/catalyst-backtest/issues/121) — pct_position semantics (perp entry-price basis; swap aliases pct_balance)
+- [#121](https://github.com/ftvision/catalyst-backtest/issues/121) — pct_position semantics (perp entry-price basis intended; swap rejection FIXED)
