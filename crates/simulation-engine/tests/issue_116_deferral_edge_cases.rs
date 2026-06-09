@@ -63,7 +63,7 @@ fn strict_warn_missing() -> SimulationPolicy {
         profile: "strict_v1".to_string(),
         balance: None, fills: None, gas: None, signals: None, ordering: None,
         data: Some(DataPolicy {
-            missing_required: Some("skip_tick".to_string()),
+            missing_required: Some("warn".to_string()),
             missing_optional: None,
         }),
         perps: None, yield_: None,

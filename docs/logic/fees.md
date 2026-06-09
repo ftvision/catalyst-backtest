@@ -29,7 +29,7 @@ match policy.fee_model {
 | Model | Formula | Notional-dependent? | Status |
 | --- | --- | --- | --- |
 | `fixed_bps` | `notional_usd · fee_bps/10000` | yes (flat rate) | implemented (`pricing.rs:96`) |
-| `venue_fee_table` | *(intended: per-venue maker/taker tiers)* | — | **NOT implemented — returns 0** (`pricing.rs:97`) |
+| `venue_fee_table` | *(intended: per-venue maker/taker tiers)* | — | **NOT implemented — REJECTED at policy validation** (#143; `resolve.rs`) |
 | `none` | `0` | no | implemented (`pricing.rs:97`) |
 
 The `FeeModel` enum (`crates/simulation-policies/src/lib.rs:61`) defines exactly
@@ -70,8 +70,9 @@ profiles inherit `fee_model` from `strict_v1` via `..strict_v1()`
 | `conservative_v1` | `fixed_bps` (inherited) | 8 (`profiles.rs:43`) |
 | `research_v1` | `fixed_bps` (inherited) | 5 (inherited, `profiles.rs:59`) |
 
-`venue_fee_table` and `none` are not used by any built-in profile; reaching them
-requires a custom resolved policy.
+`none` is not used by any built-in profile; reaching it requires a custom
+resolved policy. `venue_fee_table` cannot be selected at all — `validate`
+rejects it as unimplemented (#143), so it can never silently charge zero.
 
 ## When to use which
 
@@ -80,9 +81,10 @@ requires a custom resolved policy.
   realistic backtests.
 - **`none`** — research/idealized: isolate strategy logic from fee drag, or as an
   optimistic upper bound. Never trust a `none`-fee result as realistic.
-- **`venue_fee_table`** — **do not select it expecting tiered fees.** It is a stub
-  that silently charges **zero**, identical to `none` (`pricing.rs:97`). There is
-  no maker/taker or per-venue table behind it yet.
+- **`venue_fee_table`** — cannot be selected: policy validation rejects it with
+  a pointer to #143 (implement-or-reject). The `pricing.rs` arm still returns 0,
+  but it is unreachable through a validated policy. When per-venue maker/taker
+  tiers are implemented the rejection will be lifted.
 
 ## Correctness notes / edge cases
 
@@ -128,11 +130,10 @@ requires a custom resolved policy.
   (`resolve.rs:161-163`), so in practice the default-to-zero branch is
   unreachable for the active model.
 
-- **Known limitation — `venue_fee_table` is a zero stub.** It compiles and
-  validates but charges nothing (`pricing.rs:97`); there is no maker/taker
-  distinction, no per-venue tier, and no funding-rate-style schedule. Treat it as
-  "fees off." (No tracking issue number is referenced in the code; flagged here as
-  unverified.)
+- **Known limitation — `venue_fee_table` is unimplemented (and rejected).**
+  The `pricing.rs:97` arm charges nothing, but policy validation refuses the
+  value (#143), so the zero-fee stub is unreachable. There is no maker/taker
+  distinction, no per-venue tier, and no volume schedule yet.
 
 - **Not modeled:** maker rebates, fee discounts/tiers by volume, and any fee
   asymmetry between buy and sell beyond the notional difference. `fixed_bps`
@@ -157,8 +158,9 @@ requires a custom resolved policy.
   `fee_usd == 0` and the fill is exactly at close (lines 326-328): the bps path
   collapses to no fee.
 
-No test exercises `venue_fee_table` (consistent with it being an unimplemented
-stub).
+`unimplemented_policy_values_are_rejected_not_ignored`
+(`crates/simulation-policies/tests/policies.rs`) pins that selecting
+`venue_fee_table` fails validation.
 
 ## Related issues
 

@@ -18,7 +18,7 @@ use catalyst_execution_models::{
 use catalyst_portfolio_ledger::{Ledger, PerpPosition, PerpSide, YieldPosition};
 use catalyst_simulation_policies::{
     resolve_policy, Funding, InsufficientBalance, LiquidationCheck, MissingRequired,
-    PriceSelection, Repeat, ResolvedPolicy, SignalTrigger,
+    PriceSelection, Repeat, ResolvedPolicy, SignalTrigger, YieldAccrual,
 };
 
 use crate::exec_graph::{eval_threshold, ActionNode, CombinatorOp, ExecGraph, Signal, SignalDef};
@@ -265,7 +265,7 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
         prev_ts = Some(ts);
 
         accrue_funding(&mut ledger, &index, ts, elapsed_secs, &ts_iso, &policy, &mut events);
-        accrue_yield(&mut ledger, &index, ts, elapsed_secs, &ts_iso, &mut events);
+        accrue_yield(&mut ledger, &index, ts, elapsed_secs, &ts_iso, &policy, &mut events);
         check_liquidations(&mut ledger, &index, ts, &ts_iso, &policy, &mut events);
 
         // Tick-start equity, used to resolve pct_portfolio sizing for any action
@@ -1204,18 +1204,30 @@ fn accrue_yield(
     ts: i64,
     elapsed_secs: i64,
     ts_iso: &str,
+    policy: &ResolvedPolicy,
     events: &mut Vec<Event>,
 ) {
+    // The `yield.accrual` policy knob is honored, not decorative: `none` turns
+    // accrual off (symmetric with `perps.funding = none`), `simple_apr` accrues
+    // on principal alone, `compound_apy` (profile default) compounds on
+    // principal + accrued. `protocol_index` is rejected at validation (#164).
+    if policy.yield_accrual == YieldAccrual::None {
+        return;
+    }
     let positions: Vec<YieldPosition> = ledger.yields().cloned().collect();
     let fraction = Decimal::from(elapsed_secs) / Decimal::from(YEAR_SECONDS);
     for y in positions {
         let key = (y.protocol.clone(), y.asset.clone(), y.chain.clone(), y.pool.clone());
         let Some(apr) = index.apr_at(&key, ts) else { continue };
-        // Compound on the full position value (principal + already-accrued
-        // interest), not principal alone (#114): earned interest itself earns,
-        // matching real protocols (e.g. Aave aToken balances) rather than simple
-        // interest that drifts low over long horizons.
-        let interest = (y.principal + y.accrued) * apr * fraction;
+        // Default: compound on the full position value (principal + already-
+        // accrued interest), not principal alone (#114): earned interest itself
+        // earns, matching real protocols (e.g. Aave aToken balances) rather than
+        // simple interest that drifts low over long horizons.
+        let base = match policy.yield_accrual {
+            YieldAccrual::SimpleApr => y.principal,
+            _ => y.principal + y.accrued,
+        };
+        let interest = base * apr * fraction;
         if interest.is_zero() {
             continue;
         }

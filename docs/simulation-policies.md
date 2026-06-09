@@ -47,6 +47,19 @@ The policy object should be:
 - validated
 - included in output metadata
 
+**Implement-or-reject (enforced).** The options listed throughout this document
+describe the *design space*; not all of them are implemented yet. Any value the
+engine does not implement is **rejected at policy validation** with an error
+naming its tracking issue (`crates/simulation-policies/src/resolve.rs`,
+`validate`) — the engine never accepts a knob it would silently ignore.
+Currently rejected: `insufficient_balance = partial_fill | clamp_to_available`
+and all partial fills (#144), `fees.model = venue_fee_table` (#143),
+`gas.model = fixed_native` (#146), non-`fixed_usd` gas fallback (#145),
+`same_tick` other than `topological_order` (#141), `missing_required =
+skip_tick | forward_fill` (#159, use `warn` or `fail`), `missing_optional`
+other than `warn` (#142), `reduce_only_validation = lenient` (#158), and
+`yield.accrual = protocol_index` (#164).
+
 ## Policy Location
 
 Recommended ownership:
@@ -423,7 +436,8 @@ fallback_provider with warning
 This applies to **intra-window gaps**, not just missing endpoints: the engine
 checks each required candle series for holes *inside* the window (against the
 interval grid). Under `fail` (strict_v1) an interior hole aborts the run; under
-`forward_fill` (research_v1) it's a warning. The `POST /market-data/coverage`
+`warn` (research_v1) it's a warning. `skip_tick` and `forward_fill` are
+rejected until they do what they say (#159). The `POST /market-data/coverage`
 API surfaces the same gaps (`completeness_pct` + `missing_ranges`) before a run.
 
 ### Perp Risk Policy
@@ -546,7 +560,12 @@ flowchart LR
 
 ## Result Metadata
 
-Every backtest result should include the fully resolved policy object.
+Every backtest result includes the fully resolved policy object — **the one
+that actually executed**. The engine embeds `to_contract()` of the resolved
+policy in the trace *after* applying per-run execution overrides (#157), so the
+reported policy can never differ from the executed one; the service derives a
+finished job's `resolved_policy` from the stored trace, not from the profile
+name.
 
 ```json
 {

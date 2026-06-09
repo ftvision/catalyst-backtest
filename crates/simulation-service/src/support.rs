@@ -46,17 +46,36 @@ pub fn default_policy() -> SimulationPolicy {
 }
 
 /// Resolve a profile name to its full policy JSON (falls back to strict_v1).
+/// Used where no run has executed yet (profile list, previews). Completed runs
+/// must echo the EXECUTED policy instead — see [`executed_policy_json`].
 pub fn resolved_policy_json(profile: &str) -> Value {
     let resolved = resolve(profile).or_else(|_| resolve("strict_v1")).expect("strict_v1 resolves");
     serde_json::to_value(resolved).unwrap_or(Value::Null)
 }
 
+/// The policy a finished run ACTUALLY executed (#157): re-resolve the full
+/// contract policy the engine embedded in its trace (which includes any per-run
+/// execution overrides), falling back to the profile defaults only when no
+/// trace exists yet (queued/running/failed-before-run).
+pub fn executed_policy_json(trace: Option<&Value>, profile: &str) -> Value {
+    if let Some(policy_value) = trace.and_then(|t| t.get("policy")) {
+        if let Ok(contract) =
+            serde_json::from_value::<catalyst_contracts::SimulationPolicy>(policy_value.clone())
+        {
+            if let Ok(resolved) = catalyst_simulation_policies::resolve_policy(&contract) {
+                return serde_json::to_value(resolved).unwrap_or(Value::Null);
+            }
+        }
+    }
+    resolved_policy_json(profile)
+}
+
 /// The three policy profiles with id/label/description/resolved policy.
 pub fn list_profiles() -> Vec<Value> {
     const PROFILES: &[(&str, &str, &str)] = &[
-        ("strict_v1", "Strict", "Deterministic correctness: reject insufficient balance, no partial fills, close fills, crossing triggers, fail on missing required data."),
-        ("conservative_v1", "Conservative", "Less optimistic: worse-side OHLC fills, higher slippage, adverse same-tick ordering, fallback for optional data."),
-        ("research_v1", "Research", "Exploratory: close fills, lower slippage, forward-fill missing data, tolerate fallbacks."),
+        ("strict_v1", "Strict", "Deterministic correctness: reject insufficient balance, no partial fills, next-open fills (no look-ahead), crossing triggers, fail on missing required data."),
+        ("conservative_v1", "Conservative", "Less optimistic: worse-side OHLC fills, higher slippage and fees."),
+        ("research_v1", "Research", "Exploratory: same-bar close fills (favorable look-ahead caveat), lower slippage, warn-and-continue on missing required data."),
     ];
     PROFILES
         .iter()

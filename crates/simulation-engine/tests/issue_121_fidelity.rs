@@ -117,7 +117,7 @@ fn strict() -> SimulationPolicy {
 /// CORRECT behavior would be: a profile sets accrual to "none", run() succeeds,
 /// and the trace has ZERO "yield_accrued" events with accrued = None/0. Today
 /// such a policy makes resolve_policy return PolicyError::UnknownValue and
-/// run() returns Err — proving the off-switch is missing.
+/// FIXED (#164): accrual="none" is the off-switch; the run succeeds, zero accrual.
 #[test]
 fn issue_121_yield_no_off_switch() {
     let g = graph(json!({
@@ -158,7 +158,8 @@ fn issue_121_yield_no_off_switch() {
         "issue #121(a): yield accrues with no off-switch; accrued should be > 0, got {accrued}"
     );
 
-    // Run #2: try to turn accrual off -> there is no such value -> run() errors.
+    // Run #2 (FIXED #164): `yield.accrual = "none"` is the off-switch, symmetric
+    // with `perps.funding = "none"` — the run succeeds and accrues nothing.
     let mut policy_none = frictionless();
     policy_none.yield_ = serde_json::from_value(json!({"accrual": "none"})).unwrap();
     let input_none = SimulationInput {
@@ -167,18 +168,20 @@ fn issue_121_yield_no_off_switch() {
         policy: policy_none,
         market_data: md,
     };
-    let err = run(&input_none);
-    assert!(
-        err.is_err(),
-        "issue #121(a): yield has NO off-switch — accrual='none' should be rejected, \
-         but run() unexpectedly succeeded. CORRECT design would accept 'none' and emit \
-         zero yield_accrued events."
+    let trace_none = run(&input_none).unwrap();
+    assert_eq!(
+        count(&trace_none, "yield_accrued"),
+        0,
+        "FIXED #121(a)/#164: accrual='none' must accrue nothing"
     );
-    let msg = format!("{:?}", err.unwrap_err());
-    assert!(
-        msg.contains("yield.accrual") && msg.contains("none"),
-        "issue #121(a): expected an UnknownValue error naming yield.accrual='none', got {msg}"
-    );
+    let yp_none = &trace_none.final_portfolio.yield_positions;
+    assert_eq!(yp_none.len(), 1, "the deposit itself still executes under accrual='none'");
+    let accrued_none = yp_none[0]
+        .accrued
+        .as_ref()
+        .map(|d| d.to_string().parse::<f64>().unwrap())
+        .unwrap_or(0.0);
+    assert_eq!(accrued_none, 0.0, "FIXED #121(a)/#164: no interest under accrual='none'");
 }
 
 // ---------------------------------------------------------------------------

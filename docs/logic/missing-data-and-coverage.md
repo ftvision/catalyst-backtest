@@ -46,8 +46,8 @@ measured from first-present to last-present, never from the configured
 
 ### `missing_required` — what the engine actually does
 
-Enum: `MissingRequired { Fail, SkipTick, ForwardFill }`
-(`crates/simulation-policies/src/lib.rs:86`). "Required" = every entry in the
+Enum: `MissingRequired { Fail, Warn, SkipTick, ForwardFill }`
+(`crates/simulation-policies/src/lib.rs`). "Required" = every entry in the
 compiled graph's `data_requirements.candles`
 (`crates/graph-compiler/src/lib.rs:132`) — the candle series the strategy's nodes
 need. For each such `(venue, symbol)`, `candle_ts_in` pulls its timestamps within
@@ -56,32 +56,28 @@ for interior gaps.
 
 | Variant | Profile default | What the engine does on an interior gap |
 | --- | --- | --- |
-| `Fail` | `strict_v1`, `conservative_v1` | Aborts the run with `EngineError::Data("...missing bar(s) inside the window")` (`engine.rs:158`–`:159`). |
-| `ForwardFill` | `research_v1` | **Pushes a warning, then runs anyway** (`engine.rs:161`). |
-| `SkipTick` | (no profile sets it) | **Identical to `ForwardFill`: warning only.** |
+| `Fail` | `strict_v1`, `conservative_v1` | Aborts the run with `EngineError::Data("...missing bar(s) inside the window")` (`engine.rs:179`–`:180`). |
+| `Warn` | `research_v1` | **Pushes a warning, then runs anyway** (`engine.rs:182`) — the variant is named for exactly what it does. |
+| `SkipTick` / `ForwardFill` | (none) | **Rejected at policy validation** (#159, implement-or-reject) — they previously parsed and silently behaved as warn-and-continue. |
 
 The only branch in `check_required_coverage` is `== MissingRequired::Fail`
-(`engine.rs:158`); every non-`Fail` value falls through to the same
-`warnings.push(msg)` (`engine.rs:161`). See **Correctness notes** — neither name
-does what it says.
+(`engine.rs:179`); `Warn` falls through to `warnings.push(msg)`. `SkipTick` and
+`ForwardFill` cannot reach the engine: `validate` refuses them until skipping
+ticks / synthesizing bars is actually implemented (#159).
 
 Profiles: `strict_v1` → `Fail` (`crates/simulation-policies/src/profiles.rs:28`),
-`research_v1` → `ForwardFill` (`profiles.rs:57`). `conservative_v1` inherits
+`research_v1` → `Warn` (`profiles.rs:60`). `conservative_v1` inherits
 `strict_v1`'s `Fail` via `..strict_v1()` (it doesn't override `missing_required`).
 
-### `missing_optional` — declared, not wired
+### `missing_optional` — only `warn` is accepted
 
 Enum: `MissingOptional { Warn, Fail, ForwardFill, FallbackProvider }`
-(`simulation-policies/src/lib.rs:91`). Resolved and validated from policy JSON
-(`resolve.rs:120`–`:121`) and carried on `ResolvedPolicy` (`lib.rs:140`); profiles
-set it (`strict_v1` → `Warn` at `profiles.rs:29`; `conservative_v1` /
-`research_v1` → `FallbackProvider` at `profiles.rs:45` / `:58`).
-
-**But the engine never reads `missing_optional`.** A grep of
-`crates/simulation-engine/src/` shows no reference to `missing_optional` or any of
-its variants. So `Warn` / `Fail` / `ForwardFill` / `FallbackProvider` are all
-inert at run time today — funding/gas/yield series are consumed opportunistically
-(absent points simply don't accrue) regardless of this setting.
+(`simulation-policies/src/lib.rs`). The engine never reads this field —
+funding/gas/yield series are consumed opportunistically (absent points simply
+don't accrue). `Warn` names that de-facto behavior and is the only value
+`validate` accepts; `Fail` / `ForwardFill` / `FallbackProvider` are **rejected
+at policy validation** (#142, implement-or-reject) instead of being silently
+inert. All three profiles now declare `Warn`.
 
 ### `completeness_pct` + `missing_ranges` (reporting)
 
@@ -127,20 +123,17 @@ not per tick. It's a precondition check on the required candle series.
   full-window coverage you must check `first`/`last` against the run window
   yourself — neither the engine nor `completeness_pct` does it for you.
 
-- **`SkipTick` and `ForwardFill` are not implemented as named.** Both are pure
-  warnings (`engine.rs:158`–`:161`); the engine does not skip the gapped ticks nor
-  synthesize/carry-forward a bar for the missing buckets. The tick clock is simply
-  whatever timestamps the bundle contains (`market.rs:119`, `ticks`), so a gap
-  just means no tick fires in the hole. Functionally, under any non-`Fail` value
-  the run proceeds over the present ticks with a warning. The enum richness is
-  forward-looking; document/treat `ForwardFill` and `SkipTick` as "warn and
-  continue" today.
+- **`SkipTick` and `ForwardFill` are rejected until implemented (#159).** The
+  engine does not skip gapped ticks nor synthesize/carry-forward bars; the tick
+  clock is simply whatever timestamps the bundle contains (`market.rs:119`,
+  `ticks`), so a gap means no tick fires in the hole. Use `warn` for
+  warn-and-continue or `fail` to abort; the unimplemented names can no longer be
+  selected and silently mean something else.
 
-- **`missing_optional` is inert.** All four variants resolve and validate but are
-  never consulted by the engine. Optional data (funding/gas/yield) absence is
-  handled by the accrual code simply finding no point for that tick, not by this
-  policy. Do not rely on `Fail`-on-missing-optional or `FallbackProvider`
-  substitution at run time — neither happens here.
+- **`missing_optional` accepts only `warn` (#142).** Optional data
+  (funding/gas/yield) absence is handled by the accrual code simply finding no
+  point for that tick. The other variants (`fail` / `forward_fill` /
+  `fallback_provider`) are rejected at validation until they exist.
 
 - **Money conservation: not this layer's job.** Coverage gates *whether* a run
   proceeds; it moves no funds. The settlement/accrual invariants live elsewhere.
@@ -177,11 +170,13 @@ not per tick. It's a precondition check on the required candle series.
 `crates/simulation-engine/tests/coverage_gaps.rs` (engine enforcement):
 - `strict_fails_on_interior_gap` — hours 0,1,3,4 present (hour 2 missing) under
   `strict_v1` (`Fail`) → run errors with a message containing "missing".
-- `research_warns_on_interior_gap` — same hole under `research_v1` (`ForwardFill`)
+- `research_warns_on_interior_gap` — same hole under `research_v1` (`Warn`)
   → run succeeds, trace carries a "missing bar" warning.
 - `contiguous_series_runs_clean` — hours 0–4 all present → no "missing bar"
-  warning. (Together these demonstrate that `ForwardFill` only warns; there is no
-  separate `SkipTick` test because it shares the branch.)
+  warning.
+- `unimplemented_policy_values_are_rejected_not_ignored`
+  (`crates/simulation-policies/tests/policies.rs`) pins the `skip_tick` /
+  `forward_fill` / non-warn `missing_optional` rejections.
 
 `crates/market-data-loader/tests/loader.rs` (the coverage math):
 - `series_coverage_contiguous_is_complete` — 5 contiguous hours → `missing 0`,
@@ -200,4 +195,4 @@ not per tick. It's a precondition check on the required candle series.
 
 ## Related issues
 
-- [#142](https://github.com/ftvision/catalyst-backtest/issues/142) — missing_optional is inert
+- [#142](https://github.com/ftvision/catalyst-backtest/issues/142) — missing_optional variants beyond `warn` (rejected until implemented)

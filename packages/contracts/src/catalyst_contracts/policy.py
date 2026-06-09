@@ -66,7 +66,7 @@ class OrderingPolicy(StrictModel):
 
 
 class DataPolicy(StrictModel):
-    missing_required: Literal["fail", "skip_tick", "forward_fill"] = "fail"
+    missing_required: Literal["fail", "warn", "skip_tick", "forward_fill"] = "fail"
     missing_optional: Literal["warn", "fail", "forward_fill", "fallback_provider"] = "warn"
 
 
@@ -77,7 +77,7 @@ class PerpPolicy(StrictModel):
 
 
 class YieldPolicy(StrictModel):
-    accrual: Literal["simple_apr", "compound_apy", "protocol_index"] = "simple_apr"
+    accrual: Literal["simple_apr", "compound_apy", "protocol_index", "none"] = "compound_apy"
 
 
 class SimulationPolicy(StrictModel):

@@ -48,7 +48,7 @@ fn gap_tolerant_policy() -> SimulationPolicy {
     serde_json::from_value(json!({
         "schema_version": "catalyst.backtest.policy.v1",
         "profile": "strict_v1",
-        "data": {"missing_required": "forward_fill"},
+        "data": {"missing_required": "warn"},
         "gas": {"model": "none"}
     }))
     .unwrap()
