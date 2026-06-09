@@ -1,6 +1,6 @@
 {
   "name": "hl_spot_buy_then_sell",
-  "description": "Buy ETH spot on Hyperliquid, then chain a sell of 0.04 ETH.",
+  "description": "Buy ETH spot on Hyperliquid, then chain a sell of 0.04 ETH. Under next_open each market hop fills one bar later (buy on bar 1, chained sell on bar 2), so three bars are needed.",
   "input": {
     "graph": {
       "nodes": [
@@ -13,7 +13,7 @@
     },
     "config": {
       "start": "2024-01-01T00:00:00Z",
-      "end": "2024-01-01T01:00:00Z",
+      "end": "2024-01-01T03:00:00Z",
       "interval": "1h",
       "initial_portfolio": {"hyperliquid": {"USDC": "1000"}}
     },
@@ -22,9 +22,13 @@
       "schema_version": "catalyst.backtest.market_data_bundle.v1",
       "interval": "1h",
       "start": "2024-01-01T00:00:00Z",
-      "end": "2024-01-01T01:00:00Z",
+      "end": "2024-01-01T03:00:00Z",
       "candles": [{"venue": "hyperliquid", "symbol": "ETH", "quote": "USD",
-        "points": [{"ts": "2024-01-01T00:00:00Z", "open": "2000", "high": "2000", "low": "2000", "close": "2000"}]}]
+        "points": [
+          {"ts": "2024-01-01T00:00:00Z", "open": "2000", "high": "2000", "low": "2000", "close": "2000"},
+          {"ts": "2024-01-01T01:00:00Z", "open": "2000", "high": "2000", "low": "2000", "close": "2000"},
+          {"ts": "2024-01-01T02:00:00Z", "open": "2000", "high": "2000", "low": "2000", "close": "2000"}
+        ]}]
     }
   },
   "expect": {
@@ -33,6 +37,6 @@
     "open_perps": 0,
     "open_yields": 0,
     "balances_present": [["hyperliquid", "ETH"]],
-    "snapshots_min": 1
+    "snapshots_min": 3
   }
 }

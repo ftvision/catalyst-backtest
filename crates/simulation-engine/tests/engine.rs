@@ -137,12 +137,15 @@ fn threshold_crossing_fires_once_while_condition_holds() {
 
 #[test]
 fn signal_refires_on_recross() {
-    // below, back above, below again -> two crossings
+    // below, back above, below again -> two crossings. Under next_open each fill
+    // lands on the bar AFTER the cross, so the second cross (bar 3) needs a bar 4
+    // to fill against; a trailing in-range bar (2000) provides it without
+    // triggering a third crossing.
     let input = SimulationInput {
         graph: graph(signal_buy_graph()),
-        config: config("base", "1000", 4),
+        config: config("base", "1000", 5),
         policy: strict_policy(),
-        market_data: eth_bundle("base", &["2000", "1700", "2000", "1700"]),
+        market_data: eth_bundle("base", &["2000", "1700", "2000", "1700", "2000"]),
     };
     let trace = run(&input).unwrap();
     assert_eq!(count_events(&trace, "signal_fired"), 2);
@@ -164,12 +167,14 @@ fn action_chains_to_next_action() {
     }));
     let input = SimulationInput {
         graph: g,
-        config: config("hyperliquid", "1000", 1),
+        config: config("hyperliquid", "1000", 3),
         policy: strict_policy(),
-        market_data: eth_bundle("hyperliquid", &["2000"]),
+        market_data: eth_bundle("hyperliquid", &["2000", "2000", "2000"]),
     };
     let trace = run(&input).unwrap();
-    // both the initial buy and the chained sell execute on the first tick
+    // Under next_open each market hop fills one bar later: the buy decided on bar 0
+    // fills on bar 1, then the chained sell decided on bar 1 fills on bar 2 — so a
+    // 3-bar run is needed for both to execute.
     assert_eq!(count_events(&trace, "action_executed"), 2);
     let kinds: Vec<_> = trace
         .events
@@ -193,11 +198,13 @@ fn selling_more_than_held_is_rejected() {
     }));
     let input = SimulationInput {
         graph: g,
-        config: config("hyperliquid", "1000", 1), // USDC only, no ETH
+        config: config("hyperliquid", "1000", 2), // USDC only, no ETH
         policy: strict_policy(),
-        market_data: eth_bundle("hyperliquid", &["2000"]),
+        market_data: eth_bundle("hyperliquid", &["2000", "2000"]),
     };
     let trace = run(&input).unwrap();
+    // Under next_open the market sell is deferred from bar 0 and the insufficient-ETH
+    // rejection surfaces when it tries to fill on bar 1 — hence the 2-bar run.
     assert_eq!(count_events(&trace, "action_rejected"), 1);
     assert_eq!(count_events(&trace, "action_executed"), 0);
     // portfolio unchanged: still 1000 USDC, no ETH

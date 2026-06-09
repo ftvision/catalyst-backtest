@@ -195,10 +195,11 @@ amm_pool_state
 ```
 
 The default is **`next_open`** (no intra-bar look-ahead): an order decided on a
-bar fills at the *next* bar's open, since that bar's close isn't knowable when the
-decision is made. `next_open` falls back to the current close only on the final
-bar, where no next open exists. `strict_v1` uses `next_open`; `research_v1` uses
-the more optimistic `close`.
+bar is deferred and fills — and is booked — at the *next* bar's open, since that
+bar's open isn't knowable when the decision is made (#116). A market order decided
+on the **final** bar has no next bar to fill against, so it lapses unfilled rather
+than falling back to the final close. `strict_v1` uses `next_open`; `research_v1`
+uses the more optimistic `close`.
 
 Conservative profile can use:
 
