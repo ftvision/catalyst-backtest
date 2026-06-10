@@ -8,8 +8,12 @@
 //!   fill when price falls to them; sells rest above and fill when price rises.)
 //! - **touch + fill price**: given a bar, does the order fill, and at what price?
 //!   Filling is *gap-aware*: a bar that opens through the limit fills at the open
-//!   (in the trader's favor); otherwise it fills exactly at the limit. There is no
-//!   taker slippage — a resting limit is a maker order.
+//!   (in the trader's favor); otherwise it fills exactly at the limit. A resting
+//!   limit is a **maker** order: it fills at limit-or-better, with **no taker
+//!   slippage and no AMM price impact** — no slippage model (including
+//!   `amm_price_impact`) ever reprices the fill away from the limit (#162). The
+//!   theoretical AMM impact price is attached to swap fills for honesty, never
+//!   substituted.
 //!
 //! Placement is validated here; the resting book, expiry/TIF, and lifecycle
 //! events live in the engine.

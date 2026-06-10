@@ -5,7 +5,7 @@ use std::str::FromStr;
 
 use catalyst_contracts::graph::{PerpOrderConfig, PerpSide, SwapConfig, YieldConfig};
 use catalyst_execution_models::{
-    execute_perp, execute_swap, execute_yield_deposit, execute_yield_withdraw,
+    execute_perp, execute_swap, execute_swap_at, execute_yield_deposit, execute_yield_withdraw,
     limit_fill_price, place_perp_limit, place_swap_limit, Bar, Execution, LimitPlacement, LimitSide,
     MarketContext,
 };
@@ -488,6 +488,34 @@ fn amm_sell_applies_price_impact_from_reserves() {
     // selling 1 ETH: avg price = rq/(rb+amount) = 200000/101 ≈ 1980.198 (impact down)
     let price: f64 = out.fill().unwrap().price.unwrap().to_string().parse().unwrap();
     assert!((1980.0..1981.0).contains(&price), "price was {price}");
+}
+
+#[test]
+fn execute_swap_at_ignores_pool_reserves_under_amm_price_impact() {
+    // #162: a resting limit fill is a MAKER order — execute_swap_at uses the
+    // engine-provided (limit-or-better) price verbatim even under
+    // amm_price_impact with a shallow pool. Pre-fix this buy filled at the
+    // constant-product 2020 instead of the 1900 limit. The theoretical taker
+    // price is attached for honesty, never substituted.
+    let market = FakeMarket::new()
+        .with_bar("base", "ETH", "2000")
+        .with_reserves("base", "ETH", "100", "200000");
+    let mut l = ledger_with("base", "USDC", "5000");
+    let out =
+        execute_swap_at(&mut l, &market, &amm_policy(), &swap("USDC", "ETH", "2000", "base"), d("1900"));
+    let fill = out.fill().expect("executed");
+    assert_eq!(fill.price, Some(d("1900"))); // NOT 2020
+    assert_eq!(fill.amm_theoretical_price, Some(d("2020")));
+    assert_eq!(fill.amm_impact_exceeds_limit, Some(true));
+
+    // Under a non-AMM policy the honesty fields stay empty.
+    let mut l2 = ledger_with("base", "USDC", "5000");
+    let out2 =
+        execute_swap_at(&mut l2, &market, &strict_v1(), &swap("USDC", "ETH", "2000", "base"), d("1900"));
+    let fill2 = out2.fill().expect("executed");
+    assert_eq!(fill2.price, Some(d("1900")));
+    assert_eq!(fill2.amm_theoretical_price, None);
+    assert_eq!(fill2.amm_impact_exceeds_limit, None);
 }
 
 #[test]

@@ -149,6 +149,8 @@ fn open_perp(
         fee_usd: fee,
         gas_usd: Decimal::ZERO,
         realized_pnl_usd: None,
+        amm_theoretical_price: None,
+        amm_impact_exceeds_limit: None,
     })
 }
 
@@ -215,6 +217,8 @@ fn close_perp(
         fee_usd: fee,
         gas_usd: Decimal::ZERO,
         realized_pnl_usd: Some(realized_pnl),
+        amm_theoretical_price: None,
+        amm_impact_exceeds_limit: None,
     })
 }
 

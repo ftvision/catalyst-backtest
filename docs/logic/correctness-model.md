@@ -139,6 +139,7 @@ margin and unrealized PnL + yield principal and accrued (see
 | Liquidation marks the intra-bar wick | ✅ fixed (#120 wick half) |
 | Liquidation triggers at full bankruptcy only; no maintenance margin | ⚠️ open (#120) |
 | Resting limit orders don't reserve balance | ⚠️ open (#124) |
+| Resting limit fills at limit-or-better (maker); AMM impact never reprices them | ✅ fixed (#162) |
 | Yield compounds per tick on principal + accrued | ✅ fixed (#114) |
 | `yield_accrual` knob wired: `compound_apy` default / `simple_apr` / `none` off-switch | ✅ fixed (#164) |
 | Trace/result metadata echoes the EXECUTED policy, per-run overrides included | ✅ fixed (#157) |

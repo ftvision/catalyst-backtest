@@ -51,7 +51,9 @@ fn resolve_amount(ledger: &Ledger, cfg: &SwapConfig, venue: &str) -> Decimal {
 
 /// Depth-aware price impact (#40): under `amm_price_impact` with pool reserves,
 /// fill at the constant-product average price (size-dependent); otherwise use
-/// `fallback` (the market reference+slippage, or a resting order's limit price).
+/// `fallback` (the market reference+slippage). **Market swaps only** — resting
+/// limit fills are maker orders and are never repriced by the AMM model (#162);
+/// see [`execute_swap_at`].
 fn maybe_amm(
     ctx: &dyn MarketContext,
     policy: &ResolvedPolicy,
@@ -104,6 +106,14 @@ pub fn execute_swap(
 
 /// Execute a swap at an explicit fill `price` (used by the engine's resting
 /// limit-order fills). Direction and base are re-derived from the config.
+///
+/// Maker semantics (#162): the fill happens *exactly* at the engine-provided
+/// price — the gap-aware limit-or-better price from `limit_fill_price`. The AMM
+/// price-impact model is never applied here (it would reprice a buy limit at
+/// 1900 to fill above 1900, violating limit-order semantics). For honesty,
+/// under `amm_price_impact` with pool reserves present the theoretical
+/// constant-product price is still computed and attached to the fill
+/// (`amm_theoretical_price` / `amm_impact_exceeds_limit`), never substituted.
 pub fn execute_swap_at(
     ledger: &mut Ledger,
     ctx: &dyn MarketContext,
@@ -120,8 +130,22 @@ pub fn execute_swap_at(
     if amount.is_zero() {
         return Execution::rejected(format!("nothing to swap from {}", cfg.from_asset));
     }
-    let price = maybe_amm(ctx, policy, venue, base, dir, amount, price);
-    swap_at(ledger, ctx, policy, cfg, dir, base, amount, price)
+    let theoretical = match (policy.slippage_model, ctx.pool_reserves(venue, base)) {
+        (SlippageModel::AmmPriceImpact, Some((rb, rq))) if !rb.is_zero() && !rq.is_zero() => {
+            Some(amm_price(dir, amount, rb, rq))
+        }
+        _ => None,
+    };
+    let mut out = swap_at(ledger, ctx, policy, cfg, dir, base, amount, price);
+    if let (Execution::Executed(fill), Some(theo)) = (&mut out, theoretical) {
+        fill.amm_theoretical_price = Some(theo);
+        // Worse than the fill from the trader's perspective?
+        fill.amm_impact_exceeds_limit = Some(match dir {
+            Direction::Buy => theo > price,
+            Direction::Sell => theo < price,
+        });
+    }
+    out
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -164,6 +188,8 @@ fn swap_at(
                 fee_usd: fee,
                 gas_usd: gas,
                 realized_pnl_usd: None,
+                amm_theoretical_price: None,
+                amm_impact_exceeds_limit: None,
             })
         }
         Direction::Sell => {
@@ -197,6 +223,8 @@ fn swap_at(
                 fee_usd: fee,
                 gas_usd: gas,
                 realized_pnl_usd: None,
+                amm_theoretical_price: None,
+                amm_impact_exceeds_limit: None,
             })
         }
     }

@@ -23,6 +23,16 @@ pub struct Fill {
     pub gas_usd: Decimal,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub realized_pnl_usd: Option<Decimal>,
+    /// Honesty fields for resting limit fills under `amm_price_impact` (#162):
+    /// the theoretical constant-product average price the trade *would* have
+    /// paid as a taker against the pool reserves. Informational only — the fill
+    /// price is always the maker (limit-or-better) price.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub amm_theoretical_price: Option<Decimal>,
+    /// True when the theoretical AMM price is worse than the actual fill price
+    /// from the trader's perspective (theoretical > fill for buys, < for sells).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub amm_impact_exceeds_limit: Option<bool>,
 }
 
 /// Outcome of an execution attempt. A rejection leaves the ledger unchanged.

@@ -130,17 +130,25 @@ good-til-`n`-bars caps how long a stale order lingers before being cancelled.
   favor (`limit.rs:64`–`65`). This avoids the unrealistic outcome of filling a
   resting maker at a stale, unfavorable limit when the market clearly traded
   through it.
-- **No taker slippage on resting fills.** A resting limit is a maker order, so it
-  fills exactly at the touched price with **no bps/volume slippage applied**.
-  `execute_perp_at` (`perp.rs:68`) takes the price as given and never calls the
-  slippage path. **Caveat (swaps under `amm_price_impact`):** `execute_swap_at`
-  re-runs `maybe_amm` (`swap.rs:123`), so under the `amm_price_impact` policy
-  *with a pool-reserves series present*, the AMM constant-product price would
-  **override** the limit price for a swap fill — depth impact, not bps, would
-  apply. Under the default bps models (`strict_v1` etc.) `maybe_amm` returns the
-  passed-in limit price unchanged (`swap.rs:68`), so there is no extra slippage.
-  This AMM override on resting swap fills is a real edge case; it is not exercised
-  by the current limit tests.
+- **No taker slippage on resting fills — maker semantics, decided (#162).** A
+  resting limit is a **maker** order: it fills at **limit-or-better**, exactly at
+  the gap-aware touched price, with **no bps/volume slippage and no AMM price
+  impact applied**. `execute_perp_at` (`perp.rs:68`) and `execute_swap_at`
+  (`swap.rs:117`) take the price as given and never call the slippage path —
+  under `amm_price_impact` *with a pool-reserves series present*, the
+  constant-product model is **not** re-run on the limit price (it previously was,
+  which could fill a buy limit at 1900 *above* 1900 — the #162 bug). This matches
+  how real on-chain limit orders execute: Uniswap v3 range orders and 1inch limit
+  orders are maker liquidity that fills at the placed price, not taker swaps
+  against the pool. For honesty, the theoretical constant-product price the trade
+  *would* have paid as a taker is still computed and emitted in the fill detail of
+  swap limit fills: `amm_theoretical_price`, plus `amm_impact_exceeds_limit`
+  (true when the theoretical price is worse than the actual fill from the
+  trader's perspective — i.e. the pool was too shallow to honestly fill that size
+  at the limit). Escalation path if trigger+market semantics (a stop-style
+  "trigger touches, then swap against the pool with impact") are ever wanted: a
+  future `fills.limit_fill_model = maker | trigger_market` policy knob — documented
+  here as the named extension point, **not built**.
 - **Fees and gas still apply on the fill.** "No slippage" refers to price only.
   The committed fill still charges trading fees and gas through `swap_at`
   (`swap.rs:142`–`188`) / `open_perp` / `close_perp` — and inherits their
@@ -187,6 +195,19 @@ good-til-`n`-bars caps how long a stale order lingers before being cancelled.
 - `limit_without_price_is_rejected` — missing `limit_price` → `action_rejected`, no
   `order_placed`.
 
+`crates/simulation-engine/tests/issue_162_amm_limit_fill.rs` (maker semantics
+under `amm_price_impact`, end-to-end through `run`):
+- `buy_limit_shallow_pool_fills_at_limit_with_honest_impact_fields` — shallow pool,
+  theoretical impact price above the limit: fills AT the limit; the fill detail
+  carries `amm_theoretical_price` > limit and `amm_impact_exceeds_limit = true`.
+- `buy_limit_deep_pool_still_fills_at_maker_price_not_favorable_amm` — pins
+  maker-not-clamp: a *favorable* theoretical AMM price is not substituted either.
+- `sell_limit_shallow_pool_fills_at_limit_with_honest_impact_fields` — sell mirror.
+- `gap_through_with_reserves_fills_at_open` — gap-aware limit-or-better survives
+  with reserves present; no AMM override of the open fill.
+- `market_swaps_still_get_amm_impact` — regression: the market path keeps depth
+  impact (companion to `amm_slippage.rs`).
+
 `crates/execution-models/tests/execution.rs` (unit-level, `limit.rs`):
 - `buy_limit_touches_when_low_reaches_it` / `sell_limit_touches_when_high_reaches_it`
   — touch only when low/high reaches the limit; `None` otherwise.
@@ -202,3 +223,4 @@ good-til-`n`-bars caps how long a stale order lingers before being cancelled.
 ## Related issues
 
 - [#124](https://github.com/ftvision/catalyst-backtest/issues/124) — resting limit orders don't reserve balance
+- [#162](https://github.com/ftvision/catalyst-backtest/issues/162) — AMM price impact repriced resting swap limit fills — FIXED (maker semantics, see above)
