@@ -6,9 +6,10 @@ position; the engine then accrues interest **every tick** based on the elapsed
 wall-clock time and the position's current APR; a `yield_withdraw` redeems
 principal + accrued back to the chain balance. Correctness hinges on three
 things: accrual scaling with *actual* elapsed seconds, money conservation across
-deposit/accrue/withdraw, and being honest about what's simplified (compounding
-frequency follows the tick grid; cumulative yield counters still report asset
-units for non-stables, #166).
+deposit/accrue/withdraw, and reporting in honest units: interest accrues in
+**asset units** (interest on an ETH deposit is ETH) while the cumulative USD
+counters carry that interest converted at the accrual tick's mark price
+(#166, fixed).
 
 The deposit/withdraw execution lives in
 `crates/execution-models/src/yields.rs`; the per-tick accrual and valuation live
@@ -40,15 +41,24 @@ fraction = elapsed_secs / YEAR_SECONDS        (YEAR_SECONDS = 31_536_000)
   interest, i.e. it **compounds** (#114, fixed). Because `withdraw_yield`
   draws accrued-first-then-principal, the base equals `YieldPosition::value()`
   regardless of how withdrawals were split.
-- Zero interest is skipped (no event); otherwise it calls
-  `ledger.accrue_yield(...)` and emits a `yield_accrued` event carrying `apr` and
-  `interest_usd` (`engine.rs:1211–1224`).
+- Zero interest is skipped (no event); otherwise the interest is converted to
+  USD — `price = 1` for stables, else the venue-scoped carry-forward mark
+  `mark_price(index, chain, asset, ts)`, the same convention as
+  `compute_equity` (#166) — then it calls `ledger.accrue_yield(...)` and emits
+  a `yield_accrued` event carrying `apr`, `interest` (asset units), `price`,
+  and the converted `interest_usd`.
+- Defensive gap behavior (#166): a mark provably exists after a non-stable
+  deposit (deposits with no price are rejected, #115), but if one is ever
+  absent at an accrual tick the asset-unit accrual still happens — economics
+  must not depend on price availability — while `interest_usd` is 0 and a
+  run-level warning is pushed ("total_yield_usd under-counts").
 
-`ledger.accrue_yield` (`crates/portfolio-ledger/src/lib.rs:233`) adds the
-interest to `position.accrued` and to the cumulative `yield_usd` counter
-(`lib.rs:248–249`); it errors (`NoSuchYield`) if the position doesn't exist
-(`lib.rs:243`), which the engine ignores with `let _`, since it only iterates
-over positions it just snapshotted (`engine.rs:1027`).
+`ledger.accrue_yield` (`crates/portfolio-ledger/src/lib.rs`) adds the
+asset-unit interest to `position.accrued` and the caller-converted
+`interest_usd` to the cumulative `yield_usd` counter (#166 — the two differ
+for non-stables, and the caller owns the conversion); it errors (`NoSuchYield`)
+if the position doesn't exist, which the engine ignores with `let _`, since it
+only iterates over positions it just snapshotted.
 
 ### Deposit / withdraw (the balance moves)
 
@@ -114,8 +124,8 @@ test bundle for the shape: a `yields` entry with a `points` array of
 
 There is currently only one accrual behavior (per-tick compounding), so there's
 no "choose one over another" decision to make at the policy level. Stable and
-non-stable deposit assets are both valued correctly in equity (#115, fixed);
-the residual difference is the cumulative reporting counters (#166).
+non-stable deposit assets are both valued correctly in equity (#115, fixed)
+and in the cumulative reporting counters (#166, fixed).
 
 ## Correctness notes / edge cases
 
@@ -159,8 +169,16 @@ the residual difference is the cumulative reporting counters (#166).
   position is silently skipped from equity — the same gap as the cash branch
   (#119). The accrual itself stays unit-agnostic (`apr` applies to asset-unit
   principal), which is correct: interest is earned in the deposited asset.
-  Residual: the cumulative `yield_usd` counter and the `yield_accrued` event's
-  `interest_usd` still carry asset units for non-stables (#166).
+- **Yield counters report USD, not asset units (#166 — FIXED).** The
+  cumulative `yield_usd` counter and the `yield_accrued` event's
+  `interest_usd` carry the interest converted at the accrual tick's
+  carry-forward mark (venue = chain), the same convention as `compute_equity`;
+  stables convert at 1 without a candle lookup. The event also reports
+  `interest` (asset units) and `price` for audit, and the reporter's
+  `total_yield_usd` sums the converted field. If a non-stable mark is ever
+  absent at an accrual tick (it shouldn't be — unpriced deposits are
+  rejected), the asset-unit accrual still happens, `interest_usd` is 0, and a
+  run-level warning flags the under-count.
 - **Gas converted to asset units at the tick price (#115 — FIXED).** `gas_usd`
   returns USD (`crates/execution-models/src/pricing.rs:102`); deposit and
   withdraw now debit `gas / price` asset units (`yields.rs:44-52`, and the
@@ -238,14 +256,19 @@ marked to price (2000 → 1800 on a price move, never $1/unit), gas debited as
 `gas/price` asset units, `value_usd = amount × price` on fills, the
 no-price-rejects-with-untouched-ledger case, and the #114×#115 cross-product
 (a non-stable position accruing compounded interest, equity =
-`(principal + accrued) × price`). (No test exercises `CompoundApy` /
-`ProtocolIndex`, since they have no behavior — #164.)
+`(principal + accrued) × price`, with the `yield_accrued` event's
+`interest_usd` = interest × mark and a stable control where
+`interest_usd == interest`, #166). The reporter test
+`funding_and_yield_costs_summed` (`crates/result-reporter/tests/reporter.rs`)
+pins that `total_yield_usd` sums the converted `interest_usd` field, not the
+asset-unit `interest`. (No test exercises `CompoundApy` / `ProtocolIndex`,
+since they have no behavior — #164.)
 
 ## Related issues
 
 - [#114](https://github.com/ftvision/catalyst-backtest/issues/114) — yield compounding — FIXED
-- [#115](https://github.com/ftvision/catalyst-backtest/issues/115) — non-stable yield valuation — FIXED (reporting-units residual → #166)
+- [#115](https://github.com/ftvision/catalyst-backtest/issues/115) — non-stable yield valuation — FIXED
 - [#118](https://github.com/ftvision/catalyst-backtest/issues/118) — elapsed-time accrual — FIXED
 - [#121](https://github.com/ftvision/catalyst-backtest/issues/121) — fidelity backlog (pct_position, cooldown/TIF)
 - [#164](https://github.com/ftvision/catalyst-backtest/issues/164) — `yield_accrual` knob unwired; APR-vs-APY input assumption; no off-switch
-- [#166](https://github.com/ftvision/catalyst-backtest/issues/166) — `total_yield_usd`/`interest_usd` in asset units for non-stables
+- [#166](https://github.com/ftvision/catalyst-backtest/issues/166) — `total_yield_usd`/`interest_usd` converted to USD at the accrual tick's mark — FIXED

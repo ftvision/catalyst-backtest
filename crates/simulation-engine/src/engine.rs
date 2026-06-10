@@ -293,7 +293,16 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
         prev_ts = Some(ts);
 
         accrue_funding(&mut ledger, &index, ts, elapsed_secs, &ts_iso, &policy, &mut events);
-        accrue_yield(&mut ledger, &index, ts, elapsed_secs, &ts_iso, &policy, &mut events);
+        accrue_yield(
+            &mut ledger,
+            &index,
+            ts,
+            elapsed_secs,
+            &ts_iso,
+            &policy,
+            &mut events,
+            &mut warnings,
+        );
         check_liquidations(&mut ledger, &index, ts, &ts_iso, &policy, &mut events);
 
         // Tick-start equity, used to resolve pct_portfolio sizing for any action
@@ -1253,6 +1262,7 @@ fn accrue_funding(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn accrue_yield(
     ledger: &mut Ledger,
     index: &BundleIndex,
@@ -1261,6 +1271,7 @@ fn accrue_yield(
     ts_iso: &str,
     policy: &ResolvedPolicy,
     events: &mut Vec<Event>,
+    warnings: &mut Vec<String>,
 ) {
     // The `yield.accrual` policy knob is honored, not decorative: `none` turns
     // accrual off (symmetric with `perps.funding = none`), `simple_apr` accrues
@@ -1286,7 +1297,36 @@ fn accrue_yield(
         if interest.is_zero() {
             continue;
         }
-        let _ = ledger.accrue_yield(&y.protocol, &y.asset, &y.chain, y.pool.as_deref(), interest);
+        // Interest accrues in asset units (interest on an ETH deposit is ETH);
+        // the USD counters need it converted at the accrual tick's carry-forward
+        // mark, venue = chain — the same convention as compute_equity (#166).
+        // A mark provably exists after a non-stable deposit (deposits without an
+        // exact bar are rejected, #115/#153), but if it's ever absent the
+        // asset-unit accrual still happens — economics must not depend on price
+        // availability — and only the USD counter under-counts, loudly.
+        let price = if is_stable(&y.asset) {
+            Some(Decimal::ONE)
+        } else {
+            mark_price(index, &y.chain, &y.asset, ts)
+        };
+        let interest_usd = match price {
+            Some(p) => interest * p,
+            None => {
+                warnings.push(format!(
+                    "no price to value yield interest for {} on {} at {}; total_yield_usd under-counts",
+                    y.asset, y.chain, ts_iso
+                ));
+                Decimal::ZERO
+            }
+        };
+        let _ = ledger.accrue_yield(
+            &y.protocol,
+            &y.asset,
+            &y.chain,
+            y.pool.as_deref(),
+            interest,
+            interest_usd,
+        );
         events.push(Event {
             ts: ts_iso.to_string(),
             event_type: "yield_accrued".into(),
@@ -1297,7 +1337,9 @@ fn accrue_yield(
                 "asset": y.asset,
                 "chain": y.chain,
                 "apr": apr.normalize().to_string(),
-                "interest_usd": interest.normalize().to_string(),
+                "interest": interest.normalize().to_string(),
+                "price": price.map(|p| p.normalize().to_string()),
+                "interest_usd": interest_usd.normalize().to_string(),
             })),
         });
     }

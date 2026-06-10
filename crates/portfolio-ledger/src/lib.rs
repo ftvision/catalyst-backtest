@@ -230,6 +230,12 @@ impl Ledger {
     }
 
     /// Accrue interest onto a yield position and record it as earned yield.
+    ///
+    /// `amount` is in **asset units** (interest on an ETH deposit is ETH) and
+    /// grows the position's `accrued` balance; `interest_usd` is the same
+    /// interest converted to USD at the accrual tick's mark price and is what
+    /// feeds the cumulative `yield_usd` counter (#166 — for non-stable assets
+    /// the two differ, and the caller owns the conversion).
     pub fn accrue_yield(
         &mut self,
         protocol: &str,
@@ -237,6 +243,7 @@ impl Ledger {
         chain: &str,
         pool: Option<&str>,
         amount: Decimal,
+        interest_usd: Decimal,
     ) -> Result<(), LedgerError> {
         let key =
             (protocol.to_string(), asset.to_string(), chain.to_string(), pool.map(str::to_string));
@@ -246,7 +253,7 @@ impl Ledger {
             chain: chain.to_string(),
         })?;
         position.accrued += amount;
-        self.yield_usd += amount;
+        self.yield_usd += interest_usd;
         Ok(())
     }
 
