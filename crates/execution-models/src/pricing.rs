@@ -46,15 +46,13 @@ pub fn reference_price(
     }
 }
 
-/// Per-base-unit impact coefficient (bps) for the volume model at 100%
-/// participation. A model constant for now; a candidate future policy knob.
-const VOLUME_IMPACT_COEF_BPS: i64 = 50;
-
 /// Effective slippage in bps for the active model. `fixed_bps` (and the
 /// `amm_price_impact` fallback) use the configured bps; `volume_based` scales it
 /// by participation `p = base_amount / bar_volume` via the square-root law
-/// (`bps + coef·√p`), falling back to the configured bps when the bar has no
-/// volume; `none` is zero. See docs/logic/slippage-models.md.
+/// (`bps + coef·√p`, where `coef` is the policy's `volume_impact_coef_bps`
+/// knob — extra bps at 100% participation, #169), falling back to the
+/// configured bps when the bar has no volume; `none` is zero.
+/// See docs/logic/slippage-models.md.
 pub fn slippage_bps(policy: &ResolvedPolicy, base_amount: Decimal, bar_volume: Option<Decimal>) -> Decimal {
     let base = parse_policy("slippage_bps", &policy.slippage_bps);
     match policy.slippage_model {
@@ -64,7 +62,8 @@ pub fn slippage_bps(policy: &ResolvedPolicy, base_amount: Decimal, bar_volume: O
         SlippageModel::FixedBps | SlippageModel::AmmPriceImpact => base,
         SlippageModel::VolumeBased => match bar_volume {
             Some(v) if v > Decimal::ZERO && base_amount > Decimal::ZERO => {
-                base + Decimal::from(VOLUME_IMPACT_COEF_BPS) * dec_sqrt(base_amount / v)
+                base + parse_policy("volume_impact_coef_bps", &policy.volume_impact_coef_bps)
+                    * dec_sqrt(base_amount / v)
             }
             // No (or zero) volume -> fall back to fixed bps, never silently zero.
             _ => base,

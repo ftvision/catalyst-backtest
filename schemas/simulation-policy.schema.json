@@ -40,7 +40,8 @@
           "additionalProperties": false,
           "properties": {
             "model": { "type": "string", "enum": ["fixed_bps", "volume_based", "amm_price_impact", "none"] },
-            "bps": { "$ref": "#/$defs/decimal" }
+            "bps": { "$ref": "#/$defs/decimal" },
+            "volume_impact_coef_bps": { "$ref": "#/$defs/decimal" }
           }
         },
         "fees": {

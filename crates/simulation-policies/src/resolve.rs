@@ -71,6 +71,9 @@ pub fn resolve_policy(contract: &ContractPolicy) -> Result<ResolvedPolicy, Polic
             if let Some(v) = &slip.bps {
                 p.slippage_bps = v.clone();
             }
+            if let Some(v) = &slip.volume_impact_coef_bps {
+                p.volume_impact_coef_bps = v.clone();
+            }
         }
         if let Some(fees) = &fills.fees {
             if let Some(v) = &fees.model {
@@ -197,6 +200,13 @@ pub fn validate(p: &ResolvedPolicy) -> Result<(), PolicyError> {
     // (#163 — a malformed bps must never silently mean zero slippage).
     if p.slippage_model != SlippageModel::None {
         parse_decimal("slippage_bps", &p.slippage_bps)?;
+    }
+    // The √-law impact coefficient is consumed only by volume_based
+    // (consume-gated, the #163/#170 pattern): it is validated exactly when
+    // that model is active, so a malformed coefficient can never silently
+    // weaken the impact term (#169).
+    if p.slippage_model == SlippageModel::VolumeBased {
+        parse_decimal("fills.slippage.volume_impact_coef_bps", &p.volume_impact_coef_bps)?;
     }
     if p.fee_model == FeeModel::FixedBps {
         parse_decimal("fee_bps", &p.fee_bps)?;
@@ -375,6 +385,7 @@ impl ResolvedPolicy {
                 slippage: Some(catalyst_contracts::policy::SlippagePolicy {
                     model: Self::knob(&self.slippage_model),
                     bps: Some(self.slippage_bps.clone()),
+                    volume_impact_coef_bps: Some(self.volume_impact_coef_bps.clone()),
                 }),
                 fees: Some(catalyst_contracts::policy::FeePolicy {
                     model: Self::knob(&self.fee_model),
