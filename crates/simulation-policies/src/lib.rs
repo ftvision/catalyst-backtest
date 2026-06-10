@@ -158,6 +158,12 @@ pub struct ResolvedPolicy {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_mark_staleness: Option<String>,
     pub liquidation_check: LiquidationCheck,
+    /// Maintenance margin as a fraction of mark notional (decimal string, e.g.
+    /// "0.0125"); a perp is liquidated once its equity (margin + unrealized
+    /// PnL) falls to this fraction of notional (#120). [`validate`] guarantees
+    /// it parses as a decimal in `[0, 1)`. "0" degenerates to the historical
+    /// full-bankruptcy trigger.
+    pub maintenance_margin_ratio: String,
     pub funding: Funding,
     pub reduce_only_validation: ReduceOnlyValidation,
     pub yield_accrual: YieldAccrual,

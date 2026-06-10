@@ -128,6 +128,34 @@ fn perp_unrealized_pnl_by_side() {
     assert_eq!(short.unrealized_pnl(d("2100")), d("-25.00"));
 }
 
+#[test]
+fn perp_liquidation_price_by_side() {
+    // Long: p_liq = (entry·size − margin) / (size·(1 − mmr));
+    // short: p_liq = (entry·size + margin) / (size·(1 + mmr)).  (#120)
+    let long = long_eth("100"); // size 0.25, entry 2000, margin 100
+    let mmr = d("0.0125");
+    assert_eq!(long.liquidation_price(mmr), d("400") / (d("0.25") * d("0.9875")));
+    let short = PerpPosition { side: PerpSide::Short, ..long_eth("100") };
+    assert_eq!(short.liquidation_price(mmr), d("600") / (d("0.25") * d("1.0125")));
+
+    // At mmr = 0 the level degenerates to the bankruptcy price (loss = margin):
+    // equity is exactly zero at the level, i.e. unrealized_pnl == -margin.
+    assert_eq!(long.liquidation_price(Decimal::ZERO), d("1600"));
+    assert_eq!(long.unrealized_pnl(d("1600")), d("-100.00"));
+    assert_eq!(short.liquidation_price(Decimal::ZERO), d("2400"));
+    assert_eq!(short.unrealized_pnl(d("2400")), d("-100.00"));
+
+    // At the maintenance level, residual equity == mmr · size · p_liq (up to
+    // Decimal's 28-digit division truncation of the repeating p_liq).
+    let p_liq = long.liquidation_price(mmr);
+    let residual = long.margin_usd + long.unrealized_pnl(p_liq);
+    assert!(
+        (residual - mmr * long.size * p_liq).abs() < d("0.000000000000000001"),
+        "residual {residual} != mmr·size·p_liq {}",
+        mmr * long.size * p_liq
+    );
+}
+
 // --- Yield position bookkeeping ---
 
 #[test]
@@ -187,9 +215,13 @@ fn snapshot_reports_balances_positions_and_drops_zeros() {
     l.debit("base", "USDC", d("1000")).unwrap(); // zero it out
     l.credit("hyperliquid", "USDC", d("500"));
     l.open_perp(long_eth("100")).unwrap_or(()); // no hyperliquid USDC margin? it has 500
-    let portfolio = l.to_portfolio();
+    let portfolio = l.to_portfolio(d("0.0125"));
     // base USDC was zeroed and should be dropped
     assert!(!portfolio.balances.contains_key("base"));
     assert_eq!(portfolio.balances["hyperliquid"]["USDC"], "400");
     assert_eq!(portfolio.perp_positions.len(), 1);
+    // The snapshot reports the perp's liquidation price (#120): the level at
+    // which equity falls to mmr·notional, no longer a dead `None`.
+    let expected = (d("400") / (d("0.25") * d("0.9875"))).normalize().to_string();
+    assert_eq!(portfolio.perp_positions[0].liquidation_price.as_deref(), Some(expected.as_str()));
 }

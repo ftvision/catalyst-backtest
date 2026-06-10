@@ -124,7 +124,8 @@
       "properties": {
         "liquidation_check": { "type": "string", "enum": ["every_tick", "never"] },
         "funding": { "type": "string", "enum": ["historical", "none"] },
-        "reduce_only_validation": { "type": "string", "enum": ["strict", "lenient"] }
+        "reduce_only_validation": { "type": "string", "enum": ["strict", "lenient"] },
+        "maintenance_margin_ratio": { "$ref": "#/$defs/decimal" }
       }
     },
     "yield": {

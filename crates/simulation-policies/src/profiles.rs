@@ -32,6 +32,12 @@ pub fn strict_v1() -> ResolvedPolicy {
         // `data.max_mark_staleness`.
         max_mark_staleness: None,
         liquidation_check: LiquidationCheck::EveryTick,
+        // Flat maintenance margin on mark notional (#120). 1.25% is
+        // Hyperliquid's top-tier maintenance margin (half the initial margin
+        // at its 40x max leverage: 1/(2·40)). Flat — not tiered by notional —
+        // and liquidation settles at the breach price with no extra penalty
+        // in v1.
+        maintenance_margin_ratio: "0.0125".to_string(),
         funding: Funding::Historical,
         reduce_only_validation: ReduceOnlyValidation::Strict,
         yield_accrual: YieldAccrual::CompoundApy,

@@ -52,7 +52,30 @@ impl PerpPosition {
         }
     }
 
-    pub fn to_contract(&self) -> ct::PerpPosition {
+    /// The mark price at which equity (margin + unrealized PnL) falls to
+    /// `maintenance_margin_ratio` of mark notional — the liquidation trigger
+    /// level (#120):
+    ///
+    /// ```text
+    /// long:  p_liq = (entry·size − margin) / (size · (1 − mmr))
+    /// short: p_liq = (entry·size + margin) / (size · (1 + mmr))
+    /// ```
+    ///
+    /// At `mmr = 0` this degenerates to the bankruptcy price (loss = full
+    /// margin). Requires `size > 0` (always true for an open position) and
+    /// `mmr < 1` (policy validation enforces it), so the denominator is
+    /// never zero. A long with margin exceeding notional (sub-1x leverage)
+    /// yields a negative level, i.e. "cannot be liquidated".
+    pub fn liquidation_price(&self, maintenance_margin_ratio: Decimal) -> Decimal {
+        match self.side {
+            PerpSide::Long => (self.entry_price * self.size - self.margin_usd)
+                / (self.size * (Decimal::ONE - maintenance_margin_ratio)),
+            PerpSide::Short => (self.entry_price * self.size + self.margin_usd)
+                / (self.size * (Decimal::ONE + maintenance_margin_ratio)),
+        }
+    }
+
+    pub fn to_contract(&self, maintenance_margin_ratio: Decimal) -> ct::PerpPosition {
         ct::PerpPosition {
             venue: self.venue.clone(),
             symbol: self.symbol.clone(),
@@ -61,7 +84,9 @@ impl PerpPosition {
             entry_price: self.entry_price.normalize().to_string(),
             leverage: Some(self.leverage.normalize().to_string()),
             margin_usd: Some(self.margin_usd.normalize().to_string()),
-            liquidation_price: None,
+            liquidation_price: Some(
+                self.liquidation_price(maintenance_margin_ratio).normalize().to_string(),
+            ),
         }
     }
 }

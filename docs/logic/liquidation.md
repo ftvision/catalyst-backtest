@@ -1,149 +1,187 @@
 # Perp liquidation
 
-**Liquidation** is the forced close of a leveraged perp when the position has lost
-its entire posted margin. It's a correctness boundary on losses: without it a
-backtest could let an underwater perp keep "losing" past the collateral the
-trader ever put up, minting phantom debt and overstating drawdown. The check runs
-once per tick, near the top, before resting-order fills and any action, and is
-gated by the policy field `perps.liquidation_check`.
+**Liquidation** is the forced close of a leveraged perp when the mark price
+crosses the position's **liquidation price** — the level at which its equity
+(posted margin + unrealized PnL) falls to the policy's **maintenance margin**, a
+configurable fraction of mark notional (#120). It's a correctness boundary on
+losses: without it a backtest could let an underwater perp keep "losing" past
+the collateral the trader ever put up, minting phantom debt and overstating
+drawdown — and with only a *bankruptcy* trigger (the pre-#120 model) positions
+survived later, and lost more, than a real venue would allow. The check runs
+once per tick, near the top, before pending/resting-order fills and any action,
+and is gated by the policy field `perps.liquidation_check`.
 
-Implemented in `crates/simulation-engine/src/engine.rs` — `check_liquidations`
-(`engine.rs:1053-1084`), called per tick at `engine.rs:246`.
+Implemented in `crates/simulation-engine/src/engine.rs` — `check_liquidations`,
+called per tick from the main loop; the liquidation level itself is
+`PerpPosition::liquidation_price` (`crates/portfolio-ledger/src/position.rs`).
 
-## What it is
+## Trigger: the maintenance-margin model
 
 For every open perp, each tick:
 
-1. Compute the **mark price** — `mark_price` (`engine.rs:966-968`): the bar `close`
-   for `(venue, symbol)` at `ts`, falling back to `price_any(symbol, ts)`. If no
-   mark is available the position is **skipped** (`engine.rs:1066`,
-   `else { continue }`).
-2. Trigger if **unrealized PnL ≤ −margin**:
-   ```
-   p.unrealized_pnl(mark) <= -p.margin_usd        // engine.rs:1067
-   ```
-   `unrealized_pnl` (`crates/portfolio-ledger/src/position.rs:48-53`) is
-   `(mark − entry)·size` for a long, `(entry − mark)·size` for a short.
-3. On trigger: **close the position, settle nothing**:
-   ```
-   ledger.close_perp(&p.venue, &p.symbol, Decimal::ZERO)   // engine.rs:1069
-   ```
-   `close_perp` (`crates/portfolio-ledger/src/lib.rs:167-182`) removes the
-   position and credits the settlement back to the venue's USDC — here the
-   settlement is `Decimal::ZERO`, so the full posted `margin_usd` is lost and
-   nothing is returned. A `"liquidation"` event is pushed
-   (`engine.rs:1070-1081`) with `reason` `"{venue} {symbol} position liquidated"`
-   and a `detail` carrying `venue`, `symbol`, `mark`, and `margin_lost_usd`.
+1. **Compute the liquidation price** from the position and the policy's
+   `maintenance_margin_ratio` (`mmr`, a fraction of mark notional):
 
-The trigger is **full bankruptcy** — loss equal to or beyond the *entire* margin.
-There is no partial liquidation and no maintenance-margin buffer (see below).
+   ```text
+   long:  p_liq = (entry·size − margin) / (size · (1 − mmr))
+   short: p_liq = (entry·size + margin) / (size · (1 + mmr))
+   ```
 
-### Policy options (`perps.liquidation_check`)
+   This is the unique mark `p` where equity equals the maintenance requirement:
+   `margin + unrealized_pnl(p) = mmr · size · p`. `size` is absolute base units
+   (always > 0 for an open position) and validation guarantees `0 ≤ mmr < 1`,
+   so the denominator is never zero. At `mmr = 0` the formula degenerates to
+   the bankruptcy price (loss = full margin) — the exact pre-#120 trigger. A
+   long with margin exceeding notional (sub-1x leverage) yields a negative
+   level, i.e. "cannot be liquidated".
 
-| Value | Behavior | Status |
+2. **Mark at the intrabar extreme** (#120 wick half, landed in #152): the bar's
+   **low** for a long, **high** for a short — the worst price the position
+   touches *within* the bar, not just the close. If no candle exists for
+   `(venue, symbol)` this tick, fall back to the last-known venue-scoped mark
+   (bounded by `data.max_mark_staleness`, #119(b)); if there is no mark at all
+   the position is **skipped** this tick (never liquidated on absent data).
+
+3. **Trigger** when the adverse extreme crosses the level:
+   `low ≤ p_liq` (long) / `high ≥ p_liq` (short).
+
+## Settlement: residual at the breach price
+
+On trigger the position is closed via `ledger.close_perp` and the **residual
+equity is settled back** to the venue's USDC:
+
+```text
+fill       = min(bar.open, p_liq)   (long)    /   max(bar.open, p_liq)   (short)
+settlement = max(margin + unrealized_pnl(fill), 0)
+```
+
+- **No gap:** when the bar *opened* on the safe side of `p_liq` and only traded
+  through it intrabar, the fill is `p_liq` itself and the settlement is exactly
+  the maintenance requirement, `mmr · size · p_liq`.
+- **Gap through the level:** when the bar *opened* beyond `p_liq` (a gap), the
+  engine can't pretend it closed at a price that never traded — the fill is the
+  bar's **open**, the earliest (and worse) price of the bar, and the residual
+  shrinks accordingly.
+- **Gap through bankruptcy:** if the open is beyond even the bankruptcy price,
+  the residual is negative and **clamps at zero** — a liquidation can never
+  claw back collateral the trader never posted. This is the same invariant the
+  margin-cap fix (#117) enforces on the ordinary close path
+  (`crates/execution-models/src/perp.rs`: `settlement = (returned_margin +
+  realized_pnl - fee).max(Decimal::ZERO)`). The two paths stay consistent.
+- On the no-bar fallback-mark path, the fill is the fallback mark itself.
+
+A `"liquidation"` event is pushed with `reason`
+`"{venue} {symbol} position liquidated"` and a `detail` carrying `venue`,
+`symbol`, `mark` (the fill price), `liquidation_price` (`p_liq`), `settled_usd`
+(the residual credited back), and `margin_lost_usd` (`margin − settled_usd`).
+
+Every portfolio snapshot (per-tick and final) also reports each open perp's
+`liquidation_price` — computed from the executed policy's ratio — in
+`PerpPosition::to_contract` (previously a dead `None`).
+
+### Policy knobs
+
+| Knob | Values | Behavior |
 | --- | --- | --- |
-| `every_tick` | Run the bankruptcy check every tick (the default in all profiles). | implemented |
-| `never` | Skip the check entirely — positions are never force-closed. | implemented |
+| `perps.liquidation_check` | `every_tick` (default) / `never` | Run the maintenance check every tick, or never force-close. |
+| `perps.maintenance_margin_ratio` | decimal string in `[0, 1)`, default `"0.0125"` | Maintenance margin as a fraction of mark notional. `"0"` = liquidate only at full bankruptcy (the pre-#120 model). |
 
-The enum is `LiquidationCheck { EveryTick, Never }`
-(`crates/simulation-policies/src/lib.rs:96`). It is **two-valued** — there is no
-"every N ticks", "on-close-only vs intrabar", or maintenance-margin variant. All
-shipped profiles default to `EveryTick` via the shared base builder
-(`crates/simulation-policies/src/profiles.rs:30`); it can be overridden from
-policy input (`crates/simulation-policies/src/resolve.rs:125-126`).
+The default `0.0125` (1.25%) is **Hyperliquid's top-tier maintenance margin**:
+half the initial margin at its 40x maximum leverage, `1/(2·40)`. All three
+profiles (`strict_v1`, `conservative_v1`, `research_v1`) share it. The executed
+ratio is echoed in the trace's policy block (#157), so every result
+self-documents the liquidation model it ran under. Validation (#160 discipline)
+rejects malformed ratios and any ratio ≥ 1 (a maintenance margin of 100% of
+notional is nonsensical — it would liquidate every position at entry); a bad
+value never silently means "no maintenance buffer".
+
+### Explicit v1 assumptions
+
+- **Flat ratio, not tiered.** Real venues scale maintenance margin with
+  position notional (larger positions → higher tiers). v1 applies one flat
+  ratio to every position; a tier table is a possible future extension of the
+  same knob.
+- **No liquidation penalty.** The position settles its full residual at the
+  breach price; no liquidator fee or insurance-fund haircut is charged. Real
+  venues typically take a cut, so v1 is slightly *favorable* at liquidation. A
+  `liquidation_penalty` knob is the named future extension.
+- **No partial liquidation.** The whole position closes at once.
 
 ## When to use which
 
-- **`every_tick`** (default): realistic — a leveraged position that goes bankrupt
-  mid-backtest is removed and its margin written off, so later ticks don't keep
-  marking a position that would have been wiped out on a real venue.
+- **`every_tick`** (default): realistic — a leveraged position that breaches
+  its maintenance level mid-backtest is removed, its residual settled, exactly
+  once, so later ticks don't keep marking a position a real venue would have
+  closed.
 - **`never`**: a research/idealized setting. Use it to study a strategy's raw
   signal PnL without venue liquidation mechanics, or when you've modeled risk
-  some other way. Not realistic — an underwater position survives and its negative
-  unrealized PnL keeps dragging equity (`compute_equity`, `engine.rs:1101-1107`,
-  adds `margin_usd + unrealized_pnl(mark)` per perp when a mark exists, else just
-  `margin_usd`) without ever being capped by a forced close.
+  some other way. Not realistic — an underwater position survives and its
+  negative unrealized PnL keeps dragging equity without ever being capped by a
+  forced close (the #117 floor still protects the eventual *close* settlement).
 
 ## Correctness notes / edge cases
 
-- **No look-ahead.** The trigger reads the **bar close** at the current tick `ts`
-  (`mark_price`, `engine.rs:966-968`) — known, past-or-present data, not a future
-  bar. The check also runs near the *top* of the tick (`engine.rs:246`), after
-  funding/yield accrual but before resting-order fills and any action this tick,
-  so it only ever uses already-settled state.
+- **No look-ahead.** The trigger reads the current tick's bar (its low/high/open
+  are known once the bar closed — the same convention as every other intrabar
+  mechanism, e.g. resting-limit fills) and runs near the *top* of the tick,
+  after funding/yield accrual but before order fills and actions, so it only
+  ever uses already-settled state.
 
-- **Marks at bar CLOSE only — ignores the intrabar wick (#120).** Liquidation
-  fires only if the *close* breaches `−margin`. A bar whose **low/high wick** blew
-  through the bankruptcy price but whose close recovered will **not** liquidate —
-  real venues mark continuously and would have liquidated on the wick. This
-  understates liquidation frequency and is a known limitation (#120).
+- **Order-of-events nuance.** A position opened by a deferred `next_open` fill
+  books *after* the liquidation pass of its fill bar, so the first bar that can
+  liquidate it is the next one. A wick on the very fill bar is therefore not
+  retroactively applied — consistent with the engine's no-intra-tick-reordering
+  rule.
 
-- **No maintenance-margin buffer (#120).** Real venues liquidate at a
-  *maintenance margin* — before equity hits zero (e.g. at ~0.5–5% remaining). Here
-  the threshold is the full margin (`unrealized_pnl <= -margin_usd`), i.e.
-  liquidation only at 100% loss of collateral. Backtests therefore liquidate
-  *later* (and less often) than a real venue (#120).
+- **Degenerate pin.** `maintenance_margin_ratio = "0"` reproduces the exact
+  pre-#120 behavior: trigger at `unrealized_pnl ≤ −margin`, settlement clamped
+  to zero at any gap. Pinned by
+  `issue_120_zero_ratio_degenerates_to_old_bankruptcy_trigger`.
 
-- **Money conservation / loss cap.** Settlement on liquidation is hard-zero
-  (`engine.rs:1069`): the position's margin is fully lost and nothing negative is
-  ever credited, so a liquidation cannot claw back collateral the trader never
-  posted. This is the same invariant the **margin-cap fix (#117)** enforces on the
-  ordinary close path: a normal `close_perp` floors settlement at zero —
-  `let settlement = (returned_margin + realized_pnl - fee).max(Decimal::ZERO);`
-  (`crates/execution-models/src/perp.rs:192`). The two paths are consistent: a
-  leveraged loss can never exceed the posted margin, whether the position is
-  force-liquidated (settles 0) or the strategy closes it underwater (settles
-  `max(…, 0)`). A bankrupt position that the engine liquidates and one the strategy
-  closes at the same underwater mark both end at "margin gone, nothing returned".
+- **Money conservation / loss cap.** `settlement = max(margin + pnl(fill), 0)`
+  is never negative and never exceeds what equity actually was at the fill: a
+  leveraged loss can never exceed the posted margin (#117 invariant), whether
+  the position is force-liquidated or closed by the strategy underwater.
 
 - **Determinism.** `check_liquidations` iterates a snapshot
-  `Vec<PerpPosition>` collected up front (`engine.rs:1064`) and uses pure
-  `Decimal` arithmetic against the deterministic mark; no randomness, no floats in
-  the trigger. Same inputs ⇒ same liquidations and same events.
+  `Vec<PerpPosition>` collected up front and uses pure `Decimal` arithmetic
+  against deterministic bar data; no randomness, no floats in the trigger. Same
+  inputs ⇒ same liquidations, same fills, same events.
 
-- **Missing-mark skip.** If neither a bar nor any cross-venue price exists for the
-  symbol at `ts`, the position is skipped that tick (`engine.rs:1066`) — it is
-  *not* liquidated on absent data, and is re-evaluated next tick once a mark
-  exists.
-
-- **`never` does not cap losses.** Under `never` the bankruptcy check is bypassed
-  (`engine.rs:1061-1063`); an underwater position persists and continues to mark
-  at `margin_usd + unrealized_pnl` in equity. The `#117` floor still protects the
-  eventual *close* settlement, but equity in the interim can show the position's
-  full negative unrealized PnL.
+- **Missing-mark skip.** If neither a bar nor a (staleness-bounded) carried
+  mark exists for the position's venue at `ts`, the position is skipped that
+  tick — it is *not* liquidated on absent data, and is re-evaluated next tick.
 
 ### Known limitations (summary)
 
-- Close-only marking; intrabar wick ignored (#120).
-- No maintenance margin — triggers at full bankruptcy, not earlier (#120).
-- Binary `every_tick`/`never` only — no partial liquidation, no liquidation price
-  reported (`to_contract` sets `liquidation_price: None`,
-  `crates/portfolio-ledger/src/position.rs:64`).
+- Flat maintenance ratio — not tiered by notional (v1 assumption).
+- No liquidation penalty / insurance-fund haircut (v1 assumption; future knob).
+- No partial liquidation.
+- Binary `every_tick`/`never` cadence only.
 
 ## Tests
 
-The trigger condition, the settlement-zero semantics, and the margin-cap
-invariant are each covered, but **note**: there is no engine-level integration
-test that actually fires `check_liquidations` end-to-end (no test under
-`crates/simulation-engine/tests/` exercises the bankruptcy path). The behavior is
-established by the component-level tests below.
-
-- `crates/portfolio-ledger/tests/ledger.rs` —
-  `perp_unrealized_pnl_by_side` (`ledger.rs:124`): confirms the
-  `unrealized_pnl` signing per side that the trigger
-  (`unrealized_pnl(mark) <= -margin_usd`) depends on — `+25` for a long, `−25`
-  for a short on a `+100` mark move.
+- `crates/simulation-engine/tests/issue_120_liquidation_realism.rs` —
+  end-to-end engine coverage: wick liquidation both sides; no over-liquidation
+  above `p_liq`; the flipped maintenance test (`…liquidated_at_maintenance_
+  level_before_full_bankruptcy`: mark 1802 sits between bankruptcy 1801.8 and
+  `p_liq ≈ 1824.61`, liquidates with residual ≈ 0.0999); exact no-gap residual
+  `mmr·size·p_liq` (long and short); gap-through-bankruptcy clamps to zero;
+  `mmr = "0"` degenerate pin (both sides of the old boundary);
+  `liquidation_price` populated in the final portfolio snapshot.
+- `crates/portfolio-ledger/tests/ledger.rs` — `perp_liquidation_price_by_side`
+  (formula per side, mmr-0 degeneration, residual identity);
+  `perp_unrealized_pnl_by_side`; snapshot reports `liquidation_price`.
+- `crates/simulation-policies/tests/policies.rs` — default `0.0125` in every
+  profile; contract override; `"0"` accepted; malformed / negative / ≥ 1
+  rejected with exact messages; executed-ratio echo in `to_contract`.
 - `crates/execution-models/tests/execution.rs` —
-  `leveraged_long_loss_is_capped_at_posted_margin` (`execution.rs:202`): a 10x
-  long crashed ~15% (~150% of margin) closes with USDC unchanged at `899.5` — the
-  loss caps at the posted margin (the `#117` floor), never clawing back unposted
-  collateral. This is the close-path analogue of liquidation's settle-nothing.
-- `crates/result-reporter/tests/reporter.rs` —
-  `liquidation_is_logged` (`reporter.rs:122`): a `"liquidation"` event is surfaced
-  as a `liquidation` trade row with the symbol present and a non-empty reason (the
-  reporter side of the event emitted at `engine.rs:1070-1081`).
+  `leveraged_long_loss_is_capped_at_posted_margin`: the close-path analogue of
+  the settlement floor (#117).
+- `crates/result-reporter/tests/reporter.rs` — `liquidation_is_logged`: the
+  `"liquidation"` event surfaces as a `liquidation` trade row.
 
 ## Related issues
 
 - [#117](https://github.com/ftvision/catalyst-backtest/issues/117) — leverage loss capped at margin — FIXED
-- [#120](https://github.com/ftvision/catalyst-backtest/issues/120) — close-only marking; no maintenance margin
+- [#120](https://github.com/ftvision/catalyst-backtest/issues/120) — intrabar wick marking + maintenance-margin liquidation — FIXED

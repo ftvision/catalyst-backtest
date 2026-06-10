@@ -310,7 +310,9 @@ impl Ledger {
     // --- Snapshot ---
 
     /// Project current state to a contract [`Portfolio`] (zero balances dropped).
-    pub fn to_portfolio(&self) -> Portfolio {
+    /// `maintenance_margin_ratio` is the policy's maintenance fraction of mark
+    /// notional, used to report each perp's `liquidation_price` (#120).
+    pub fn to_portfolio(&self, maintenance_margin_ratio: Decimal) -> Portfolio {
         let mut balances: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
         for (venue, assets) in &self.balances {
             let mut out = BTreeMap::new();
@@ -325,7 +327,11 @@ impl Ledger {
         }
         Portfolio {
             balances,
-            perp_positions: self.perps.values().map(PerpPosition::to_contract).collect(),
+            perp_positions: self
+                .perps
+                .values()
+                .map(|p| p.to_contract(maintenance_margin_ratio))
+                .collect(),
             yield_positions: self.yields.values().map(YieldPosition::to_contract).collect(),
         }
     }
