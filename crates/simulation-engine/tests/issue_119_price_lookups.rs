@@ -1,7 +1,5 @@
-//! Issue #119 — price-lookup defects in the simulation engine.
-//!
-//! Sub-bugs (a), (b), and (c) are FIXED here; (d) and (e) remain tracked
-//! follow-ups and their tests still pin current behavior.
+//! Issue #119 — price-lookup defects in the simulation engine. All five
+//! sub-bugs are now resolved: (a)-(d) fixed, (e) closed as decided semantics.
 //!
 //!   * `issue_119_mark_price_venue_scoped` (sub-bug a, FIXED): `mark_price` now
 //!     uses a VENUE-SCOPED close (`close_at`), so a holding on venue A is valued
@@ -17,12 +15,16 @@
 //!     unpriced holding is still excluded from equity but now surfaces a
 //!     `valuation_warning` event + run warning, deduped once per run.
 //!
-//!   * `issue_119_pct_portfolio_rejected_on_gap` (sub-bug d, FOLLOW-UP): sizing
-//!     still rejects on a gap (cosmetic — the swap couldn't fill on a gap anyway).
+//!   * `issue_119_gap_sizing_resolves_fill_still_rejects_same_bar` /
+//!     `issue_119_gap_sizing_defers_and_fills_next_open` /
+//!     `issue_119_sizing_respects_staleness_bound` (sub-bug d, FIXED): sizing's
+//!     unit price is now the same bounded venue-scoped mark equity uses
+//!     (`MarketContext::mark_close`); filling stays gated on an exact bar.
 //!
-//!   * `issue_119_same_tick_stale_tick_equity` (sub-bug e, FOLLOW-UP):
-//!     `tick_equity` is still a tick-start snapshot reused for all same-tick
-//!     actions.
+//!   * `issue_119_same_tick_stale_tick_equity` (sub-bug e, DECIDED): every
+//!     same-tick action sizes off the tick-start equity snapshot; same-tick
+//!     `pct_portfolio` actions intentionally do not compound against each
+//!     other (see docs/logic/sizing.md).
 
 use catalyst_contracts::policy::SignalPolicy;
 use catalyst_contracts::{BacktestConfig, Graph, MarketDataBundle, SimulationPolicy};
@@ -444,7 +446,8 @@ fn issue_119_unpriced_perp_pnl_warned_margin_counted() {
 }
 
 // ---------------------------------------------------------------------------
-// (d) pct_portfolio sizing rejected on a gap bar even though equity prices it.
+// (d) pct_portfolio sizing prices off the same bounded venue-scoped mark as
+//     equity; filling stays gated on an exact bar.
 // ---------------------------------------------------------------------------
 
 /// research_v1 with a `level` signal trigger so a threshold signal fires every
@@ -455,41 +458,39 @@ fn level_research_policy() -> SimulationPolicy {
     p
 }
 
-/// ISSUE #119 (sub-bug d, FOLLOW-UP): at ts1 the funding signal fires and tries
-/// to SELL ETH sized `pct_portfolio: 10`. `compute_equity` prices the 1 ETH via
-/// the venue-scoped carry-forward (2000), so equity at ts1 is 2000, but
-/// `execute_action`'s `asset_price(venueA, ETH)` uses the EXACT `bar_at` which is
-/// None at ts1 -> 0 -> `resolve_amount` hits the `unit_price.is_zero()` guard and
-/// REJECTS. (Even with sizing fixed, the swap couldn't fill on a gap bar anyway —
-/// you can't trade at a stale price — so unifying the price source here is a
-/// cosmetic consistency change deferred as a follow-up, not a wrong-outcome bug.)
-#[test]
-fn issue_119_pct_portfolio_rejected_on_gap() {
-    let market: MarketDataBundle = serde_json::from_value(json!({
+/// venueA/ETH has a ts0 bar (2000) then a gap at ts1; venueA/BTC drives the
+/// ticks; a funding print at ts1 fires the signal on the gap bar. Extra ETH
+/// points (e.g. a ts2 bar for the next_open test) can be appended.
+fn gap_sizing_market(extra_eth_points: Vec<Value>, end_tick: i64) -> MarketDataBundle {
+    let mut eth_points = vec![pt(0, "2000")];
+    eth_points.extend(extra_eth_points);
+    let btc_points: Vec<Value> = (0..end_tick).map(|i| pt(i, "50000")).collect();
+    serde_json::from_value(json!({
         "schema_version": "catalyst.backtest.market_data_bundle.v1",
-        "interval": "1h", "start": ts(0), "end": ts(2),
+        "interval": "1h", "start": ts(0), "end": ts(end_tick),
         "candles": [
-            // venueA/ETH only has a ts0 bar (2000) -> gap at ts1.
-            {"venue": "venueA", "symbol": "ETH", "quote": "USD", "points": [pt(0, "2000")]},
-            // venueA/BTC drives ticks ts0 and ts1.
-            {"venue": "venueA", "symbol": "BTC", "quote": "USD",
-             "points": [pt(0, "50000"), pt(1, "50000")]}
+            {"venue": "venueA", "symbol": "ETH", "quote": "USD", "points": eth_points},
+            {"venue": "venueA", "symbol": "BTC", "quote": "USD", "points": btc_points}
         ],
         "funding": [
             {"venue": "venueA", "symbol": "ETH", "points": [{"ts": ts(1), "rate": "0.0002"}]}
         ],
         "gas": [], "yields": [], "providers": [], "warnings": []
     }))
-    .unwrap();
+    .unwrap()
+}
 
-    let config: BacktestConfig = serde_json::from_value(json!({
-        "start": ts(0), "end": ts(2), "interval": "1h",
+fn gap_sizing_config(end_tick: i64) -> BacktestConfig {
+    serde_json::from_value(json!({
+        "start": ts(0), "end": ts(end_tick), "interval": "1h",
         "initial_portfolio": {"venueA": {"ETH": "1"}}
     }))
-    .unwrap();
+    .unwrap()
+}
 
-    // funding(venueA/ETH) >= 0.0001 -> sell ETH sized pct_portfolio 10%.
-    let graph: Graph = serde_json::from_value(json!({
+/// funding(venueA/ETH) >= 0.0001 -> sell ETH sized pct_portfolio 10%.
+fn gap_sizing_graph() -> Graph {
+    serde_json::from_value(json!({
         "nodes": [
             {"id": "fund", "kind": "signal", "subtype": "threshold",
              "config": {
@@ -503,45 +504,169 @@ fn issue_119_pct_portfolio_rejected_on_gap() {
         ],
         "edges": [{"from": "fund", "to": "sell"}]
     }))
-    .unwrap();
+    .unwrap()
+}
 
-    let input = SimulationInput { graph, config, policy: level_research_policy(), market_data: market };
+/// ISSUE #119 (sub-bug d) — FIXED, same-bar half: at ts1 the funding signal
+/// fires and tries to SELL ETH sized `pct_portfolio: 10` on the gap bar.
+/// Sizing now resolves: `asset_price` reads `MarketContext::mark_close` — the
+/// same venue-scoped carry-forward equity uses — so the unit price is 2000 and
+/// the 10% slice resolves to 0.1 ETH (no more sizing/equity mismatch). The
+/// FILL still rejects, correctly: under research_v1's same-bar close selection
+/// `execute_swap` needs an exact bar to trade against ("no price" guard) and
+/// ts1 has none. You can size with a mark; you can't fill at one.
+#[test]
+fn issue_119_gap_sizing_resolves_fill_still_rejects_same_bar() {
+    let input = SimulationInput {
+        graph: gap_sizing_graph(),
+        config: gap_sizing_config(2),
+        policy: level_research_policy(),
+        market_data: gap_sizing_market(vec![], 2),
+    };
     let trace = run(&input).unwrap();
 
-    // Equity at ts1 IS priced (carry-forward 2000), proving sizing COULD price it.
+    // Equity at ts1 is priced via the carry-forward (2000) — and now sizing
+    // reads the same mark.
     assert_eq!(trace.snapshots.len(), 2);
     assert_eq!(
         trace.snapshots[1].equity_usd.to_string(),
         "2000",
-        "equity carries ETH forward to 2000 at ts1, so sizing could too"
+        "equity carries ETH forward to 2000 at ts1; sizing reads the same mark"
     );
 
-    // FOLLOW-UP #119(d): the sell is rejected for lack of an exact-bar price even
-    // though equity priced the asset via carry-forward (sizing/equity mismatch).
-    assert_eq!(count(&trace, "action_executed"), 0, "#119(d) follow-up: sell rejected on the gap bar");
-    assert_eq!(count(&trace, "action_rejected"), 1, "#119(d) follow-up: exactly one rejection");
+    // FIXED #119(d): the rejection is no longer the sizing guard...
+    assert!(
+        !trace.events.iter().any(|e| {
+            e.reason.as_deref() == Some("pct_portfolio sizing needs a price for the action asset")
+        }),
+        "FIXED #119(d): sizing must resolve at the carried mark, not reject"
+    );
+    // ...it is the execution model's exact-bar fill gate: a same-bar market
+    // order cannot trade on a bar that doesn't exist.
+    assert_eq!(count(&trace, "action_executed"), 0, "no fill on the gap bar");
+    assert_eq!(count(&trace, "action_rejected"), 1, "exactly one rejection");
+    assert!(
+        trace.events.iter().any(|e| {
+            e.event_type == "action_rejected"
+                && e.reason.as_deref() == Some("no price for ETH on venueA")
+        }),
+        "the rejection is the fill's exact-bar gate, not the sizing guard; got {:?}",
+        trace.events.iter().filter(|e| e.event_type == "action_rejected").collect::<Vec<_>>()
+    );
+}
+
+/// ISSUE #119 (sub-bug d) — FIXED, next_open half (the real improvement, not
+/// just consistency): under strict_v1's `next_open` selection the same gap-bar
+/// signal can now SIZE at the carried mark (0.1 ETH = 10% of 2000 / 2000),
+/// DEFER the market order (#116), and legitimately FILL at the next bar's
+/// open (ts2's 2200). Pre-fix the action died in sizing on the gap bar and the
+/// strategy missed a tradeable opportunity.
+#[test]
+fn issue_119_gap_sizing_defers_and_fills_next_open() {
+    // strict_v1 (next_open) with the interior-gap abort relaxed to a warning
+    // (the gap IS the scenario) and costs zeroed for round numbers.
+    let policy: SimulationPolicy = serde_json::from_value(json!({
+        "schema_version": "catalyst.backtest.policy.v1",
+        "profile": "strict_v1",
+        "signals": {"trigger": "level"},
+        "fills": {"slippage": {"model": "none"}, "fees": {"model": "none"}},
+        "gas": {"model": "none"},
+        "data": {"missing_required": "warn"}
+    }))
+    .unwrap();
+
+    // ETH returns at ts2 with a 2200 bar — the deferred order's next open.
+    let input = SimulationInput {
+        graph: gap_sizing_graph(),
+        config: gap_sizing_config(3),
+        policy,
+        market_data: gap_sizing_market(vec![pt(2, "2200")], 3),
+    };
+    let trace = run(&input).unwrap();
+
+    // ts1 (gap bar): sizing resolves at the carried mark and the market order
+    // is deferred — no rejection, no same-bar fill.
+    assert_eq!(count(&trace, "action_rejected"), 0, "FIXED #119(d): nothing rejected");
+    assert_eq!(count(&trace, "order_deferred"), 1, "the sized order defers on the gap bar");
+    let deferred = trace.events.iter().find(|e| e.event_type == "order_deferred").unwrap();
+    assert_eq!(deferred.ts, ts(1), "deferred on the decision (gap) bar");
+
+    // ts2: the deferred order fills at the next bar's open (2200), booked there.
+    assert_eq!(count(&trace, "action_executed"), 1, "exactly one fill");
+    let exec = trace.events.iter().find(|e| e.event_type == "action_executed").unwrap();
+    assert_eq!(exec.ts, ts(2), "booked on the fill bar (#116), not the decision bar");
+    let detail = exec.detail.as_ref().unwrap();
+    assert_eq!(detail["price"], json!("2200"), "filled at ts2's open");
+    // Sized at the carried mark: 10% of 2000 equity / 2000 unit price = 0.1 ETH.
+    assert_eq!(detail["amount"], json!("0.1"), "sized at the ts1 carried mark (2000)");
+
+    // Ledger: 0.9 ETH + 220 USDC proceeds; ts2 equity = 0.9*2200 + 220 = 2200.
+    assert_eq!(trace.snapshots.len(), 3);
+    assert_eq!(trace.snapshots[2].equity_usd.to_string(), "2200");
+}
+
+/// ISSUE #119 (sub-bug d) — the unified sizing price respects the (b)
+/// staleness bound: with `data.max_mark_staleness = "30m"` the ts0 close has
+/// expired by ts1 (1h later), so the mark is None, `asset_price` returns 0,
+/// and sizing rejects through the existing zero-price guard. Sizing and
+/// equity agree here too: the holding is simultaneously excluded from equity
+/// (the (b)/(c) path).
+#[test]
+fn issue_119_sizing_respects_staleness_bound() {
+    let mut policy = level_research_policy();
+    policy.data = Some(serde_json::from_value(json!({"max_mark_staleness": "30m"})).unwrap());
+
+    let input = SimulationInput {
+        graph: gap_sizing_graph(),
+        config: gap_sizing_config(2),
+        policy,
+        market_data: gap_sizing_market(vec![], 2),
+    };
+    let trace = run(&input).unwrap();
+
+    // The expired mark drops the holding from equity AND from sizing — the two
+    // never disagree about whether the asset is priced.
+    assert_eq!(trace.snapshots.len(), 2);
+    assert_eq!(
+        trace.snapshots[1].equity_usd.to_string(),
+        "0",
+        "the 30m bound expires the ts0 mark at ts1; the holding is excluded"
+    );
+    assert_eq!(count(&trace, "action_executed"), 0);
+    assert_eq!(count(&trace, "action_rejected"), 1, "sizing rejects on the expired mark");
     assert!(
         trace.events.iter().any(|e| {
             e.event_type == "action_rejected"
                 && e.reason.as_deref() == Some("pct_portfolio sizing needs a price for the action asset")
         }),
-        "#119(d) follow-up: rejection cites the missing exact-bar price even though mark_price has one"
+        "the zero-price sizing guard fires when the mark is expired"
     );
 }
 
 // ---------------------------------------------------------------------------
-// (e) tick_equity is a tick-start snapshot reused for all same-tick actions.
+// (e) tick_equity is a tick-start snapshot shared by all same-tick actions —
+//     DECIDED semantics, pinned here (see docs/logic/sizing.md).
 // ---------------------------------------------------------------------------
 
-/// ISSUE #119 (sub-bug e): two perp_order actions run in the SAME first tick, a
-/// (long ETH, 25% portfolio) then b (long BTC, 25% portfolio). `tick_equity` is
-/// computed once at tick start (2000) and passed unchanged to BOTH actions, so
-/// action b sizes off pre-action-a equity.
+/// ISSUE #119 (sub-bug e) — DECIDED SEMANTICS, pinned: every same-tick action
+/// sizes off the tick-start equity snapshot; same-tick `pct_portfolio` actions
+/// do NOT compound against each other. Two perp_order actions run in the SAME
+/// first tick, a (long ETH, 25% portfolio) then b (long BTC, 25% portfolio);
+/// `tick_equity` is computed once at tick start (2000) and passed unchanged to
+/// BOTH, so both report `value_usd == "500"` — b does not see a's fee/entry
+/// impact (a recompute engine would size b at ~499.875).
 ///
-/// The engine reports both `value_usd == "500"` (25% of the stale 2000),
-/// which is INCORRECT for b: action a pays a fee + opens above mark, dropping
-/// equity below 2000, so a recompute-between-actions engine would size b at 25%
-/// of the post-a equity (~1999.50) = ~499.875, i.e. strictly less than 500.
+/// Why this is the decided behavior rather than a bug:
+///   * Under strict/next_open profiles it is a no-op — deferred fills don't
+///     touch the ledger on the decision tick, so there is nothing fresher to
+///     read; only same-bar (research) profiles see any difference at all.
+///   * That residual difference is fee-sized (~0.025% here), not
+///     direction-changing.
+///   * Recomputing equity between same-tick actions would make sizing depend
+///     on intra-tick action order — exactly the dimension the unimplemented
+///     `ordering.same_tick` variants (#141) are supposed to govern. If a
+///     recompute is ever wanted, it should arrive as an explicit, wired sizing
+///     knob alongside #141, not as a silent default change.
 #[test]
 fn issue_119_same_tick_stale_tick_equity() {
     let market: MarketDataBundle = serde_json::from_value(json!({
@@ -593,12 +718,13 @@ fn issue_119_same_tick_stale_tick_equity() {
 
     // Action a is sized off the tick-start equity 2000 -> 25% = 500.
     assert_eq!(a_val, json!("500"), "action a: 25% of tick-start equity 2000");
-    // PIN THE BUG: action b reuses the STALE tick-start equity 2000 -> 500 again.
-    // CORRECT (recompute between same-tick actions): b would be 25% of post-a
-    // equity (~1999.50) = ~499.875, strictly less than 500.
+    // DECIDED #119(e): action b shares the SAME tick-start snapshot -> 500 too.
+    // Same-tick pct_portfolio actions do not compound; a recompute-between-
+    // actions engine would give ~499.875 (and intra-tick order-sensitivity,
+    // which belongs to #141's ordering knobs, not to a silent default).
     assert_eq!(
         b_val,
         json!("500"),
-        "BUG #119(e): action b sized off stale tick-start equity (2000); a recompute would give ~499.875"
+        "DECIDED #119(e): action b sizes off the shared tick-start equity (2000)"
     );
 }

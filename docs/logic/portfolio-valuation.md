@@ -191,8 +191,10 @@ i.e. `compute_equity` end-to-end through the tick):
 `crates/simulation-engine/tests/issue_119_price_lookups.rs` pins the marking
 semantics: venue-scoped marking (a, fixed), the default-unbounded carry-forward
 and the `max_mark_staleness` bound (b, fixed), the loud unpriced-leg exclusion
-including the cross-venue and perp-PnL cases (c, fixed), gap-bar sizing
-rejection (d, follow-up), and the same-tick equity snapshot (e, follow-up).
+including the cross-venue and perp-PnL cases (c, fixed), sizing unified onto
+the same bounded mark — gap-bar sizing resolves, fills stay exact-bar-gated
+(d, fixed), and the same-tick equity snapshot (e, decided semantics — see
+[sizing](sizing.md)).
 `issue_115_nonstable_yield_equity.rs` covers the non-stable yield marking.
 
 ## Related issues
@@ -200,4 +202,4 @@ rejection (d, follow-up), and the same-tick equity snapshot (e, follow-up).
 - [#115](https://github.com/ftvision/catalyst-backtest/issues/115) — non-stable yield valuation
 - [#117](https://github.com/ftvision/catalyst-backtest/issues/117) — margin cap — FIXED
 - [#118](https://github.com/ftvision/catalyst-backtest/issues/118) — elapsed accrual — FIXED
-- [#119](https://github.com/ftvision/catalyst-backtest/issues/119) — price lookups: venue-scoping (a), staleness bound (b), unpriced-leg warning (c) FIXED; sizing unification (d), same-tick snapshot (e) still open
+- [#119](https://github.com/ftvision/catalyst-backtest/issues/119) — price lookups: venue-scoping (a), staleness bound (b), unpriced-leg warning (c), sizing unification (d) FIXED; same-tick snapshot (e) decided semantics — RESOLVED

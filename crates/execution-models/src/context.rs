@@ -37,6 +37,20 @@ pub trait MarketContext {
         None
     }
 
+    /// Marking close for a (venue, symbol): the price *sizing* uses to convert
+    /// a USD slice into asset units (#119(d)). The engine overrides this with
+    /// the same bounded, venue-scoped carry-forward (`close_at`) that equity
+    /// valuation uses, so sizing and equity never disagree about whether an
+    /// asset is priced. The default — the current tick's exact bar close —
+    /// keeps simple implementations (test fakes) on exact-bar behavior.
+    ///
+    /// Note this is a *marking* price, not a fillable one: execution models
+    /// still require an exact bar to fill (`swap.rs`'s "no price" guard) or to
+    /// convert real money (`yields.rs`'s exact-bar gate, #115).
+    fn mark_close(&self, venue: &str, symbol: &str) -> Option<Decimal> {
+        self.bar(venue, symbol).map(|b| b.close)
+    }
+
     /// Gas cost in USD for a single on-chain action on `chain` (None if unknown).
     fn gas_usd(&self, chain: &str) -> Option<Decimal>;
 

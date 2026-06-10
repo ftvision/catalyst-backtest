@@ -50,8 +50,9 @@ subtype in `execute_action` (`engine.rs:812-895`):
   aliased `pct_balance`, hiding user mistakes). The rejection sits before the
   market/limit branch, so resting limit swaps are covered too.
   `balance = ledger.balance(chain, from_asset)` resolves `pct_balance`;
-  `unit_price` is the from-asset mark (`asset_price`, 1 for stables) so
-  `pct_portfolio` converts the USD slice back into from-asset units.
+  `unit_price` is the from-asset **mark** (`asset_price`, 1 for stables; see
+  "Unit price" below) so `pct_portfolio` converts the USD slice back into
+  from-asset units.
   Note the rejection is at **fire time** (an `action_rejected` trace event per
   firing), not graph validation — the run still completes.
 - **perp** (`engine.rs:849-878`): `balance = ledger.balance(chain, "USDC")`;
@@ -63,8 +64,41 @@ subtype in `execute_action` (`engine.rs:812-895`):
   yield position (`engine.rs:953`); `unit_price` is the asset mark (1 for
   stables).
 
-`unit_price` for non-perp assets comes from `asset_price` (`engine.rs:897-904`):
-1 for stables, else the bar close, else 0.
+### Unit price: the bounded venue-scoped mark (#119(d), fixed)
+
+`unit_price` for non-perp assets comes from `asset_price` (engine.rs): 1 for
+stables, else `MarketContext::mark_close(venue, asset)`, else 0 (which the
+`pct_portfolio` guard rejects — see below). The engine's `TickContext`
+implements `mark_close` as `close_at(venue, symbol, ts, max_mark_staleness)`
+(`crates/simulation-engine/src/market.rs`) — the **same bounded, venue-scoped
+carry-forward** that equity valuation's `mark_price` uses (see
+[portfolio-valuation](portfolio-valuation.md)). Sizing and equity therefore
+always agree about whether an asset is priced:
+
+- **On a gap bar** (the venue has no candle at this tick) the last in-bound
+  close is carried forward, so a `pct_portfolio` action sizes at the same mark
+  equity used. Under `next_open` this is a real improvement, not just
+  consistency: the signal sizes at the carried mark, the market order defers
+  (#116), and it legitimately fills at the *next* bar's open — a real price.
+- **Filling is gated separately.** Sizing with a mark never lets you *trade*
+  at one: under same-bar selections `execute_swap` still rejects on a gap bar
+  ("no price for X on Y" — the exact-bar fill guard), and a deferred
+  `next_open` order only fills when a real next bar arrives. You can size with
+  a mark; you can't fill at one.
+- **The staleness bound applies.** With `data.max_mark_staleness` configured,
+  an expired mark makes `mark_close` return `None` → `asset_price` returns 0 →
+  the `pct_portfolio` zero-price guard rejects, at the same tick the holding
+  drops out of equity (#119(b)/(c)).
+
+**The yields exact-bar gate is intentionally different.** The execution-model
+crate's own `asset_price` helper (`crates/execution-models/src/yields.rs`)
+still uses the exact-ts bar: a non-stable yield deposit/withdraw is **rejected
+without an exact bar** on its chain. That gate is load-bearing for #115 — it
+converts *actual money* (gas to asset units, position `value_usd`), not a
+sizing estimate, and a stale price for a real conversion is a different risk
+than a stale price for sizing. The trait default `mark_close` (= exact bar
+close) preserves this distinction; only the engine's `TickContext` overrides
+it with the carry-forward, and only the engine's *sizing* path reads it.
 
 ### Absolute vs `"all"` vs relative
 
@@ -99,17 +133,28 @@ subtype in `execute_action` (`engine.rs:812-895`):
 
 ## Correctness notes / edge cases
 
-- **`pct_portfolio` uses tick-start equity (stale within a tick).** `tick_equity`
-  is computed **once** at the top of each tick before any action runs
-  (`engine.rs:248-250`, `compute_equity` at `engine.rs:1087-1112`) and that single
-  value is threaded into resting-order fills (`engine.rs:253-256`), initial
-  actions (`engine.rs:260-268`), and signal-driven actions (`engine.rs:270-290`)
-  for the whole tick. If a signal fires **multiple** actions in one tick (or
-  several signals fire), every `pct_portfolio` action sizes off the **same**
-  start-of-tick equity — it does **not** see equity changes from earlier actions
-  in the same tick. Snapshots recompute equity *after* the tick (`engine.rs:292`),
-  so the staleness is intra-tick only. This is deterministic but can over-allocate
-  if two actions each take "10% of portfolio" expecting compounding.
+- **`pct_portfolio` uses tick-start equity — DECIDED SEMANTICS (#119(e)).**
+  `tick_equity` is computed **once** at the top of each tick before any action
+  runs and that single value is threaded into resting-order fills, initial
+  actions, and signal-driven actions for the whole tick. **Every same-tick
+  action sizes off tick-start equity; same-tick `pct_portfolio` actions do not
+  compound against each other.** This is the intended behavior, not a tracked
+  limitation:
+  - Under strict/`next_open` profiles it is a **no-op**: deferred market
+    orders don't touch the ledger on the decision tick, so there is no fresher
+    equity to read anyway.
+  - Under same-bar (research) profiles the residual effect is **fee-sized**
+    (two 25% perps on $2000 size to $500 each instead of $500 then ~$499.875),
+    never direction-changing.
+  - Recomputing equity between same-tick actions would make sizing depend on
+    **intra-tick action order** — exactly the dimension the
+    rejected-as-unimplemented `ordering.same_tick` variants (#141) are supposed
+    to govern. If a recompute is ever wanted, it should arrive as an explicit,
+    wired sizing knob alongside #141, not as a silent default change.
+
+  Snapshots recompute equity *after* the tick, so the snapshot semantics are
+  unaffected. Pinned by `issue_119_same_tick_stale_tick_equity`
+  (`tests/issue_119_price_lookups.rs`).
 
 - **`pct_position` on a perp uses entry price, not mark.** The basis is
   `(p.size * p.entry_price).abs()` (`engine.rs:854`), the notional *at entry*, not
@@ -128,18 +173,20 @@ subtype in `execute_action` (`engine.rs:812-895`):
   rejection surfaces as an `action_rejected` event each time the signal fires;
   promoting it to graph-validation time is a candidate follow-up.
 
-- **`pct_portfolio` requires a price; rejects otherwise.** If `unit_price` is zero
-  — e.g. a non-stable from-asset with no bar this tick (`asset_price` returns 0) —
-  `resolve_amount` returns the error `"pct_portfolio sizing needs a price for the
-  action asset"` (`engine.rs:925-929`) and the action is rejected (the swap branch
-  propagates the `Err` at `engine.rs:828-829`), rather than dividing by zero or
-  silently sizing to infinity. Perps are immune (their `unit_price` is the
-  constant `Decimal::ONE`).
+- **`pct_portfolio` requires a price; rejects otherwise.** If `unit_price` is
+  zero — a non-stable asset whose venue has **no mark** (no candle yet, or the
+  carry-forward expired under `data.max_mark_staleness`) — `resolve_amount`
+  returns the error `"pct_portfolio sizing needs a price for the action asset"`
+  and the action is rejected, rather than dividing by zero or silently sizing
+  to infinity. Since #119(d) this fires exactly when equity valuation also
+  can't price the asset (same lookup), never on a mere intra-series gap.
+  Perps are immune (their `unit_price` is the constant `Decimal::ONE`).
 
 - **No look-ahead.** Equity, balances, and position notionals are all read from
-  the ledger and the current/past bar (`mark_price` at `engine.rs:966-968` uses
-  `bar_at(...,ts)` or a prior `price_any`, never a future bar). `pct_portfolio`
-  uses tick-start equity, which is strictly start-of-tick state.
+  the ledger and the current/past bars: both `mark_price` (equity) and
+  `mark_close` (sizing) use the venue-scoped close at-or-before `ts`
+  (`close_at`), never a future bar. `pct_portfolio` uses tick-start equity,
+  which is strictly start-of-tick state.
 
 - **Money conservation / float safety.** Resolution is exact `Decimal` arithmetic
   except the final `.normalize().to_string()` (`engine.rs:933`); the resolved
@@ -169,8 +216,8 @@ subtype in `execute_action` (`engine.rs:812-895`):
 - **Perp `"all"` is rejected at compile time (#160, fixed)** — it used to parse
   to 0 and surface as a confusing runtime rejection. Only swaps and yields
   honor `"all"`.
-- **Intra-tick `pct_portfolio` staleness** (above) — by design, but a caveat for
-  multi-action ticks.
+- **Same-tick `pct_portfolio` actions do not compound** (#119(e), decided —
+  see above): plan multi-action ticks as slices of the same tick-start equity.
 - `pct_position` for a swap is **rejected** at fire time (#121, fixed) — use
   `pct_balance` or `pct_portfolio`.
 
@@ -194,11 +241,28 @@ subtype in `execute_action` (`engine.rs:812-895`):
   executes (one fill, no rejection); `size_usd = 25% * 2000 = 500` USD notional
   with no unit conversion (`unit_price = 1`).
 
+`crates/simulation-engine/tests/issue_119_price_lookups.rs` pins the unified
+unit-price semantics (#119(d)) and the same-tick snapshot decision (#119(e)):
+
+- `issue_119_gap_sizing_resolves_fill_still_rejects_same_bar` — on a gap bar a
+  `pct_portfolio` sell sizes at the carried mark; the same-bar fill still
+  rejects on the exact-bar guard (`"no price for ETH on venueA"`).
+- `issue_119_gap_sizing_defers_and_fills_next_open` — under strict_v1
+  (`next_open`) the gap-bar signal sizes at the carried mark, defers, and
+  fills at the next bar's open.
+- `issue_119_sizing_respects_staleness_bound` — an expired mark
+  (`data.max_mark_staleness`) rejects sizing through the zero-price guard, at
+  the same tick the holding drops out of equity.
+- `issue_119_same_tick_stale_tick_equity` — SPEC pin of the (e) decision: two
+  same-tick 25% `pct_portfolio` perps both size off the shared tick-start
+  equity (no intra-tick compounding).
+
 The `"all"` sentinel paths are covered in the execution-model crate's own tests
 (`crates/execution-models/tests/`), not in `sizing.rs`.
 
 ## Related issues
 
 - [#117](https://github.com/ftvision/catalyst-backtest/issues/117) — margin cap — FIXED
+- [#119](https://github.com/ftvision/catalyst-backtest/issues/119) — price lookups: sizing's unit price unified onto the bounded venue-scoped mark (d, FIXED); same-tick tick-start equity snapshot (e, DECIDED semantics) — RESOLVED
 - [#121](https://github.com/ftvision/catalyst-backtest/issues/121) — pct_position semantics (perp entry-price basis intended; swap rejection FIXED)
 - [#160](https://github.com/ftvision/catalyst-backtest/issues/160) — strict parsing of relative sizing values; perp `"all"` rejected — FIXED
