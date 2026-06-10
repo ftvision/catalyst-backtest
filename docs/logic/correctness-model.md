@@ -146,6 +146,7 @@ margin and unrealized PnL + yield principal and accrued (see
 | Partial fills (`partial_fill`/`clamp_to_available`/`allow_*`) | ⚠️ rejected until implemented (#144) |
 | Non-`fixed_usd` gas fallback; `fixed_native` gas model | ⚠️ rejected until implemented (#145, #146) |
 | `reduce_only_validation = lenient`; `yield.accrual = protocol_index` | ⚠️ rejected until implemented (#158, #164) |
+| Rust enums / Python literals / JSON Schema policy parity | ✅ conformance guard in place (#168) |
 
 The broader roadmap to production-grade correctness is in
 [production-readiness.md](../production-readiness.md) (Tier 0 = "the numbers are

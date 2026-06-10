@@ -28,6 +28,12 @@ macro_rules! str_enum {
         pub enum $name {
             $($variant),+
         }
+
+        impl $name {
+            /// Every variant, in declaration order. Used by the schema
+            /// conformance test to assert parity with the JSON Schema enums.
+            pub const VARIANTS: &'static [Self] = &[$(Self::$variant),+];
+        }
     };
 }
 
