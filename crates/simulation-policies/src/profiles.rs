@@ -27,6 +27,10 @@ pub fn strict_v1() -> ResolvedPolicy {
         same_tick: SameTick::TopologicalOrder,
         missing_required: MissingRequired::Fail,
         missing_optional: MissingOptional::Warn,
+        // Unbounded mark carry-forward: a staleness bound (#119(b)) changes
+        // valuations, so no profile imposes one silently — it is opt-in via
+        // `data.max_mark_staleness`.
+        max_mark_staleness: None,
         liquidation_check: LiquidationCheck::EveryTick,
         funding: Funding::Historical,
         reduce_only_validation: ReduceOnlyValidation::Strict,

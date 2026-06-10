@@ -114,7 +114,8 @@
       "additionalProperties": false,
       "properties": {
         "missing_required": { "type": "string", "enum": ["fail", "warn", "skip_tick", "forward_fill"] },
-        "missing_optional": { "type": "string", "enum": ["warn", "fail", "forward_fill", "fallback_provider"] }
+        "missing_optional": { "type": "string", "enum": ["warn", "fail", "forward_fill", "fallback_provider"] },
+        "max_mark_staleness": { "type": "string", "description": "Maximum age a venue-scoped mark may be carried forward when valuing a position, as a duration (e.g. 24h). Absent = unbounded." }
       }
     },
     "perps": {

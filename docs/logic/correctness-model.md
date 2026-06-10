@@ -116,10 +116,12 @@ in the engine — the `√` in `volume_based` slippage — is IEEE-754 determini
 Equity = stable balances (1:1) + non-stable balances (marked to close) + perp
 margin and unrealized PnL + yield principal and accrued (see
 [portfolio-valuation](portfolio-valuation.md)).
-- ⚠️ **Tracked limitations:** an unpriced non-stable holding (cash or yield)
-  is silently dropped from equity and a perp without a mark loses its PnL (#119);
-  the venue-scoped carry-forward is unbounded-stale (#119); cumulative
-  `total_yield_usd` / `interest_usd` carry asset units for non-stables (#166).
+- An unpriced holding (cash, yield, or a perp's PnL) is excluded from equity
+  **loudly**: a `valuation_warning` event + run warning name it, deduped once
+  per run (#119(c), fixed). The venue-scoped mark carry-forward is bounded by
+  `data.max_mark_staleness` when configured; default unbounded (#119(b), fixed).
+- ⚠️ **Tracked limitations:** cumulative `total_yield_usd` / `interest_usd`
+  carry asset units for non-stables (#166).
 
 ## What is correct today vs. tracked
 
@@ -133,7 +135,9 @@ margin and unrealized PnL + yield principal and accrued (see
 | `next_open` market orders deferred to fill+book on the fill bar (no phantom entry P&L) | ✅ fixed (#116) |
 | Same-bar fills under `close`/`open`/`mid`/`worse_side_ohlc` selection | ✅ decided convention + per-run warning (#122, trade-on-close) |
 | Venue-scoped position marking (no cross-venue price borrowing) | ✅ fixed (#119(a)) |
-| Staleness bound, unpriced-leg warning, sizing unification, same-tick snapshot | ⚠️ open (#119(b-e)) |
+| Mark staleness bound (`data.max_mark_staleness`; default unbounded) | ✅ fixed (#119(b)) |
+| Unpriced holdings excluded loudly (`valuation_warning` + run warning, deduped per run) | ✅ fixed (#119(c)) |
+| Sizing unification, same-tick equity snapshot | ⚠️ open (#119(d-e)) |
 | Non-stable yield positions marked to price; gas converted to asset units | ✅ fixed (#115) |
 | `total_yield_usd` / `interest_usd` in asset units for non-stables | ⚠️ open (#166) |
 | Liquidation marks the intra-bar wick | ✅ fixed (#120 wick half) |

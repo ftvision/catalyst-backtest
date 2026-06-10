@@ -39,10 +39,13 @@ i.e. **mark-to-close** of the bar at `ts` on the position's **own venue**,
 carried forward from the venue's last known close on a gap
 (`crates/simulation-engine/src/market.rs:close_at`). It is **venue-scoped**
 (#119(a), fixed): a holding is never valued at another venue's candle that
-happens to share the symbol. The carry-forward has **no staleness bound**
-(#119(b), open), and a venue with no candle at-or-before `ts` yields `None` —
-the caller silently skips the leg (#119(c), open). `price_any` survives only on
-the venue-less signal-source path, where no position is being valued.
+happens to share the symbol. The carry-forward is **bounded by
+`data.max_mark_staleness`** when configured (#119(b), fixed): only a close
+within `[ts − bound, ts]` is returned (an exact-`ts` bar is always allowed);
+the default is unbounded. A venue with no candle in range yields `None` — the
+leg is excluded from equity and surfaced as a `valuation_warning` (#119(c),
+fixed). `price_any` survives only on the venue-less signal-source path, where
+no position is being valued.
 
 **Perp PnL** is `PerpPosition::unrealized_pnl`
 (`crates/portfolio-ledger/src/position.rs:48`):
@@ -126,29 +129,35 @@ within the tick uses the **start-of-tick** value.
   is silently skipped from equity (no warning), the same class of gap as the
   cash-balance branch below (#119).
 
-- **An unpriced non-stable balance is silently dropped (#119(c)).** The
-  cash-balance branch adds `amt × price` *only* `if let Some(price) =
-  mark_price(...)`; there is no `else`. If the holding's venue has **no candle
-  at or before `ts`**, that holding contributes **0** to equity with no
-  warning — equity understates the portfolio rather than erroring. Note this
-  window **widened** with venue-scoping: previously a symbol priced on *any*
-  venue would be (wrongly) borrowed; now an `initial_portfolio` holding on a
-  candle-less venue is excluded outright. Pinned by
+- **An unpriced non-stable balance is excluded — loudly (#119(c), fixed).**
+  The cash-balance branch still adds `amt × price` only when `mark_price`
+  returns `Some` — an unpriced holding contributes **0** to equity (the math
+  is unchanged; the engine never invents a price). But the exclusion is no
+  longer silent: `compute_valuation` records every unpriced leg
+  (`(venue, asset, kind, amount)`), and the snapshot site emits a
+  `valuation_warning` event plus a run warning naming the holding, **deduped
+  once per run per (venue, asset, kind)**. This covers the cross-venue
+  exclusion window of venue-scoping (an `initial_portfolio` holding on a
+  candle-less venue) and a mark expired by the staleness bound alike. Pinned
+  by `issue_119_unpriced_spot_warned_not_silent` and
   `issue_119_cross_venue_holding_excluded_not_borrowed`. (A *yield* position
-  cannot hit this window: a non-stable deposit is rejected without an exact bar
-  on its chain (#115), and the carry-forward keeps it priced afterwards.)
+  can only hit this window via the staleness bound: a non-stable deposit is
+  rejected without an exact bar on its chain (#115), and the unbounded
+  carry-forward keeps it priced afterwards.)
 
-- **An unpriced perp drops its PnL but keeps its margin (#119).** When
-  `mark_price` returns `None`, the perp contributes only `margin_usd`
-  (`engine.rs:1104-1105`) — its unrealized PnL is silently treated as 0. The
-  posted margin is preserved, but a winning or losing position with no current
-  mark is valued as flat.
+- **An unpriced perp drops its PnL but keeps its margin — loudly (#119(c),
+  fixed).** When `mark_price` returns `None`, the perp contributes only
+  `margin_usd` (posted cash is real) — its unrealized PnL is excluded, and a
+  `valuation_warning` with kind `perp_pnl` surfaces it. Pinned by
+  `issue_119_unpriced_perp_pnl_warned_margin_counted`.
 
-- **Venue-blind marking is fixed; staleness is not (#119(b)).** `mark_price`
-  no longer consults other venues. But the venue-scoped carry-forward returns
-  the **last known close ≤ ts with no staleness bound** — a gappy series can
-  mark a leg at an arbitrarily old price, silently. A bound (e.g. N intervals)
-  plus a warning is the open follow-up.
+- **Venue-blind marking is fixed; staleness is bounded on request
+  (#119(b), fixed).** `mark_price` never consults other venues, and the
+  venue-scoped carry-forward honors `data.max_mark_staleness` (a duration like
+  `"24h"`): a close older than the bound is treated as missing and flows
+  through the loud (c) exclusion path. The **default is unbounded** — a
+  conscious default, since bounding marks changes results; whether any profile
+  should tighten it is a separate decision.
 
 ## Tests
 
@@ -178,15 +187,15 @@ i.e. `compute_equity` end-to-end through the tick):
   USD-denominated perp sizing draws on the same equity figure.
 
 `crates/simulation-engine/tests/issue_119_price_lookups.rs` pins the marking
-semantics: venue-scoped marking (a, fixed), unbounded staleness (b, follow-up),
-the unpriced-leg drop including the cross-venue exclusion (c, follow-up),
-gap-bar sizing rejection (d, follow-up), and the same-tick equity snapshot
-(e, follow-up). `issue_115_nonstable_yield_equity.rs` covers the non-stable
-yield marking.
+semantics: venue-scoped marking (a, fixed), the default-unbounded carry-forward
+and the `max_mark_staleness` bound (b, fixed), the loud unpriced-leg exclusion
+including the cross-venue and perp-PnL cases (c, fixed), gap-bar sizing
+rejection (d, follow-up), and the same-tick equity snapshot (e, follow-up).
+`issue_115_nonstable_yield_equity.rs` covers the non-stable yield marking.
 
 ## Related issues
 
 - [#115](https://github.com/ftvision/catalyst-backtest/issues/115) — non-stable yield valuation
 - [#117](https://github.com/ftvision/catalyst-backtest/issues/117) — margin cap — FIXED
 - [#118](https://github.com/ftvision/catalyst-backtest/issues/118) — elapsed accrual — FIXED
-- [#119](https://github.com/ftvision/catalyst-backtest/issues/119) — price lookups: venue-scoping FIXED (a); staleness bound (b), unpriced-leg warning (c), sizing unification (d), same-tick snapshot (e) still open
+- [#119](https://github.com/ftvision/catalyst-backtest/issues/119) — price lookups: venue-scoping (a), staleness bound (b), unpriced-leg warning (c) FIXED; sizing unification (d), same-tick snapshot (e) still open

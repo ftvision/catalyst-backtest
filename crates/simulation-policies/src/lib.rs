@@ -150,6 +150,13 @@ pub struct ResolvedPolicy {
     pub same_tick: SameTick,
     pub missing_required: MissingRequired,
     pub missing_optional: MissingOptional,
+    /// Maximum age a venue-scoped mark may be carried forward when valuing a
+    /// position (#119(b)), as a duration string ([`parse_duration_secs`]
+    /// grammar; [`validate`] guarantees it parses). `None` = unbounded
+    /// carry-forward (every profile's default — bounding marks changes
+    /// results, so it is opt-in).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_mark_staleness: Option<String>,
     pub liquidation_check: LiquidationCheck,
     pub funding: Funding,
     pub reduce_only_validation: ReduceOnlyValidation,

@@ -120,6 +120,9 @@ pub fn resolve_policy(contract: &ContractPolicy) -> Result<ResolvedPolicy, Polic
         if let Some(v) = &data.missing_optional {
             p.missing_optional = parse_enum("data.missing_optional", v)?;
         }
+        if data.max_mark_staleness.is_some() {
+            p.max_mark_staleness = data.max_mark_staleness.clone();
+        }
     }
     if let Some(perps) = &contract.perps {
         if let Some(v) = &perps.liquidation_check {
@@ -261,6 +264,17 @@ pub fn validate(p: &ResolvedPolicy) -> Result<(), PolicyError> {
         }
     }
 
+    // Same rule for the mark-staleness bound: it is echoed in the executed
+    // policy and consumed by the engine's mark lookups, so a malformed
+    // duration must never silently mean "unbounded" (#160 discipline).
+    if let Some(ms) = &p.max_mark_staleness {
+        if parse_duration_secs(ms).is_none() {
+            return Err(PolicyError::Invalid(format!(
+                "data.max_mark_staleness is not a valid duration: {ms:?} (expected <integer><s|m|h|d>, e.g. \"24h\")"
+            )));
+        }
+    }
+
     // A cooldown trigger needs a cooldown duration.
     if p.signal_trigger == SignalTrigger::CrossingWithCooldown && p.cooldown.is_none() {
         return Err(PolicyError::Invalid(
@@ -368,6 +382,7 @@ impl ResolvedPolicy {
             data: Some(catalyst_contracts::policy::DataPolicy {
                 missing_required: Self::knob(&self.missing_required),
                 missing_optional: Self::knob(&self.missing_optional),
+                max_mark_staleness: self.max_mark_staleness.clone(),
             }),
             perps: Some(catalyst_contracts::policy::PerpPolicy {
                 liquidation_check: Self::knob(&self.liquidation_check),

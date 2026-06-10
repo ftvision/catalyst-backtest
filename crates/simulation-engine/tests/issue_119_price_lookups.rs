@@ -1,18 +1,21 @@
 //! Issue #119 — price-lookup defects in the simulation engine.
 //!
-//! Sub-bug (a) is FIXED here (the one genuine wrong-valuation bug); (b), (c),
-//! (d), (e) remain tracked follow-ups and their tests still pin current behavior.
+//! Sub-bugs (a), (b), and (c) are FIXED here; (d) and (e) remain tracked
+//! follow-ups and their tests still pin current behavior.
 //!
 //!   * `issue_119_mark_price_venue_scoped` (sub-bug a, FIXED): `mark_price` now
 //!     uses a VENUE-SCOPED close (`close_at`), so a holding on venue A is valued
 //!     from venue A's own candles (carry-forward), never venue B's that happens
 //!     to share the symbol.
 //!
-//!   * `issue_119_price_any_unbounded_staleness` (sub-bug b, FOLLOW-UP): a stale
-//!     mark is still carried forward with no staleness bound / warning.
+//!   * `issue_119_default_unbounded_carry_forward` /
+//!     `issue_119_max_mark_staleness_expires_stale_mark` (sub-bug b, FIXED):
+//!     `data.max_mark_staleness` bounds the carry-forward; the default stays
+//!     unbounded (a conscious default — no silent result change).
 //!
-//!   * `issue_119_unpriced_spot_silently_dropped` (sub-bug c, FOLLOW-UP):
-//!     `compute_equity` still silently drops a never-priced non-stable holding.
+//!   * `issue_119_unpriced_spot_warned_not_silent` (sub-bug c, FIXED): an
+//!     unpriced holding is still excluded from equity but now surfaces a
+//!     `valuation_warning` event + run warning, deduped once per run.
 //!
 //!   * `issue_119_pct_portfolio_rejected_on_gap` (sub-bug d, FOLLOW-UP): sizing
 //!     still rejects on a gap (cosmetic — the swap couldn't fill on a gap anyway).
@@ -147,22 +150,14 @@ fn issue_119_each_venue_marked_at_its_own_price() {
 }
 
 // ---------------------------------------------------------------------------
-// (b) price_any carries a stale price forever with no staleness bound.
+// (b) mark carry-forward: unbounded by default, bounded by max_mark_staleness.
 // ---------------------------------------------------------------------------
 
-/// ISSUE #119 (sub-bug b): venueA/ETH has only a ts(0) bar (close 1000). A
-/// separate venueA/BTC series drives ticks ts0..ts5. For every tick after ts0
-/// the ETH mark falls to `price_any`, which returns the frozen ts0 close 1000
-/// with NO upper time bound and NO staleness warning.
-///
-/// The engine reports `equity_usd == "1000"` at EVERY tick, including ts5 (5
-/// bars after the last ETH candle), which is INCORRECT. A fixed engine with a
-/// finite staleness bound (< 5 bars) would stop returning 1000 and/or emit a
-/// staleness warning rather than silently holding 1000 forever.
-#[test]
-fn issue_119_price_any_unbounded_staleness() {
+/// venueA/ETH has only a ts(0) bar (close 1000); a separate venueA/BTC series
+/// drives ticks ts0..ts5. The bundle for the staleness tests below.
+fn gappy_eth_market() -> MarketDataBundle {
     let btc_points: Vec<Value> = (0..=5).map(|i| pt(i, "50000")).collect();
-    let market: MarketDataBundle = serde_json::from_value(json!({
+    serde_json::from_value(json!({
         "schema_version": "catalyst.backtest.market_data_bundle.v1",
         "interval": "1h", "start": ts(0), "end": ts(6),
         "candles": [
@@ -171,52 +166,107 @@ fn issue_119_price_any_unbounded_staleness() {
         ],
         "funding": [], "gas": [], "yields": [], "providers": [], "warnings": []
     }))
-    .unwrap();
+    .unwrap()
+}
 
-    let config: BacktestConfig = serde_json::from_value(json!({
+fn gappy_eth_config() -> BacktestConfig {
+    serde_json::from_value(json!({
         "start": ts(0), "end": ts(6), "interval": "1h",
         "initial_portfolio": {"venueA": {"ETH": "1"}}
     }))
-    .unwrap();
+    .unwrap()
+}
 
-    let input = SimulationInput { graph: inert_graph(), config, policy: research_policy(), market_data: market };
+/// ISSUE #119 (sub-bug b) — the DEFAULT pinned: with no `max_mark_staleness`
+/// the venue-scoped carry-forward is unbounded, so the frozen ts0 close 1000
+/// marks the 1 ETH at every tick, even 5 bars past its last candle. This is a
+/// conscious default (bounding marks changes results, so it is opt-in), not a
+/// silent gap: the bound is available via `data.max_mark_staleness`.
+#[test]
+fn issue_119_default_unbounded_carry_forward() {
+    let input = SimulationInput {
+        graph: inert_graph(),
+        config: gappy_eth_config(),
+        policy: research_policy(),
+        market_data: gappy_eth_market(),
+    };
     let trace = run(&input).unwrap();
 
     assert_eq!(trace.snapshots.len(), 6, "ticks ts0..ts5 from the BTC series");
-    // PIN THE BUG: the 1 ETH is held at the frozen 1000 at every tick, even 5
-    // bars past its last candle. CORRECT: a finite staleness bound would make
-    // the price None (so equity != 1000) and/or surface a staleness warning.
     for i in 0..6 {
         assert_eq!(
             trace.snapshots[i].equity_usd.to_string(),
             "1000",
-            "BUG #119(b): stale ETH price carried forward unbounded to tick {i}"
+            "default (unbounded): ETH carried forward at 1000 to tick {i}"
         );
     }
-    // No staleness warning is emitted (part of the bug: the carry is silent).
+    // The holding is priced at every tick, so no valuation warning fires.
+    assert_eq!(count(&trace, "valuation_warning"), 0, "default: nothing unpriced, no warning");
+}
+
+/// ISSUE #119 (sub-bug b) — FIXED: with `data.max_mark_staleness = "3h"` the
+/// ts0 close may be carried forward only through ts3. At ts4 and ts5 the mark
+/// has expired, so the ETH holding is EXCLUDED from equity (0) and the
+/// exclusion is surfaced through the same loud (c) path: one deduped
+/// `valuation_warning` event + run warning naming the holding.
+#[test]
+fn issue_119_max_mark_staleness_expires_stale_mark() {
+    let policy: SimulationPolicy = serde_json::from_value(json!({
+        "schema_version": "catalyst.backtest.policy.v1",
+        "profile": "research_v1",
+        "data": {"max_mark_staleness": "3h"}
+    }))
+    .unwrap();
+
+    let input = SimulationInput {
+        graph: inert_graph(),
+        config: gappy_eth_config(),
+        policy,
+        market_data: gappy_eth_market(),
+    };
+    let trace = run(&input).unwrap();
+
+    assert_eq!(trace.snapshots.len(), 6, "ticks ts0..ts5 from the BTC series");
+    // Within the 3h bound the ts0 close still marks the holding...
+    for i in 0..4 {
+        assert_eq!(
+            trace.snapshots[i].equity_usd.to_string(),
+            "1000",
+            "FIXED #119(b): mark within the 3h bound at tick {i}"
+        );
+    }
+    // ...beyond it the mark expires and the holding is excluded, loudly.
+    for i in 4..6 {
+        assert_eq!(
+            trace.snapshots[i].equity_usd.to_string(),
+            "0",
+            "FIXED #119(b): stale mark expired at tick {i}; holding excluded"
+        );
+    }
+    assert_eq!(
+        count(&trace, "valuation_warning"),
+        1,
+        "the expired mark is surfaced exactly once per run (dedup)"
+    );
     assert!(
-        !trace.warnings.iter().any(|w| {
-            let lw = w.to_lowercase();
-            lw.contains("stale") || lw.contains("staleness")
-        }),
-        "BUG #119(b): no staleness warning emitted for a 5-bar-old carried-forward price"
+        trace.warnings.iter().any(|w| w.contains("venueA/ETH") && w.contains("excluded")),
+        "run warning names the excluded holding; got {:?}",
+        trace.warnings
     );
 }
 
 // ---------------------------------------------------------------------------
-// (c) compute_equity silently drops an unpriced non-stable spot holding.
+// (c) an unpriced non-stable holding is excluded from equity — loudly.
 // ---------------------------------------------------------------------------
 
-/// ISSUE #119 (sub-bug c): venueA holds 2 WBTC + 500 USDC, but NO WBTC candle
-/// exists on any venue, so `mark_price`/`price_any` for WBTC is None. In
-/// `compute_equity` the non-stable WBTC takes the `else if let Some(price)`
-/// arm, which is skipped -> it contributes 0. Only the 500 USDC counts.
-///
-/// The engine reports `equity_usd == "500"` at every tick, which is INCORRECT
-/// (the 2 WBTC are silently zeroed). At minimum a fixed engine should emit a
-/// warning about the unpriced holding rather than silently understate equity.
+/// ISSUE #119 (sub-bug c) — FIXED: venueA holds 2 WBTC + 500 USDC, but NO WBTC
+/// candle exists anywhere, so the WBTC mark is None. The WBTC is still
+/// EXCLUDED from equity (only the 500 USDC counts — unchanged math), but the
+/// exclusion is no longer silent: a `valuation_warning` event and a run
+/// warning name the holding, deduped to exactly once per run even though the
+/// holding is unpriced at every tick.
 #[test]
-fn issue_119_unpriced_spot_silently_dropped() {
+fn issue_119_unpriced_spot_warned_not_silent() {
     let market: MarketDataBundle = serde_json::from_value(json!({
         "schema_version": "catalyst.backtest.market_data_bundle.v1",
         "interval": "1h", "start": ts(0), "end": ts(2),
@@ -239,32 +289,42 @@ fn issue_119_unpriced_spot_silently_dropped() {
     let trace = run(&input).unwrap();
 
     assert_eq!(trace.snapshots.len(), 2);
-    // PIN THE BUG: the 2 WBTC contribute 0; only the 500 USDC is counted.
+    // Equity math unchanged: the 2 WBTC are excluded; only the 500 USDC counts.
     assert_eq!(
         trace.snapshots[0].equity_usd.to_string(),
         "500",
-        "BUG #119(c): unpriced WBTC silently dropped; equity is the 500 USDC only"
+        "FIXED #119(c): unpriced WBTC excluded; equity is the 500 USDC only"
     );
     assert_eq!(
         trace.snapshots[1].equity_usd.to_string(),
         "500",
-        "BUG #119(c): WBTC still dropped at ts1"
+        "FIXED #119(c): WBTC still excluded at ts1"
     );
-    // No warning surfaces the dropped holding (part of the bug).
+    // ...but the exclusion is LOUD: the run warning names the holding.
     assert!(
-        !trace.warnings.iter().any(|w| {
-            let lw = w.to_lowercase();
-            lw.contains("wbtc") || lw.contains("unpriced")
-        }),
-        "BUG #119(c): holding silently dropped with no warning; a fix should warn or not understate"
+        trace.warnings.iter().any(|w| w.contains("venueA/WBTC") && w.contains("excluded")),
+        "FIXED #119(c): a warning must name the unpriced WBTC holding; got {:?}",
+        trace.warnings
     );
+    // Dedup pin: the holding is unpriced at BOTH ticks but warned exactly once.
+    assert_eq!(
+        count(&trace, "valuation_warning"),
+        1,
+        "exactly one valuation_warning across the multi-tick run (dedup per run)"
+    );
+    let ev = trace.events.iter().find(|e| e.event_type == "valuation_warning").unwrap();
+    let detail = ev.detail.as_ref().unwrap();
+    assert_eq!(detail["venue"], json!("venueA"));
+    assert_eq!(detail["asset"], json!("WBTC"));
+    assert_eq!(detail["kind"], json!("spot"));
+    assert_eq!(detail["amount"], json!("2"));
 }
 
 /// INTENDED SEMANTICS of the (a) fix, pinned: a holding on a venue with NO
 /// candles of its own is EXCLUDED from equity even when another venue prices
 /// the same symbol. Pre-fix, the venue-blind `price_any` fallback would borrow
 /// venueA's 1000 and count the venueB ETH at $1000; post-fix venueB's ETH
-/// contributes 0 (still silently — surfacing it is sub-bug (c)).
+/// contributes 0 — and with (c) fixed, the exclusion is surfaced loudly.
 ///
 /// Note the same window cannot arise for a *yield* position: a non-stable
 /// yield deposit is rejected without an exact bar on its chain (#115), and the
@@ -301,6 +361,86 @@ fn issue_119_cross_venue_holding_excluded_not_borrowed() {
              equity at ts{i} is the 500 USDC only"
         );
     }
+    // FIXED #119(c): the cross-venue exclusion is surfaced, not silent.
+    assert_eq!(count(&trace, "valuation_warning"), 1, "exclusion warned exactly once");
+    assert!(
+        trace.warnings.iter().any(|w| w.contains("venueB/ETH") && w.contains("excluded")),
+        "run warning names the excluded venueB/ETH holding; got {:?}",
+        trace.warnings
+    );
+}
+
+/// ISSUE #119 (sub-bug c, perp leg) — FIXED: a perp whose venue has no mark
+/// keeps its MARGIN in equity (posted cash is real) but its unrealized PnL is
+/// excluded — and that exclusion now fires a `valuation_warning` with kind
+/// "perp_pnl". The mark is expired via the (b) staleness bound, since the perp
+/// could only have been opened against an existing bar.
+#[test]
+fn issue_119_unpriced_perp_pnl_warned_margin_counted() {
+    let market: MarketDataBundle = serde_json::from_value(json!({
+        "schema_version": "catalyst.backtest.market_data_bundle.v1",
+        "interval": "1h", "start": ts(0), "end": ts(3),
+        "candles": [
+            // ETH has only the ts0 bar (the perp opens against it)...
+            {"venue": "hyperliquid", "symbol": "ETH", "quote": "USD", "points": [pt(0, "2000")]},
+            // ...while BTC drives ticks ts0..ts2.
+            {"venue": "hyperliquid", "symbol": "BTC", "quote": "USD",
+             "points": [pt(0, "50000"), pt(1, "50000"), pt(2, "50000")]}
+        ],
+        "funding": [], "gas": [], "yields": [], "providers": [], "warnings": []
+    }))
+    .unwrap();
+
+    let config: BacktestConfig = serde_json::from_value(json!({
+        "start": ts(0), "end": ts(3), "interval": "1h",
+        "initial_portfolio": {"hyperliquid": {"USDC": "2000"}}
+    }))
+    .unwrap();
+
+    // research_v1 (same-bar close fill) with costs zeroed so equity stays a
+    // round 2000, gas off, and a 1h staleness bound: the ts0 ETH mark is alive
+    // at ts1 (ts1 - 1h = ts0) but expired at ts2.
+    let policy: SimulationPolicy = serde_json::from_value(json!({
+        "schema_version": "catalyst.backtest.policy.v1",
+        "profile": "research_v1",
+        "fills": {"slippage": {"model": "none"}, "fees": {"model": "none"}},
+        "gas": {"model": "none"},
+        "data": {"max_mark_staleness": "1h"}
+    }))
+    .unwrap();
+
+    // A single initial action: long 500 USD of ETH on the first tick.
+    let graph: Graph = serde_json::from_value(json!({
+        "nodes": [
+            {"id": "open", "kind": "action", "subtype": "perp_order",
+             "config": {"symbol": "ETH", "side": "long", "size_usd": "500", "chain": "hyperliquid"}}
+        ],
+        "edges": []
+    }))
+    .unwrap();
+
+    let trace = run(&SimulationInput { graph, config, policy, market_data: market }).unwrap();
+    assert_eq!(count(&trace, "action_executed"), 1, "the perp opens at ts0");
+    assert_eq!(trace.snapshots.len(), 3);
+
+    // ts0/ts1: mark alive (exact bar, then 1h carry) -> cash 1500 + margin 500
+    // + PnL 0 = 2000. ts2: mark expired -> PnL excluded but the margin still
+    // counts, so equity stays 2000 (NOT 1500: margin is never dropped).
+    for (i, snap) in trace.snapshots.iter().enumerate() {
+        assert_eq!(snap.equity_usd.to_string(), "2000", "equity at ts{i}");
+    }
+
+    assert_eq!(count(&trace, "valuation_warning"), 1, "the unmarked perp warns exactly once");
+    let ev = trace.events.iter().find(|e| e.event_type == "valuation_warning").unwrap();
+    let detail = ev.detail.as_ref().unwrap();
+    assert_eq!(detail["venue"], json!("hyperliquid"));
+    assert_eq!(detail["asset"], json!("ETH"));
+    assert_eq!(detail["kind"], json!("perp_pnl"));
+    assert!(
+        trace.warnings.iter().any(|w| w.contains("perp hyperliquid/ETH")),
+        "run warning names the unmarked perp; got {:?}",
+        trace.warnings
+    );
 }
 
 // ---------------------------------------------------------------------------

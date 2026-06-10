@@ -230,6 +230,12 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
     let allow_negative = policy.insufficient_balance == InsufficientBalance::AllowNegative;
     let mut ledger = initial_ledger(&input.config, allow_negative)?;
 
+    // Staleness bound on the venue-scoped mark carry-forward (#119(b)), parsed
+    // once. `validate` guarantees the duration parses when present; `None` =
+    // unbounded carry-forward (every profile's default).
+    let mark_staleness_secs: Option<i64> =
+        policy.max_mark_staleness.as_deref().and_then(parse_duration_secs);
+
     let mut events: Vec<Event> = Vec::new();
     let mut snapshots: Vec<Snapshot> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
@@ -263,6 +269,10 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
     let mut signal_last_fired: HashMap<String, i64> = HashMap::new();
     let mut signal_fire_count: HashMap<String, u32> = HashMap::new();
     let variables = parse_variables(&input.graph.variables);
+    // Unpriced holdings already warned about, keyed (venue, asset, kind):
+    // each one surfaces a `valuation_warning` event + run warning exactly once
+    // per run (#119(c)), not once per tick.
+    let mut warned_unpriced: HashSet<(String, String, &'static str)> = HashSet::new();
 
     // Intra-window gap check on required candle series (#42): a hole inside a
     // required series fails the run under `missing_required = fail`, else warns.
@@ -292,13 +302,17 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
         let elapsed_secs = prev_ts.map(|p| ts - p).unwrap_or(interval_secs);
         prev_ts = Some(ts);
 
-        accrue_funding(&mut ledger, &index, ts, elapsed_secs, &ts_iso, &policy, &mut events);
+        accrue_funding(
+            &mut ledger, &index, ts, elapsed_secs, &ts_iso, &policy, mark_staleness_secs,
+            &mut events,
+        );
         accrue_yield(&mut ledger, &index, ts, elapsed_secs, &ts_iso, &policy, &mut events);
-        check_liquidations(&mut ledger, &index, ts, &ts_iso, &policy, &mut events);
+        check_liquidations(&mut ledger, &index, ts, &ts_iso, &policy, mark_staleness_secs, &mut events);
 
         // Tick-start equity, used to resolve pct_portfolio sizing for any action
-        // this tick (snapshots below recompute it post-action).
-        let tick_equity = compute_equity(&ledger, &index, ts);
+        // this tick (snapshots below recompute it post-action and surface any
+        // unpriced holdings once).
+        let tick_equity = compute_valuation(&ledger, &index, ts, mark_staleness_secs).equity;
 
         // Orders queued on earlier bars get a chance to fill before new actions —
         // both booked on this bar, the bar they fill. Deferred next_open market
@@ -351,10 +365,48 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
             &mut order_seq,
         );
 
-        let equity = compute_equity(&ledger, &index, ts);
+        let valuation = compute_valuation(&ledger, &index, ts, mark_staleness_secs);
+        // Surface every unpriced holding loudly, once per run per
+        // (venue, asset, kind): excluded-from-equity must never be silent
+        // (#119(c)). A mark expired by the staleness bound (#119(b)) flows
+        // through this same path.
+        for u in &valuation.unpriced {
+            let key = (u.venue.clone(), u.asset.clone(), u.kind);
+            if !warned_unpriced.insert(key) {
+                continue;
+            }
+            let reason = match u.kind {
+                "perp_pnl" => format!(
+                    "perp {}/{} (size {}) has no mark on its venue — unrealized PnL excluded from equity (margin still counted) (#119)",
+                    u.venue,
+                    u.asset,
+                    u.amount.normalize()
+                ),
+                _ => format!(
+                    "holding {}/{} ({}) has no price on its venue — excluded from equity (#119)",
+                    u.venue,
+                    u.asset,
+                    u.amount.normalize()
+                ),
+            };
+            events.push(Event {
+                ts: ts_iso.clone(),
+                event_type: "valuation_warning".into(),
+                node_id: None,
+                reason: Some(reason.clone()),
+                detail: Some(json!({
+                    "venue": u.venue,
+                    "asset": u.asset,
+                    "kind": u.kind,
+                    "amount": u.amount.normalize().to_string(),
+                    "reason": reason,
+                })),
+            });
+            warnings.push(reason);
+        }
         snapshots.push(Snapshot {
             ts: ts_iso.clone(),
-            equity_usd: equity.normalize().to_string(),
+            equity_usd: valuation.equity.normalize().to_string(),
             portfolio: Some(ledger.to_portfolio()),
         });
     }
@@ -1198,10 +1250,18 @@ impl ActionOutcome {
     }
 }
 
-fn mark_price(index: &BundleIndex, venue: &str, symbol: &str, ts: i64) -> Option<Decimal> {
-    // Venue-scoped close at-or-before `ts` (#119): a position is valued from its
-    // OWN venue's candles, never another venue's that happens to share the symbol.
-    index.close_at(venue, symbol, ts)
+fn mark_price(
+    index: &BundleIndex,
+    venue: &str,
+    symbol: &str,
+    ts: i64,
+    max_age_secs: Option<i64>,
+) -> Option<Decimal> {
+    // Venue-scoped close at-or-before `ts` (#119(a)): a position is valued from
+    // its OWN venue's candles, never another venue's that happens to share the
+    // symbol. The carry-forward is bounded by `data.max_mark_staleness` when
+    // configured (#119(b)); `None` = unbounded.
+    index.close_at(venue, symbol, ts, max_age_secs)
 }
 
 fn accrue_funding(
@@ -1211,6 +1271,7 @@ fn accrue_funding(
     elapsed_secs: i64,
     ts_iso: &str,
     policy: &ResolvedPolicy,
+    mark_staleness_secs: Option<i64>,
     events: &mut Vec<Event>,
 ) {
     if policy.funding != Funding::Historical {
@@ -1226,7 +1287,9 @@ fn accrue_funding(
         if rate.is_zero() {
             continue;
         }
-        let Some(mark) = mark_price(index, &p.venue, &p.symbol, ts) else { continue };
+        let Some(mark) = mark_price(index, &p.venue, &p.symbol, ts, mark_staleness_secs) else {
+            continue;
+        };
         let notional = p.size * mark;
         let sign = match p.side {
             PerpSide::Long => Decimal::ONE,
@@ -1309,6 +1372,7 @@ fn check_liquidations(
     ts: i64,
     ts_iso: &str,
     policy: &ResolvedPolicy,
+    mark_staleness_secs: Option<i64>,
     events: &mut Vec<Event>,
 ) {
     if policy.liquidation_check != LiquidationCheck::EveryTick {
@@ -1327,7 +1391,7 @@ fn check_liquidations(
                 PerpSide::Short => bar.high,
             },
             // No candle this tick: fall back to the last-known mark.
-            None => match mark_price(index, &p.venue, &p.symbol, ts) {
+            None => match mark_price(index, &p.venue, &p.symbol, ts, mark_staleness_secs) {
                 Some(m) => m,
                 None => continue,
             },
@@ -1351,26 +1415,70 @@ fn check_liquidations(
     }
 }
 
-/// Mark-to-market portfolio value in USD.
-fn compute_equity(ledger: &Ledger, index: &BundleIndex, ts: i64) -> Decimal {
+/// A holding `compute_valuation` could not price (no mark on its venue within
+/// the staleness bound). Excluded from equity; surfaced once per run as a
+/// `valuation_warning` event + run warning (#119(c)).
+struct UnpricedHolding {
+    venue: String,
+    asset: String,
+    /// Which leg went unpriced: `"spot"` (cash balance), `"perp_pnl"` (a perp
+    /// whose margin still counts but whose unrealized PnL is excluded), or
+    /// `"yield"` (a non-stable yield position).
+    kind: &'static str,
+    /// Asset units for spot/yield; position size for `perp_pnl`.
+    amount: Decimal,
+}
+
+/// Mark-to-market portfolio value in USD, plus every holding that could not be
+/// priced (and was therefore excluded from `equity`).
+struct Valuation {
+    equity: Decimal,
+    unpriced: Vec<UnpricedHolding>,
+}
+
+/// Mark-to-market valuation. Equity math is unchanged from the historical
+/// `compute_equity`: an unpriced leg contributes 0 — but it is now *recorded*
+/// in `Valuation::unpriced` instead of dropped silently (#119(c)).
+fn compute_valuation(
+    ledger: &Ledger,
+    index: &BundleIndex,
+    ts: i64,
+    mark_staleness_secs: Option<i64>,
+) -> Valuation {
     let portfolio: Portfolio = ledger.to_portfolio();
     let mut equity = Decimal::ZERO;
+    let mut unpriced: Vec<UnpricedHolding> = Vec::new();
 
     for (venue, assets) in &portfolio.balances {
         for (asset, amount) in assets {
             let amt: Decimal = amount.parse().unwrap_or(Decimal::ZERO);
             if is_stable(asset) {
                 equity += amt;
-            } else if let Some(price) = mark_price(index, venue, asset, ts) {
+            } else if let Some(price) = mark_price(index, venue, asset, ts, mark_staleness_secs) {
                 equity += amt * price;
+            } else if !amt.is_zero() {
+                unpriced.push(UnpricedHolding {
+                    venue: venue.clone(),
+                    asset: asset.clone(),
+                    kind: "spot",
+                    amount: amt,
+                });
             }
         }
     }
     for p in ledger.perps() {
-        if let Some(mark) = mark_price(index, &p.venue, &p.symbol, ts) {
+        if let Some(mark) = mark_price(index, &p.venue, &p.symbol, ts, mark_staleness_secs) {
             equity += p.margin_usd + p.unrealized_pnl(mark);
         } else {
+            // The posted margin is real cash and still counts; the unrealized
+            // PnL has no mark and is excluded — loudly, not silently (#119(c)).
             equity += p.margin_usd;
+            unpriced.push(UnpricedHolding {
+                venue: p.venue.clone(),
+                asset: p.symbol.clone(),
+                kind: "perp_pnl",
+                amount: p.size,
+            });
         }
     }
     for y in ledger.yields() {
@@ -1379,11 +1487,18 @@ fn compute_equity(ledger: &Ledger, index: &BundleIndex, ts: i64) -> Decimal {
         // price, so e.g. ETH deposited into a vault isn't counted as $1/unit.
         if is_stable(&y.asset) {
             equity += y.value();
-        } else if let Some(price) = mark_price(index, &y.chain, &y.asset, ts) {
+        } else if let Some(price) = mark_price(index, &y.chain, &y.asset, ts, mark_staleness_secs) {
             equity += y.value() * price;
+        } else if !y.value().is_zero() {
+            unpriced.push(UnpricedHolding {
+                venue: y.chain.clone(),
+                asset: y.asset.clone(),
+                kind: "yield",
+                amount: y.value(),
+            });
         }
     }
-    equity
+    Valuation { equity, unpriced }
 }
 
 #[cfg(test)]
