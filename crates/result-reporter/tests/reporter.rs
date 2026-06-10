@@ -154,6 +154,26 @@ fn funding_and_yield_costs_summed() {
 }
 
 #[test]
+fn funding_costs_prefer_collected_over_owed() {
+    // #165: a strict-policy funding shortfall can forgive part of the owed
+    // payment at true bankruptcy. The engine reports both; total_funding_usd
+    // must sum what actually moved money (`collected_usd`), falling back to
+    // `payment_usd` only for traces that predate the field (previous test).
+    let trace = trace_from(
+        json!([snap("2024-01-01T00:00:00Z", "1000")]),
+        json!([
+            {"ts": "2024-01-01T00:00:00Z", "type": "funding_applied",
+             "detail": {"payment_usd": "150", "collected_usd": "102"}},
+            {"ts": "2024-01-01T00:00:00Z", "type": "funding_shortfall",
+             "detail": {"payment": "150", "paid_cash": "2", "from_margin": "100", "forgiven": "48"}}
+        ]),
+        empty_portfolio(),
+    );
+    let costs = summarize(&trace, vec![], None).costs.unwrap();
+    assert_eq!(costs.total_funding_usd.as_deref(), Some("102"));
+}
+
+#[test]
 fn preserves_policy_and_coverage_and_handles_numeric_detail() {
     let providers = vec![json!({"name": "parquet-store", "kind": "candles"})];
     let trace = trace_from(

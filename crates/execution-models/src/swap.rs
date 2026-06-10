@@ -163,6 +163,13 @@ fn swap_at(
     if price.is_zero() {
         return Execution::rejected(format!("zero price for {base} on {venue}"));
     }
+    // A non-positive swap amount can only mean an empty or overdrawn source
+    // balance (e.g. `amount: "all"` on a negative balance under the
+    // `allow_negative` policy) — reject it here so the buy/sell credits below
+    // are provably non-negative (#165).
+    if amount <= Decimal::ZERO {
+        return Execution::rejected(format!("nothing to swap from {}", cfg.from_asset));
+    }
     let gas = gas_usd(venue, ctx, policy);
 
     match dir {
@@ -174,7 +181,9 @@ fn swap_at(
             if let Err(e) = ledger.debit(venue, &cfg.from_asset, total_out) {
                 return Execution::rejected(e.to_string());
             }
-            ledger.credit(venue, &cfg.to_asset, received);
+            ledger
+                .credit(venue, &cfg.to_asset, received)
+                .expect("non-negative by construction (amount > 0 guarded above)");
             ledger.record_fee(fee);
             ledger.record_gas(gas);
             Execution::Executed(Fill {
@@ -209,7 +218,9 @@ fn swap_at(
             if let Err(e) = ledger.debit(venue, &cfg.from_asset, amount) {
                 return Execution::rejected(e.to_string());
             }
-            ledger.credit(venue, &cfg.to_asset, net);
+            ledger
+                .credit(venue, &cfg.to_asset, net)
+                .expect("non-negative by construction (net > 0 guarded above)");
             ledger.record_fee(fee);
             ledger.record_gas(gas);
             Execution::Executed(Fill {

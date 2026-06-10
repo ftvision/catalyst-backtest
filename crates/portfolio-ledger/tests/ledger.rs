@@ -24,7 +24,7 @@ fn initial(venue: &str, asset: &str, amount: &str) -> Ledger {
 fn credit_and_debit_move_balances() {
     let mut l = initial("base", "USDC", "1000");
     l.debit("base", "USDC", d("100")).unwrap();
-    l.credit("base", "ETH", d("0.05"));
+    l.credit("base", "ETH", d("0.05")).unwrap();
     assert_eq!(l.balance("base", "USDC"), d("900"));
     assert_eq!(l.balance("base", "ETH"), d("0.05"));
 }
@@ -43,6 +43,73 @@ fn allow_negative_ledger_permits_overdraw() {
     let mut l = Ledger::new(true);
     l.debit("base", "USDC", d("50")).unwrap();
     assert_eq!(l.balance("base", "USDC"), d("-50"));
+}
+
+// --- Negative-amount guards (#165) ---
+
+#[test]
+fn negative_credit_is_rejected() {
+    let mut l = initial("base", "USDC", "1000");
+    let err = l.credit("base", "USDC", d("-5")).unwrap_err();
+    assert!(
+        matches!(err, LedgerError::NegativeAmount { op: "credit", .. }),
+        "expected NegativeAmount, got {err:?}"
+    );
+    // balance is unchanged after a rejected credit
+    assert_eq!(l.balance("base", "USDC"), d("1000"));
+}
+
+#[test]
+fn negative_debit_is_rejected_even_under_allow_negative() {
+    // A negative debit is a hidden, unguarded credit; allow_negative relaxes
+    // only the overdraw guard, never the sign guard.
+    for allow_negative in [false, true] {
+        let mut l = Ledger::new(allow_negative);
+        l.credit("base", "USDC", d("10")).unwrap();
+        let err = l.debit("base", "USDC", d("-5")).unwrap_err();
+        assert!(
+            matches!(err, LedgerError::NegativeAmount { op: "debit", .. }),
+            "expected NegativeAmount (allow_negative={allow_negative}), got {err:?}"
+        );
+        assert_eq!(l.balance("base", "USDC"), d("10"));
+    }
+}
+
+#[test]
+fn zero_credit_and_debit_are_allowed_noops() {
+    let mut l = initial("base", "USDC", "100");
+    l.credit("base", "USDC", Decimal::ZERO).unwrap();
+    l.debit("base", "USDC", Decimal::ZERO).unwrap();
+    assert_eq!(l.balance("base", "USDC"), d("100"));
+}
+
+#[test]
+fn negative_close_perp_settlement_is_rejected() {
+    let mut l = initial("hyperliquid", "USDC", "1000");
+    l.open_perp(long_eth("100")).unwrap();
+    let err = l.close_perp("hyperliquid", "ETH", d("-50")).unwrap_err();
+    assert!(
+        matches!(err, LedgerError::NegativeAmount { op: "close_perp settlement", .. }),
+        "expected NegativeAmount, got {err:?}"
+    );
+    // Rejected before any mutation: the position is still open and the
+    // balance untouched (1000 - 100 margin from the open).
+    assert!(l.perp("hyperliquid", "ETH").is_some());
+    assert_eq!(l.balance("hyperliquid", "USDC"), d("900"));
+}
+
+#[test]
+fn negative_withdraw_yield_is_rejected() {
+    let mut l = initial("base", "USDC", "100");
+    l.deposit_yield("aave", "USDC", "base", Some("usdc"), d("100")).unwrap();
+    let err = l.withdraw_yield("aave", "USDC", "base", Some("usdc"), d("-10")).unwrap_err();
+    assert!(
+        matches!(err, LedgerError::NegativeAmount { op: "withdraw_yield", .. }),
+        "expected NegativeAmount, got {err:?}"
+    );
+    let pos = l.yield_position("aave", "USDC", "base", Some("usdc")).unwrap();
+    assert_eq!(pos.principal, d("100"));
+    assert_eq!(l.balance("base", "USDC"), Decimal::ZERO);
 }
 
 #[test]
@@ -213,7 +280,7 @@ fn overdraw_yield_is_rejected() {
 fn snapshot_reports_balances_positions_and_drops_zeros() {
     let mut l = initial("base", "USDC", "1000");
     l.debit("base", "USDC", d("1000")).unwrap(); // zero it out
-    l.credit("hyperliquid", "USDC", d("500"));
+    l.credit("hyperliquid", "USDC", d("500")).unwrap();
     l.open_perp(long_eth("100")).unwrap_or(()); // no hyperliquid USDC margin? it has 500
     let portfolio = l.to_portfolio(d("0.0125"));
     // base USDC was zeroed and should be dropped

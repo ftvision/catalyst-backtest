@@ -10,6 +10,12 @@
 //! Under strict policy the ledger refuses to go negative: a [`Ledger::debit`]
 //! that would overdraw returns [`LedgerError::InsufficientBalance`] and leaves
 //! balances unchanged.
+//!
+//! Balance moves are direction-typed (#165): [`Ledger::credit`] and
+//! [`Ledger::debit`] both reject negative amounts with
+//! [`LedgerError::NegativeAmount`] under *every* policy — `allow_negative`
+//! relaxes only the overdraw guard. A caller that means to move money the other
+//! way must call the other method, so no sign trick can bypass a guard.
 
 mod error;
 mod position;
@@ -74,8 +80,19 @@ impl Ledger {
             .unwrap_or(Decimal::ZERO)
     }
 
-    /// Add `amount` to a balance.
-    pub fn credit(&mut self, venue: &str, asset: &str, amount: Decimal) {
+    /// Add `amount` to a balance. Rejects negative amounts (#165): a negative
+    /// credit is a hidden, unguarded debit — callers that mean to take money
+    /// must call [`Ledger::debit`], which carries the overdraw guard. Zero is
+    /// allowed (no-op).
+    pub fn credit(&mut self, venue: &str, asset: &str, amount: Decimal) -> Result<(), LedgerError> {
+        if amount < Decimal::ZERO {
+            return Err(LedgerError::NegativeAmount {
+                op: "credit",
+                venue: venue.to_string(),
+                asset: asset.to_string(),
+                amount,
+            });
+        }
         let entry = self
             .balances
             .entry(venue.to_string())
@@ -83,10 +100,22 @@ impl Ledger {
             .entry(asset.to_string())
             .or_insert(Decimal::ZERO);
         *entry += amount;
+        Ok(())
     }
 
     /// Subtract `amount` from a balance, refusing to overdraw under strict policy.
+    /// Rejects negative amounts under every policy (#165): a negative debit is a
+    /// hidden, unguarded credit — `allow_negative` relaxes only the overdraw
+    /// guard, never the sign guard. Zero is allowed (no-op).
     pub fn debit(&mut self, venue: &str, asset: &str, amount: Decimal) -> Result<(), LedgerError> {
+        if amount < Decimal::ZERO {
+            return Err(LedgerError::NegativeAmount {
+                op: "debit",
+                venue: venue.to_string(),
+                asset: asset.to_string(),
+                amount,
+            });
+        }
         let available = self.balance(venue, asset);
         if !self.allow_negative && amount > available {
             return Err(LedgerError::InsufficientBalance {
@@ -164,12 +193,25 @@ impl Ledger {
 
     /// Close a perp: remove it and credit `settlement_usd` (margin ± realized
     /// PnL) back to the venue's USDC.
+    ///
+    /// Rejects a negative `settlement_usd` before touching any state (#165):
+    /// callers floor an underwater settlement at zero (#117), and this guard
+    /// makes "no code path can credit unposted collateral" a ledger invariant
+    /// rather than a call-site convention.
     pub fn close_perp(
         &mut self,
         venue: &str,
         symbol: &str,
         settlement_usd: Decimal,
     ) -> Result<PerpPosition, LedgerError> {
+        if settlement_usd < Decimal::ZERO {
+            return Err(LedgerError::NegativeAmount {
+                op: "close_perp settlement",
+                venue: venue.to_string(),
+                asset: "USDC".to_string(),
+                amount: settlement_usd,
+            });
+        }
         let position = self
             .perps
             .remove(&(venue.to_string(), symbol.to_string()))
@@ -177,7 +219,8 @@ impl Ledger {
                 venue: venue.to_string(),
                 symbol: symbol.to_string(),
             })?;
-        self.credit(venue, "USDC", settlement_usd);
+        self.credit(venue, "USDC", settlement_usd)
+            .expect("non-negative by construction (guarded above)");
         Ok(position)
     }
 
@@ -267,6 +310,17 @@ impl Ledger {
         pool: Option<&str>,
         amount: Decimal,
     ) -> Result<Decimal, LedgerError> {
+        // Negative withdrawals are rejected up front (#165): besides being a
+        // hidden deposit, a negative `amount` would *grow* `accrued` through the
+        // draw-down math below and then hit the credit sign guard mid-mutation.
+        if amount < Decimal::ZERO {
+            return Err(LedgerError::NegativeAmount {
+                op: "withdraw_yield",
+                venue: chain.to_string(),
+                asset: asset.to_string(),
+                amount,
+            });
+        }
         let key =
             (protocol.to_string(), asset.to_string(), chain.to_string(), pool.map(str::to_string));
         let position = self.yields.get_mut(&key).ok_or_else(|| LedgerError::NoSuchYield {
@@ -290,7 +344,8 @@ impl Ledger {
         if position.value().is_zero() {
             self.yields.remove(&key);
         }
-        self.credit(chain, asset, amount);
+        self.credit(chain, asset, amount)
+            .expect("non-negative by construction (guarded at entry)");
         Ok(amount)
     }
 

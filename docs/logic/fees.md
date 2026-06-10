@@ -105,21 +105,34 @@ rejects it as unimplemented (#143), so it can never silently charge zero.
 
 - **Money conservation — perp close, settlement floor (#117).** The fee is
   subtracted inside the settlement, and the whole settlement is floored at zero:
-  `settlement = (returned_margin + realized_pnl - fee).max(0)` (`perp.rs:192`).
-  A loss can never exceed the posted margin for the closed fraction; an underwater
-  close returns nothing rather than clawing back unposted collateral. So the fee
-  cannot push settlement negative.
+  `settlement = (gross - fee).max(0)` with `gross = returned_margin +
+  realized_pnl` (`perp.rs`). A loss can never exceed the posted margin for the
+  closed fraction; an underwater close returns nothing rather than clawing back
+  unposted collateral. So the fee cannot push settlement negative.
+
+- **Fee reconciliation on clamped closes (#165).** The floor above means the
+  venue can only collect its close fee out of whatever `gross` the close
+  returns: `fee_collected = min(fee, max(gross, 0))`. On a bankrupt close
+  (`gross <= 0`) the fee is fully forgiven in cash; in the partial regime
+  (`0 < gross < fee`) only `gross` of it is collected. Both `record_fee` and
+  the fill's `fee_usd` report `fee_collected`, so one consistent number holds:
+  `sum(fill fee_usd) == fees_usd == fee cash actually paid`. The fill's
+  `realized_pnl_usd` stays the **full economic PnL** — it is a P&L statistic,
+  not a cash flow; the cash impact is bounded separately by the settlement
+  floor. The same rule applies on the partial-close branch. (The open fee can
+  never be forgiven: `margin + fee` is debited up front or the open is
+  rejected, so the open path records the full fee, which is always cash paid.)
 
 - **Perp open: fee must be funded as collateral.** At open, `margin + fee` is
   debited from USDC up front (`perp.rs:124`); if the account can't cover it the
   open is rejected. The fee is not financed by the position.
 
 - **Fees are recorded to the ledger total.** Every path calls
-  `ledger.record_fee(fee)` (`swap.rs:154,187`; `perp.rs:127,205`), accumulating
-  into the `Ledger::fees_usd` field (`portfolio-ledger/src/lib.rs:36`, mutated by
-  `record_fee` at `lib.rs:111-113`). Recorded once per fill. For the swap buy it's
-  recorded after the balance mutation; for the perp full-close it's recorded after
-  the settlement credit (`perp.rs:194-205`).
+  `ledger.record_fee(..)` (swap buy/sell; perp open with the full fee, perp
+  close with `fee_collected`, #165), accumulating into the `Ledger::fees_usd`
+  field (`portfolio-ledger/src/lib.rs`). Recorded once per fill. For the swap
+  buy it's recorded after the balance mutation; for the perp full-close it's
+  recorded after the settlement credit.
 
 - **Determinism.** `fixed_bps` is pure `Decimal` arithmetic — no float, no
   reserve/volume lookup — so it's bit-for-bit deterministic across runs.
@@ -158,6 +171,16 @@ rejects it as unimplemented (#143), so it can never silently charge zero.
   `fee_usd == 0` and the fill is exactly at close (lines 326-328): the bps path
   collapses to no fee.
 
+`crates/execution-models/tests/issue_165_fee_reconciliation.rs` (#165):
+- `bankrupt_close_records_zero_fee_and_reconciles_with_cash` — `gross <= 0`:
+  fill `fee_usd` 0, `fees_usd` moves by 0, `realized_pnl_usd` stays the full
+  −150, and `initial − final cash == fees collected + margin lost` exactly.
+- `partially_covered_close_collects_only_gross` — `0 < gross < fee`: collected
+  fee equals `gross` (0.2 of a 0.4501 fee).
+- `healthy_close_still_records_the_full_fee` — `gross >= fee` unchanged.
+- `bankrupt_partial_close_forgives_fee_too` — same rule on the partial-close
+  branch.
+
 `unimplemented_policy_values_are_rejected_not_ignored`
 (`crates/simulation-policies/tests/policies.rs`) pins that selecting
 `venue_fee_table` fails validation.
@@ -165,3 +188,4 @@ rejects it as unimplemented (#143), so it can never silently charge zero.
 ## Related issues
 
 - [#143](https://github.com/ftvision/catalyst-backtest/issues/143) — venue_fee_table fee model is a zero stub
+- [#165](https://github.com/ftvision/catalyst-backtest/issues/165) — recorded fees equal fees actually collected on clamped closes — FIXED

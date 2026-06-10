@@ -120,7 +120,9 @@ fn open_perp(
         None => None,
     };
 
-    // Margin + fee must be available as USDC collateral.
+    // Margin + fee must be available as USDC collateral. Unlike the close path,
+    // the open fee can never be forgiven: it is debited up front and the open is
+    // rejected if unfunded, so `record_fee(fee)` here always equals cash paid.
     if let Err(e) = ledger.debit(venue, "USDC", margin + fee) {
         return Execution::rejected(e.to_string());
     }
@@ -191,20 +193,33 @@ fn close_perp(
     // than crediting a negative amount (which would claw back unposted collateral
     // the trader never deposited). Beyond this the position is bankrupt — see
     // liquidation handling.
-    let settlement = (returned_margin + realized_pnl - fee).max(Decimal::ZERO);
+    //
+    // Fee reconciliation (#165): the zero floor means the venue can only take
+    // its fee out of whatever gross value (`returned_margin + realized_pnl`)
+    // the close actually returns. On a bankrupt close (`gross <= 0`) the fee is
+    // forgiven in cash, and on a partial-coverage close (`0 < gross < fee`)
+    // only `gross` of it is collected — so the *recorded* fee (and the fill's
+    // `fee_usd`) is the collected amount, keeping `fees_usd` reconciled with
+    // actual cash movement. `realized_pnl_usd` stays the full economic PnL
+    // (a P&L statistic, not a cash flow).
+    let gross = returned_margin + realized_pnl;
+    let fee_collected = fee.min(gross.max(Decimal::ZERO));
+    let settlement = (gross - fee).max(Decimal::ZERO);
 
     if close_base == position.size {
         ledger
             .close_perp(venue, &cfg.symbol, settlement)
-            .expect("position exists");
+            .expect("position exists; settlement floored non-negative");
     } else {
         let mut reduced = position.clone();
         reduced.size -= close_base;
         reduced.margin_usd -= returned_margin;
         ledger.set_perp(reduced);
-        ledger.credit(venue, "USDC", settlement);
+        ledger
+            .credit(venue, "USDC", settlement)
+            .expect("non-negative by construction (floored above)");
     }
-    ledger.record_fee(fee);
+    ledger.record_fee(fee_collected);
 
     Execution::Executed(Fill {
         kind: "perp_close".into(),
@@ -214,7 +229,7 @@ fn close_perp(
         price: Some(price),
         amount: Some(close_base),
         value_usd: Some(notional_closed),
-        fee_usd: fee,
+        fee_usd: fee_collected,
         gas_usd: Decimal::ZERO,
         realized_pnl_usd: Some(realized_pnl),
         amm_theoretical_price: None,

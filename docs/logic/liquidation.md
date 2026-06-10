@@ -133,6 +133,14 @@ value never silently means "no maintenance buffer".
   retroactively applied — consistent with the engine's no-intra-tick-reordering
   rule.
 
+- **Funding can trigger liquidation the same tick (#165).** Under strict
+  balance policy a funding charge larger than free cash deducts the shortfall
+  from the position's posted margin (see
+  [funding-accrual](funding-accrual.md)). That happens in `accrue_funding`,
+  which runs *before* this check in the same tick — so a margin reduction that
+  breaches maintenance is caught immediately at the tightened `p_liq`, settling
+  whatever residual margin the cascade left.
+
 - **Degenerate pin.** `maintenance_margin_ratio = "0"` reproduces the exact
   pre-#120 behavior: trigger at `unrealized_pnl ≤ −margin`, settlement clamped
   to zero at any gap. Pinned by

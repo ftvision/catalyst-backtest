@@ -21,6 +21,7 @@ EventType = Literal[
     "action_executed",
     "action_rejected",
     "funding_applied",
+    "funding_shortfall",
     "yield_accrued",
     "liquidation",
     "gas_charged",
