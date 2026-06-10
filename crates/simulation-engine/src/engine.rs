@@ -446,13 +446,34 @@ fn evaluate_signals(
                 }
             }
             SignalDef::Combinator { op, inputs } => {
-                let read = |id: &str| conditions.get(id).copied().flatten().unwrap_or(false);
-                let result = match op {
-                    CombinatorOp::All => inputs.iter().all(|i| read(i)),
-                    CombinatorOp::Any => inputs.iter().any(|i| read(i)),
-                    CombinatorOp::Not => !inputs.first().map(|i| read(i)).unwrap_or(false),
-                };
-                Some(result)
+                // Kleene three-valued logic: a missing input (`None`) only
+                // forces the result to `None` when the output actually depends
+                // on it. A determined `Some(false)` (for `all`) or `Some(true)`
+                // (for `any`) wins regardless of gaps, so a fire never hinges
+                // on the value of missing data and wide `any`/`all` trees are
+                // not over-suppressed by a single gapped leaf.
+                let read = |id: &str| conditions.get(id).copied().flatten();
+                match op {
+                    CombinatorOp::All => {
+                        if inputs.iter().any(|i| read(i) == Some(false)) {
+                            Some(false)
+                        } else if inputs.iter().any(|i| read(i).is_none()) {
+                            None
+                        } else {
+                            Some(true)
+                        }
+                    }
+                    CombinatorOp::Any => {
+                        if inputs.iter().any(|i| read(i) == Some(true)) {
+                            Some(true)
+                        } else if inputs.iter().any(|i| read(i).is_none()) {
+                            None
+                        } else {
+                            Some(false)
+                        }
+                    }
+                    CombinatorOp::Not => inputs.first().and_then(|i| read(i)).map(|b| !b),
+                }
             }
         };
         conditions.insert(signal.id.as_str(), cond);
@@ -463,7 +484,8 @@ fn evaluate_signals(
         if signal.targets.is_empty() {
             continue;
         }
-        // A leaf with no data this tick: skip without disturbing crossing state.
+        // No data this tick (gapped leaf, or a combinator whose result depends
+        // on a gapped input): skip without disturbing crossing state.
         let condition = match conditions.get(signal.id.as_str()).copied().flatten() {
             Some(c) => c,
             None => continue,

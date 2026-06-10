@@ -27,15 +27,35 @@ read (`engine.rs:364-392`). Two signal kinds (`exec_graph.rs:22-28`):
 | Kind | Rule | Code |
 | --- | --- | --- |
 | `Threshold` (leaf) | `eval_threshold(lhs, operator, rhs)` over a market-data `Source` (price/funding/yield/gas/derived) vs. a `Reference` (`const`/`source`/`var`) | `engine.rs:366-380`, `exec_graph.rs:130-140` |
-| `Combinator` | `all` = every input true, `any` = some input true, `not` = first input negated | `engine.rs:381-389` |
+| `Combinator` | `all` = every input true, `any` = some input true, `not` = first input negated — Kleene over missing inputs, see below | `engine.rs:381-389` |
 
 `eval_threshold` supports `<`, `<=`, `>`, `>=`, `==`, `!=`; any other operator
 string evaluates to `false` (`exec_graph.rs:131-139`).
 
 A leaf whose `source` or `reference` has **no data this tick** yields condition
-`None` (a warning is pushed) rather than `false` (`engine.rs:374-378`). A
-combinator reading a `None` input treats it as `false` via
-`.flatten().unwrap_or(false)` (`engine.rs:382`).
+`None` (a warning is pushed) rather than `false` (`engine.rs:374-378`).
+Combinators evaluate over `Option<bool>` with **Kleene three-valued logic**
+(#161): a missing input only makes the result missing when the output actually
+*depends* on it — a `Some(false)` input decides an `all`, and a `Some(true)`
+input decides an `any`, regardless of gaps.
+
+| Inputs | `all` (and) | `any` (or) |
+| --- | --- | --- |
+| any input `false` | `false` | — |
+| any input `true` | — | `true` |
+| otherwise, any input *missing* | *missing* | *missing* |
+| all inputs `true` / all inputs `false` | `true` | `false` |
+
+| Input | `not` |
+| --- | --- |
+| `true` | `false` |
+| `false` | `true` |
+| *missing* | *missing* |
+
+So a fire never hinges on the **value** of missing data, and a single gapped
+leaf doesn't over-suppress a wide `any`/`all` tree whose result is already
+determined. A `None` combinator pushes **no extra warning** — the gapped leaf
+already warned, and duplicating it would spam nested graphs.
 
 ### The firing semantics (Phase 2)
 
@@ -139,6 +159,12 @@ fires**, against that tick's bar. A *limit* action triggered by a fire only
 - **Data gaps don't corrupt crossing state.** A `None` condition skips the signal
   and leaves `signal_state` untouched (`engine.rs:399-403`), so the **next** real
   observation is compared against the last *real* state, not a phantom `false`.
+  This holds for **combinators** too (#161): Kleene propagation means a
+  combinator whose result depends on a gapped input is itself `None` — it
+  neither fires (`not(gap)` is no longer a free `true`) nor advances crossing
+  state. When the gap *doesn't* matter (`all` with a `false` input, `any` with a
+  `true` input) the determined result is recorded and may legitimately fire or
+  update state.
 - **`fire_count` is incremented only on an actual fire** (`engine.rs:450`), so
   suppressed ticks (failed edge/cooldown) don't burn a `max_count` slot.
 - **`last_fired` is set on every fire** (`engine.rs:451`), so the cooldown clock
@@ -192,6 +218,25 @@ fires**, against that tick's bar. A *limit* action triggered by a fire only
   threshold (`signals.rs:250-271`).
 - `yield_source_without_candles_drives_ticks` — signals fire and chain actions even
   when a non-candle (yield-only) series drives the tick clock (`signals.rs:191-223`).
+
+`crates/simulation-engine/tests/issue_161_combinator_gaps.rs` — Kleene logic over
+missing data (#161), on a two-venue setup where one candle series has an interior
+hole so a venue-pinned leaf gaps at one tick:
+- `not_over_gapped_leaf_neither_fires_nor_advances_crossing_state` — `not(gap)` is
+  `None`: no fire on the gap tick, crossing state frozen, and a later genuine
+  false→true crossing fires exactly once.
+- `all_with_false_and_missing_is_determined_false_and_updates_state` —
+  `all(false, missing)` = `Some(false)`: no fire, state legitimately drops to false
+  so the next true crossing fires.
+- `all_with_true_and_missing_is_none_and_freezes_state` — `all(true, missing)` =
+  `None`: no fire, state frozen (no phantom re-crossing after the gap).
+- `any_with_true_and_missing_is_determined_true_and_fires` — `any(true, missing)` =
+  `Some(true)`: **fires** despite the gap (guards against over-strict
+  None-propagation).
+- `any_with_false_and_missing_is_none_and_freezes_state` — `any(false, missing)` =
+  `None`: no fire, state frozen.
+- `nested_combinator_propagates_none` — `all(true, not(gap))` is `None`: missing
+  propagates through nested combinators.
 
 ## Related issues
 
