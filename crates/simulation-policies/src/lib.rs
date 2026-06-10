@@ -137,6 +137,12 @@ pub struct ResolvedPolicy {
     pub price_selection: PriceSelection,
     pub slippage_model: SlippageModel,
     pub slippage_bps: String,
+    /// Additional impact, in bps, at 100% bar participation for the
+    /// `volume_based` slippage model: `effective_bps = slippage_bps +
+    /// coef·√(amount/bar_volume)` (#169). Consumed only when `slippage_model =
+    /// volume_based`; [`validate`] guarantees it parses as a non-negative
+    /// decimal under that model.
+    pub volume_impact_coef_bps: String,
     pub fee_model: FeeModel,
     pub fee_bps: String,
     pub gas_model: GasModel,

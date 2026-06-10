@@ -262,6 +262,10 @@ bps — so large orders pay realistic impact and small orders don't. It falls ba
 to the reference price when no pool data is present. `order_book_depth` (HL perps)
 is not modeled yet.
 
+`volume_based` (#137) scales the configured `bps` by bar participation via the
+square-root law; its impact coefficient is the `volume_impact_coef_bps` knob
+(#169) — extra bps at 100% participation, default `"50"`.
+
 Example:
 
 ```text
@@ -511,7 +515,8 @@ use liquidity index / aToken accounting
     "price_selection": "next_open",
     "slippage": {
       "model": "fixed_bps",
-      "bps": "10"
+      "bps": "10",
+      "volume_impact_coef_bps": "50"
     },
     "fees": {
       "model": "fixed_bps",

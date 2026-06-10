@@ -603,6 +603,43 @@ fn volume_based_charges_more_for_a_larger_share_of_bar_volume() {
 }
 
 #[test]
+fn volume_impact_coefficient_is_a_policy_knob_that_scales_the_impact_term() {
+    // #169: the √-law coefficient is the policy's `volume_impact_coef_bps`,
+    // not an engine constant. Same trade, same participation (p = 0.25,
+    // √p = 0.5); two coefficients give two effective bps:
+    //   coef "50"  -> 10 + 50·0.5  = 35 bps -> ~2007 on a 2000 close
+    //   coef "100" -> 10 + 100·0.5 = 60 bps -> ~2012
+    let market = FakeMarket::new().with_bar_volume("base", "ETH", "2000", "1000");
+    let buy_with_coef = |coef: &str| {
+        let policy = ResolvedPolicy {
+            slippage_model: SlippageModel::VolumeBased,
+            slippage_bps: "10".into(),
+            volume_impact_coef_bps: coef.into(),
+            ..strict_v1()
+        };
+        execute_swap(
+            &mut ledger_with("base", "USDC", "10000000"),
+            &market,
+            &policy,
+            &swap("USDC", "ETH", "500000", "base"), // base 250 ETH of 1000 -> p = 0.25
+        )
+        .fill()
+        .unwrap()
+        .price
+        .unwrap()
+    };
+
+    let default_coef = buy_with_coef("50");
+    let double_coef = buy_with_coef("100");
+
+    assert!((default_coef - d("2007")).abs() < d("0.5"), "coef 50 ~2007, was {default_coef}");
+    assert!((double_coef - d("2012")).abs() < d("0.5"), "coef 100 ~2012, was {double_coef}");
+    assert!(double_coef > default_coef, "a larger coefficient must charge more");
+    // coef "0" removes the participation term entirely: pure fixed_bps.
+    assert_eq!(buy_with_coef("0"), d("2002"), "coef 0 degenerates to fixed_bps");
+}
+
+#[test]
 fn volume_based_falls_back_to_fixed_bps_when_bar_has_no_volume() {
     // Dune-derived candles carry no volume -> fall back to the configured bps,
     // never silently zero. Same bar without volume => 2002, like fixed_bps.
