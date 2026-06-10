@@ -26,15 +26,22 @@ sign     = +1 if Long, -1 if Short                             // (engine.rs:994
 payment  = sign · rate · notional   // positive = WE PAY        // (engine.rs:998)
 ```
 
-The payment is then applied as a USDC balance change and recorded:
+The payment is then applied as a USDC balance change and recorded. Receipts
+(`payment < 0`) are a plain credit; charges (`payment > 0`) go through the
+**shortfall cascade** under strict policy (see below, #165):
 
 ```
-ledger.credit(venue, "USDC", -payment)   // pay → balance falls   (engine.rs:1002)
-ledger.record_funding(payment)           // signed running total  (engine.rs:1003)
+payment < 0          → credit(venue, "USDC", -payment)        // receive
+payment > 0, allow_negative → debit(venue, "USDC", payment)   // overdraw = explicit debt
+payment > 0, strict  → cash → margin → forgive cascade        // never overdraws
+ledger.record_funding(collected)   // signed running total of funding that MOVED money
 ```
 
-and a `funding_applied` event is emitted carrying the summed `rate` and the
-`payment_usd` (`engine.rs:1004-1015`).
+and a `funding_applied` event is emitted carrying the summed `rate`, the owed
+`payment_usd`, and `collected_usd` (the part that actually moved cash or
+margin; differs from `payment_usd` only when the cascade forgave a remainder
+at true bankruptcy). The reporter sums `collected_usd` into
+`total_funding_usd`, so reported funding reconciles with cash movements.
 
 `p.size` is base units and **always non-negative**; direction is carried by
 `p.side` (`crates/portfolio-ledger/src/position.rs:24-35`), so the `sign` factor
@@ -61,13 +68,15 @@ directly: `sign = +1` for a long, `-1` for a short (`engine.rs:994-997`), and
 `payment = sign · rate · notional` where **positive `payment` means we pay**
 (comment, `engine.rs:998`).
 
-- Long + positive rate → `payment > 0` → `credit(-payment)` lowers USDC. Long pays.
-- Short + positive rate → `payment < 0` → `credit(+payment)` raises USDC. Short receives.
+- Long + positive rate → `payment > 0` → USDC is debited (the cascade below). Long pays.
+- Short + positive rate → `payment < 0` → `credit(-payment)` raises USDC. Short receives.
 - A negative rate flips both (longs receive, shorts pay).
 
 `record_funding` stores the signed total (positive = paid by us; comment at
-`crates/portfolio-ledger/src/lib.rs:119-122`), so the reporter can show net
-funding paid vs. received.
+`crates/portfolio-ledger/src/lib.rs`), so the reporter can show net
+funding paid vs. received. The recorded amount is funding actually
+*collected* — a remainder the cascade forgave at true bankruptcy never moved
+money and is excluded (#165).
 
 ## Notional basis — marked, not entry
 
@@ -115,16 +124,43 @@ If the summed `rate` is zero (no funding points in the window, or they net to
 zero) the position is skipped before computing a payment (`engine.rs:989-991`),
 and a zero payment is likewise skipped (`engine.rs:999-1001`) — no empty events.
 
-## Where the payment lands — USDC at the venue
+## Where the payment lands — the shortfall cascade (#165)
 
-The cash flow is a `credit`/debit on the position's **own venue `USDC`
-balance** (`engine.rs:1002`), `credit` being plain signed addition
-(`crates/portfolio-ledger/src/lib.rs:78-86`). Funding therefore moves free USDC,
-not the position's posted margin (`margin_usd` is untouched here). This means a
-sustained adverse funding stream draws down the venue's cash balance; under a
-non-`allow_negative` balance policy that balance can be driven negative by
-`credit` (which does not bounds-check, unlike `debit`, `lib.rs:88-107`) — funding
-is modeled as an unconditional accrual, not a rejectable action.
+The cash flow targets the position's **own venue `USDC` balance**. Funding is
+genuinely owed — it can't be "rejected" like an order — but the ledger no
+longer accepts the negative credit that used to let a large charge silently
+overdraw the balance even under `strict_v1` (`Ledger::credit` now rejects
+negative amounts, `crates/portfolio-ledger/src/lib.rs`). The charge side is an
+explicit, policy-dependent decision in `accrue_funding`:
+
+- **Receive** (`payment < 0`): plain `credit(venue, "USDC", -payment)`.
+- **Pay under `allow_negative`**: `debit(venue, "USDC", payment)` — the
+  overdraw guard is off, the balance goes negative, and the full charge is
+  collected as explicit margin debt. This is the historical behavior, kept as
+  the opt-in debt model.
+- **Pay under strict** (`insufficient_balance = reject`, every shipped
+  profile's default): the **cash → margin → forgive cascade**:
+
+  ```
+  paid_cash   = min(payment, max(balance, 0))   // never overdraws
+  shortfall   = payment - paid_cash
+  from_margin = min(shortfall, p.margin_usd)    // position pays from its own collateral
+  forgiven    = shortfall - from_margin         // non-zero only at true bankruptcy
+  record_funding(payment - forgiven)            // only money that moved
+  ```
+
+  When `shortfall > 0` a **`funding_shortfall` event** is emitted with detail
+  `{venue, symbol, payment, paid_cash, from_margin, forgiven}`. The margin
+  deduction (via `set_perp`) tightens the position's liquidation price, and
+  because `check_liquidations` runs immediately after `accrue_funding` in the
+  tick loop, a maintenance breach (mmr default `0.0125`, #120) liquidates the
+  position the **same tick**, settling whatever residual margin remains. A
+  position whose reduced margin stays above maintenance simply survives with a
+  tighter `p_liq`.
+
+Positions iterate in `BTreeMap` `(venue, symbol)` order, so when two positions
+on one venue are charged in the same tick, the later one deterministically sees
+the cash the earlier one drained (and cascades into its own margin if needed).
 
 ## Correctness notes / edge cases
 
@@ -156,12 +192,11 @@ is modeled as an unconditional accrual, not a rejectable action.
 
 - Only `historical` and `none` exist — no constant/modeled funding rate option
   (`lib.rs:99-102`).
-- Funding does not interact with margin or trigger liquidation directly; it only
-  moves free USDC. Liquidation is a separate close-only mark check
-  (`check_liquidations`, `engine.rs:1053`) keyed on unrealized PnL vs. margin
-  (`p.unrealized_pnl(mark) <= -p.margin_usd`, `engine.rs:1067`), not on a
-  funding-depleted balance.
 - No counterparty leg (see money-conservation note above).
+
+(Funding *does* interact with margin and liquidation since #165: a strict-policy
+shortfall deducts from the position's margin, and the maintenance check the same
+tick can liquidate it. Under `allow_negative` it remains a free-cash-only flow.)
 
 ## Tests
 
@@ -176,10 +211,28 @@ is modeled as an unconditional accrual, not a rejectable action.
   and (via the positive `payment_usd`) the long-pays-positive sign
   (`funding_interval.rs:93-94`).
 
-(The test exercises the `Long`/positive-rate path; the short and negative-rate
-sign flips are inspectable in `accrue_funding` at `engine.rs:994-998` but are not
-separately asserted in this test file.)
+(The test exercises the `Long`/positive-rate path; the short receive-side is
+asserted in `issue_165_funding_shortfall.rs` below.)
+
+`crates/simulation-engine/tests/issue_165_funding_shortfall.rs` — the cascade:
+
+- `shortfall_cascades_from_cash_into_margin` — charge 5 against cash 2: cash
+  exactly 0, margin 100 → 97, event `{payment 5, paid_cash 2, from_margin 3,
+  forgiven 0}`, position survives.
+- `zero_cash_pays_funding_entirely_from_margin` — `paid_cash` 0 edge.
+- `margin_deduction_breaching_maintenance_liquidates_same_tick` — charge 92
+  leaves margin 10 < 12.5 maintenance; liquidated at the same tick's ts,
+  residual 10 settled.
+- `bankrupt_funding_forgives_remainder_and_liquidates_with_zero_residual` —
+  charge 150 vs cash 2 + margin 100: `forgiven` 48, `collected_usd` 102,
+  same-tick liquidation settles 0; the whole initial balance reconciles.
+- `second_position_same_tick_sees_drained_cash` — deterministic BTreeMap order;
+  only the later position falls short.
+- `allow_negative_policy_still_overdraws_instead_of_cascading` — regression pin
+  for the explicit debt model (balance −3, margin intact, no shortfall event).
+- `receiving_funding_still_credits_cash` — the receive side is untouched.
 
 ## Related issues
 
 - [#118](https://github.com/ftvision/catalyst-backtest/issues/118) — accrual over actual elapsed time — FIXED
+- [#165](https://github.com/ftvision/catalyst-backtest/issues/165) — funding shortfall is an explicit cascade (cash → margin → forgive), never a silent overdraw — FIXED

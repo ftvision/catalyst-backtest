@@ -89,8 +89,15 @@ A backtest must never act on information unavailable at decision time.
   close settles at zero rather than crediting negative (clawing back unposted
   collateral). A swap **sell is rejected** when fee+gas exceed proceeds, so no
   negative balance is minted (#117, merged; see [liquidation](liquidation.md)).
-- Balance debits are guarded; under non-`allow_negative` policy a balance can't
-  go negative through the normal paths.
+- Ledger balance moves are **direction-typed** (#165): `credit` and `debit`
+  both reject negative amounts under every policy, so no sign trick can bypass
+  the overdraw guard; `close_perp` likewise rejects a negative settlement.
+  Under non-`allow_negative` policy a balance can't go negative through any
+  path — a funding charge larger than free cash cascades **cash → position
+  margin → forgive** (with a `funding_shortfall` event and a possible same-tick
+  liquidation) instead of silently overdrawing. Recorded fees and funding equal
+  the cash that actually moved (a bankrupt close's forgiven fee and a
+  bankrupt account's forgiven funding are not counted).
 - ⚠️ **Tracked:** resting limit orders don't yet *reserve* the balance they'd
   spend, so equity can transiently over-count an open order's cash (#124).
 
@@ -127,6 +134,7 @@ margin and unrealized PnL + yield principal and accrued (see
 | --- | --- |
 | Funding/yield accrual over elapsed time | ✅ fixed (#118) |
 | Leverage loss capped at margin; no negative-settlement clawback | ✅ fixed (#117) |
+| Ledger rejects negative credits/debits/settlements; funding shortfall cascades cash → margin → forgive (`funding_shortfall` event, same-tick liquidation); recorded fees/funding = cash actually collected | ✅ fixed (#165) |
 | `amm_price_impact` falls back to `fixed_bps` (never silent zero) | ✅ fixed (#136) |
 | `volume_based` slippage (square-root law) | ✅ implemented (#137) |
 | `volume_based` impact coefficient is a policy knob (`fills.slippage.volume_impact_coef_bps`, default "50"), validated when consumed and echoed in the executed policy | ✅ fixed (#169) |

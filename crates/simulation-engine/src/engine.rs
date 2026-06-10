@@ -1344,8 +1344,76 @@ fn accrue_funding(
         if payment.is_zero() {
             continue;
         }
-        ledger.credit(&p.venue, "USDC", -payment);
-        ledger.record_funding(payment);
+        // Forgiven remainder of the charge (strict cascade only; non-zero only
+        // at true bankruptcy): what `funding_applied.collected_usd` subtracts
+        // from the owed `payment_usd`.
+        let mut forgiven = Decimal::ZERO;
+        if payment < Decimal::ZERO {
+            // We receive funding: a plain, non-negative credit.
+            ledger
+                .credit(&p.venue, "USDC", -payment)
+                .expect("non-negative by construction (payment < 0)");
+            ledger.record_funding(payment);
+        } else if policy.insufficient_balance == InsufficientBalance::AllowNegative {
+            // `allow_negative` keeps the explicit margin-debt model: the debit's
+            // overdraw guard is off, so the balance goes negative and the full
+            // charge is collected as debt.
+            ledger
+                .debit(&p.venue, "USDC", payment)
+                .expect("allow_negative ledger never rejects an overdraw");
+            ledger.record_funding(payment);
+        } else {
+            // Strict policy: funding-shortfall cascade (#165). Funding is owed
+            // unconditionally, but the account can't overdraw — so pay from
+            // free cash first, then deduct the remainder from the position's
+            // posted margin, and only at true bankruptcy (cash and margin both
+            // exhausted) forgive the rest. `check_liquidations` runs right
+            // after `accrue_funding` in `run`'s tick loop, so a margin
+            // reduction that breaches maintenance tightens p_liq and the
+            // position is liquidated this same tick — no extra check needed
+            // here. Positions iterate in BTreeMap (venue, symbol) order, so a
+            // later position on the same venue deterministically sees the cash
+            // an earlier one drained.
+            let cash = ledger.balance(&p.venue, "USDC").max(Decimal::ZERO);
+            let paid_cash = payment.min(cash);
+            ledger
+                .debit(&p.venue, "USDC", paid_cash)
+                .expect("clamped to available balance");
+            let shortfall = payment - paid_cash;
+            if shortfall > Decimal::ZERO {
+                let from_margin = shortfall.min(p.margin_usd);
+                let mut reduced = p.clone();
+                reduced.margin_usd -= from_margin;
+                ledger.set_perp(reduced);
+                forgiven = shortfall - from_margin;
+                events.push(Event {
+                    ts: ts_iso.to_string(),
+                    event_type: "funding_shortfall".into(),
+                    node_id: None,
+                    reason: Some(format!(
+                        "funding charge {} exceeds free USDC on {}: {} paid from cash, {} deducted from {} margin, {} forgiven",
+                        payment.normalize(),
+                        p.venue,
+                        paid_cash.normalize(),
+                        from_margin.normalize(),
+                        p.symbol,
+                        forgiven.normalize(),
+                    )),
+                    detail: Some(json!({
+                        "venue": p.venue,
+                        "symbol": p.symbol,
+                        "payment": payment.normalize().to_string(),
+                        "paid_cash": paid_cash.normalize().to_string(),
+                        "from_margin": from_margin.normalize().to_string(),
+                        "forgiven": forgiven.normalize().to_string(),
+                    })),
+                });
+            }
+            // The accumulator reflects funding actually collected (cash +
+            // margin); a forgiven remainder never moved money, so it must not
+            // inflate reported funding costs.
+            ledger.record_funding(payment - forgiven);
+        }
         events.push(Event {
             ts: ts_iso.to_string(),
             event_type: "funding_applied".into(),
@@ -1355,7 +1423,14 @@ fn accrue_funding(
                 "venue": p.venue,
                 "symbol": p.symbol,
                 "rate": rate.normalize().to_string(),
+                // The charge owed by the position this tick (signed: positive
+                // = we pay)...
                 "payment_usd": payment.normalize().to_string(),
+                // ...and the part that actually moved money (cash + margin).
+                // Differs from `payment_usd` only when the strict cascade
+                // forgave a remainder at true bankruptcy; the reporter sums
+                // this one so reported funding reconciles with cash (#165).
+                "collected_usd": (payment - forgiven).normalize().to_string(),
             })),
         });
     }

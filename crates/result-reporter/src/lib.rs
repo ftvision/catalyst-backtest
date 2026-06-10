@@ -221,7 +221,15 @@ fn costs(trace: &SimulationTrace) -> Costs {
                 fees += detail_dec(&event.detail, "fee_usd");
                 gas += detail_dec(&event.detail, "gas_usd");
             }
-            "funding_applied" => funding += detail_dec(&event.detail, "payment_usd"),
+            // Prefer `collected_usd` (funding that actually moved money; #165 —
+            // a strict-policy shortfall can forgive part of the owed
+            // `payment_usd` at true bankruptcy), falling back to `payment_usd`
+            // for traces that predate the field.
+            "funding_applied" => {
+                funding += detail_str(&event.detail, "collected_usd")
+                    .map(|s| dec(&s))
+                    .unwrap_or_else(|| detail_dec(&event.detail, "payment_usd"))
+            }
             "yield_accrued" => yield_ += detail_dec(&event.detail, "interest_usd"),
             _ => {}
         }
