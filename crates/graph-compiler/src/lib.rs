@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 use catalyst_contracts::graph::{
-    Graph, Node, NodeKind, NodeSubtype, PerpOrderConfig, PriceThresholdConfig, Reference, Source,
-    SwapConfig, ThresholdConfig, YieldConfig,
+    Amount, Graph, Node, NodeKind, NodeSubtype, PerpOrderConfig, PriceThresholdConfig, Reference,
+    Source, SwapConfig, ThresholdConfig, YieldConfig,
 };
 
 /// Assets treated as cash/quote (no price feed needed to value them in USD).
@@ -169,20 +169,104 @@ fn is_combinator(subtype: &NodeSubtype) -> bool {
     matches!(subtype, NodeSubtype::All | NodeSubtype::Any | NodeSubtype::Not)
 }
 
+/// Validate the `time_in_force` / `expire_after_bars` pair as a closed enum
+/// (#160). `time_in_force` accepts exactly `"gtc"` or `"good_til_bars"`:
+/// - an unknown value is rejected (it used to silently fall through to the
+///   `expire_after_bars` path, so a `"gct"` typo changed the order's lifetime);
+/// - `"good_til_bars"` requires `expire_after_bars` (without it, the order
+///   silently behaved as GTC);
+/// - `"gtc"` with `expire_after_bars` is contradictory (the expiry was
+///   silently ignored);
+/// - an absent TIF with `expire_after_bars` set stays legal: implicit
+///   good-til-bars, the long-standing behavior.
+fn validate_time_in_force(
+    time_in_force: Option<&str>,
+    expire_after_bars: Option<u32>,
+    node_id: &str,
+) -> Result<(), CompileError> {
+    let id = || Some(node_id.to_string());
+    match time_in_force {
+        None => Ok(()),
+        Some("gtc") => {
+            if expire_after_bars.is_some() {
+                return Err(CompileError::new(
+                    "time_in_force \"gtc\" contradicts expire_after_bars: a GTC order never \
+                     expires (drop expire_after_bars or use \"good_til_bars\")",
+                    id(),
+                ));
+            }
+            Ok(())
+        }
+        Some("good_til_bars") => {
+            if expire_after_bars.is_none() {
+                return Err(CompileError::new(
+                    "time_in_force \"good_til_bars\" requires expire_after_bars",
+                    id(),
+                ));
+            }
+            Ok(())
+        }
+        Some(other) => Err(CompileError::new(
+            format!("time_in_force {other:?} is not supported: expected \"gtc\" or \"good_til_bars\""),
+            id(),
+        )),
+    }
+}
+
+/// Validate a relative sizing value as a strictly positive decimal (#160).
+/// A malformed or non-positive percentage used to resolve to a zero-size order
+/// at runtime — silently sizing the action to nothing — instead of failing.
+fn validate_amount(amount: &Amount, field: &str, node_id: &str) -> Result<(), CompileError> {
+    if let Amount::Relative { value, .. } = amount {
+        let parsed: rust_decimal::Decimal = value.parse().map_err(|_| {
+            CompileError::new(
+                format!("{field}: relative sizing value {value:?} is not a valid decimal"),
+                Some(node_id.to_string()),
+            )
+        })?;
+        if parsed <= rust_decimal::Decimal::ZERO {
+            return Err(CompileError::new(
+                format!("{field}: relative sizing value {value:?} must be greater than zero"),
+                Some(node_id.to_string()),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_node(node: &Node) -> Result<Typed, CompileError> {
     let id = || Some(node.id.clone());
     let bad = |e: serde_json::Error, what: &str| {
         CompileError::new(format!("invalid {what} config: {e}"), Some(node.id.clone()))
     };
     match (&node.kind, &node.subtype) {
-        (NodeKind::Action, NodeSubtype::Swap) => serde_json::from_value(node.config.clone())
-            .map(Typed::Swap)
-            .map_err(|e| bad(e, "swap")),
-        (NodeKind::Action, NodeSubtype::PerpOrder) => serde_json::from_value(node.config.clone())
-            .map(Typed::Perp)
-            .map_err(|e| bad(e, "perp_order")),
+        (NodeKind::Action, NodeSubtype::Swap) => {
+            let cfg: SwapConfig =
+                serde_json::from_value(node.config.clone()).map_err(|e| bad(e, "swap"))?;
+            validate_time_in_force(cfg.time_in_force.as_deref(), cfg.expire_after_bars, &node.id)?;
+            validate_amount(&cfg.amount, "amount", &node.id)?;
+            Ok(Typed::Swap(cfg))
+        }
+        (NodeKind::Action, NodeSubtype::PerpOrder) => {
+            let cfg: PerpOrderConfig =
+                serde_json::from_value(node.config.clone()).map_err(|e| bad(e, "perp_order"))?;
+            validate_time_in_force(cfg.time_in_force.as_deref(), cfg.expire_after_bars, &node.id)?;
+            validate_amount(&cfg.size_usd, "size_usd", &node.id)?;
+            // The "all" sentinel is honored by swaps and yields only; for a perp
+            // it used to parse to 0 and surface as a confusing runtime rejection.
+            if cfg.size_usd.is_all() {
+                return Err(CompileError::new(
+                    "size_usd \"all\" is not supported for perp orders",
+                    id(),
+                ));
+            }
+            Ok(Typed::Perp(cfg))
+        }
         (NodeKind::Action, NodeSubtype::YieldDeposit | NodeSubtype::YieldWithdraw) => {
-            serde_json::from_value(node.config.clone()).map(Typed::Yield).map_err(|e| bad(e, "yield"))
+            let cfg: YieldConfig =
+                serde_json::from_value(node.config.clone()).map_err(|e| bad(e, "yield"))?;
+            validate_amount(&cfg.amount, "amount", &node.id)?;
+            Ok(Typed::Yield(cfg))
         }
         // `price_threshold` is sugar: desugar to a price Source + const Reference.
         (NodeKind::Signal, NodeSubtype::PriceThreshold) => {

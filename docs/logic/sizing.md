@@ -157,13 +157,18 @@ subtype in `execute_action` (`engine.rs:812-895`):
   handled (typically rejected) downstream by the execution model, not by
   `resolve_amount`.
 
-- **`value` parse failure defaults to 0.** `value.parse::<Decimal>().unwrap_or(Decimal::ZERO)`
-  (`engine.rs:920`) — a malformed percentage sizes to zero rather than aborting.
+- **Malformed `value` is rejected, never sized to zero (#160, fixed).** The graph
+  compiler validates every relative sizing value at compile time: it must parse
+  as a decimal and be strictly positive, with errors naming the node. As a
+  runtime backstop, `resolve_amount` returns an error (surfacing as
+  `action_rejected`) for any malformed value that slips through, instead of the
+  old `unwrap_or(Decimal::ZERO)` that silently sized the order to nothing.
 
 ### Known limitations
 
-- **Perp `"all"` is unsupported** (parses to 0 — `perp.rs:93`/`perp.rs:175` via
-  `parse`, `pricing.rs:123-125`). Only swaps and yields honor `"all"`.
+- **Perp `"all"` is rejected at compile time (#160, fixed)** — it used to parse
+  to 0 and surface as a confusing runtime rejection. Only swaps and yields
+  honor `"all"`.
 - **Intra-tick `pct_portfolio` staleness** (above) — by design, but a caveat for
   multi-action ticks.
 - `pct_position` for a swap is **rejected** at fire time (#121, fixed) — use
@@ -196,3 +201,4 @@ The `"all"` sentinel paths are covered in the execution-model crate's own tests
 
 - [#117](https://github.com/ftvision/catalyst-backtest/issues/117) — margin cap — FIXED
 - [#121](https://github.com/ftvision/catalyst-backtest/issues/121) — pct_position semantics (perp entry-price basis intended; swap rejection FIXED)
+- [#160](https://github.com/ftvision/catalyst-backtest/issues/160) — strict parsing of relative sizing values; perp `"all"` rejected — FIXED

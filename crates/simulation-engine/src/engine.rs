@@ -17,8 +17,8 @@ use catalyst_execution_models::{
 };
 use catalyst_portfolio_ledger::{Ledger, PerpPosition, PerpSide, YieldPosition};
 use catalyst_simulation_policies::{
-    resolve_policy, Funding, InsufficientBalance, LiquidationCheck, MissingRequired,
-    PriceSelection, Repeat, ResolvedPolicy, SignalTrigger, YieldAccrual,
+    parse_duration_secs, resolve_policy, Funding, InsufficientBalance, LiquidationCheck,
+    MissingRequired, PriceSelection, Repeat, ResolvedPolicy, SignalTrigger, YieldAccrual,
 };
 
 use crate::exec_graph::{eval_threshold, ActionNode, CombinatorOp, ExecGraph, Signal, SignalDef};
@@ -132,11 +132,19 @@ fn is_limit(order_type: &str) -> bool {
     order_type == "limit"
 }
 
-/// Resolve time-in-force to an optional bar count. `gtc` (or absent) never expires.
+/// Resolve time-in-force to an optional bar count. The compiler validates the
+/// TIF enum at compile time (#160): `gtc` never carries `expire_after_bars` and
+/// `good_til_bars` always does, so by the time we get here `gtc` means "never
+/// expires" and everything else honors `expire_after_bars`.
 fn resolve_expiry(time_in_force: &Option<String>, expire_after_bars: Option<u32>) -> Option<u32> {
     match time_in_force.as_deref() {
         Some("gtc") => None,
-        _ => expire_after_bars,
+        Some("good_til_bars") => expire_after_bars,
+        // Absent TIF with expire_after_bars set = implicit good-til-bars.
+        None => expire_after_bars,
+        // Unknown strings are rejected at graph compile time (#160); if one
+        // slips through, conservatively honor expire_after_bars as before.
+        Some(_) => expire_after_bars,
     }
 }
 
@@ -220,7 +228,7 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
     let exec_graph = ExecGraph::from_compiled(&compiled);
 
     let allow_negative = policy.insufficient_balance == InsufficientBalance::AllowNegative;
-    let mut ledger = initial_ledger(&input.config, allow_negative);
+    let mut ledger = initial_ledger(&input.config, allow_negative)?;
 
     let mut events: Vec<Event> = Vec::new();
     let mut snapshots: Vec<Snapshot> = Vec::new();
@@ -388,16 +396,30 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
     })
 }
 
-fn initial_ledger(config: &BacktestConfig, allow_negative: bool) -> Ledger {
+/// Build the starting ledger from `config.initial_portfolio`, rejecting any
+/// amount that doesn't parse as a non-negative decimal. A typo'd starting
+/// balance (`"10,000"`, `"1e4"`) must fail the run at startup, not silently
+/// start it broke at zero (#160).
+fn initial_ledger(config: &BacktestConfig, allow_negative: bool) -> Result<Ledger, EngineError> {
     let mut balances: BTreeMap<String, BTreeMap<String, Decimal>> = BTreeMap::new();
     for (venue, assets) in &config.initial_portfolio {
         let mut out = BTreeMap::new();
         for (asset, amount) in assets {
-            out.insert(asset.clone(), amount.parse().unwrap_or(Decimal::ZERO));
+            let parsed: Decimal = amount.parse().map_err(|_| {
+                EngineError::Config(format!(
+                    "initial_portfolio: amount {amount:?} for {venue}/{asset} is not a valid decimal"
+                ))
+            })?;
+            if parsed < Decimal::ZERO {
+                return Err(EngineError::Config(format!(
+                    "initial_portfolio: amount {amount:?} for {venue}/{asset} must be non-negative"
+                )));
+            }
+            out.insert(asset.clone(), parsed);
         }
         balances.insert(venue.clone(), out);
     }
-    Ledger::with_initial(balances, allow_negative)
+    Ok(Ledger::with_initial(balances, allow_negative))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -635,21 +657,6 @@ fn reference_value(
         Reference::Source { source } => source_value(source, index, ts, interval_secs),
         Reference::Var { var } => variables.get(var).copied(),
     }
-}
-
-/// Parse a duration like `30s`, `15m`, `1h`, `2d` into seconds.
-fn parse_duration_secs(s: &str) -> Option<i64> {
-    let s = s.trim();
-    let (num, unit) = s.split_at(s.len().checked_sub(1)?);
-    let n: i64 = num.parse().ok()?;
-    let mult = match unit {
-        "s" => 1,
-        "m" => 60,
-        "h" => 3600,
-        "d" => 86_400,
-        _ => return None,
-    };
-    Some(n * mult)
 }
 
 /// Parse `Graph.variables` (a JSON object of name -> decimal-ish value) into a
@@ -1139,7 +1146,13 @@ fn resolve_amount(
     match amount {
         Amount::Absolute(_) => Ok(amount.clone()),
         Amount::Relative { basis, value } => {
-            let pct = value.parse::<Decimal>().unwrap_or(Decimal::ZERO) / Decimal::from(100);
+            // Runtime backstop for #160: the compiler rejects malformed relative
+            // values at compile time, but if one reaches here anyway it must be
+            // rejected, never silently sized to zero.
+            let pct = value
+                .parse::<Decimal>()
+                .map_err(|_| format!("relative sizing value {value:?} is not a valid decimal"))?
+                / Decimal::from(100);
             let resolved = match basis {
                 AmountBasis::PctBalance => pct * balance,
                 AmountBasis::PctPosition => pct * position,
@@ -1371,4 +1384,47 @@ fn compute_equity(ledger: &Ledger, index: &BundleIndex, ts: i64) -> Decimal {
         }
     }
     equity
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #160 runtime backstop: a malformed relative sizing value is rejected,
+    /// never silently resolved to zero. Unit-tested here because `run()` always
+    /// compiles the graph first and the compiler now rejects such values, so
+    /// this arm is unreachable through the public entry point.
+    #[test]
+    fn resolve_amount_rejects_malformed_relative_value() {
+        let amount = Amount::Relative {
+            basis: AmountBasis::PctBalance,
+            value: "1O".to_string(), // letter O, not zero
+        };
+        let err = resolve_amount(
+            &amount,
+            Decimal::from(100),
+            Decimal::ZERO,
+            Decimal::from(1000),
+            Decimal::ONE,
+        )
+        .unwrap_err();
+        assert_eq!(err, "relative sizing value \"1O\" is not a valid decimal");
+    }
+
+    /// A well-formed relative value still resolves (guard against the backstop
+    /// over-rejecting).
+    #[test]
+    fn resolve_amount_resolves_valid_relative_value() {
+        let amount =
+            Amount::Relative { basis: AmountBasis::PctBalance, value: "50".to_string() };
+        let resolved = resolve_amount(
+            &amount,
+            Decimal::from(100),
+            Decimal::ZERO,
+            Decimal::from(1000),
+            Decimal::ONE,
+        )
+        .unwrap();
+        assert_eq!(resolved, Amount::Absolute("50".to_string()));
+    }
 }

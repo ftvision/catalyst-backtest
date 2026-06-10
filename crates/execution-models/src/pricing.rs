@@ -116,10 +116,12 @@ pub fn gas_usd(venue: &str, ctx: &dyn MarketContext, policy: &ResolvedPolicy) ->
     }
 }
 
-/// Parse a graph-config decimal string (limit prices, swap/yield amounts,
-/// perp sizes), defaulting to zero on malformed input. The leniency is
-/// load-bearing pending #160: callers treat the resulting zero as invalid and
-/// reject it explicitly downstream. Policy values must use [`parse_policy`].
+/// Parse a graph-config decimal string (limit prices, absolute swap/yield
+/// amounts, perp sizes), defaulting to zero on malformed input; callers treat
+/// the resulting zero as invalid and reject it explicitly downstream. Relative
+/// sizing values and perp `"all"` are validated strictly at graph compile time
+/// (#160), so this leniency now covers only absolute decimal fields. Policy
+/// values must use [`parse_policy`].
 pub fn parse(s: &str) -> Decimal {
     s.parse().unwrap_or(Decimal::ZERO)
 }

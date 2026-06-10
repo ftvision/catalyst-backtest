@@ -142,6 +142,24 @@ pub fn resolve_policy(contract: &ContractPolicy) -> Result<ResolvedPolicy, Polic
     Ok(p)
 }
 
+/// Parse a duration like `30s`, `15m`, `1h`, `2d` into seconds. This is the
+/// single authoritative duration grammar for policy knobs (`signals.cooldown`);
+/// [`validate`] guarantees any cooldown carried by a [`ResolvedPolicy`] parses,
+/// so consumers (the engine's cooldown gate) can rely on `Some`.
+pub fn parse_duration_secs(s: &str) -> Option<i64> {
+    let s = s.trim();
+    let (num, unit) = s.split_at(s.len().checked_sub(1)?);
+    let n: i64 = num.parse().ok()?;
+    let mult = match unit {
+        "s" => 1,
+        "m" => 60,
+        "h" => 3600,
+        "d" => 86_400,
+        _ => return None,
+    };
+    Some(n * mult)
+}
+
 fn parse_decimal(field: &str, value: &str) -> Result<f64, PolicyError> {
     let v: f64 = value
         .parse()
@@ -229,6 +247,18 @@ pub fn validate(p: &ResolvedPolicy) -> Result<(), PolicyError> {
     }
     if p.yield_accrual == YieldAccrual::ProtocolIndex {
         return Err(unimplemented_value("yield.accrual", "protocol_index", "#164"));
+    }
+
+    // Any cooldown present must parse — even when no cooldown-consuming trigger
+    // or repeat is active — because the value is echoed in the executed policy
+    // (`to_contract`) and must be honest. A malformed duration must never
+    // silently mean "no cooldown" (#160).
+    if let Some(cd) = &p.cooldown {
+        if parse_duration_secs(cd).is_none() {
+            return Err(PolicyError::Invalid(format!(
+                "signals.cooldown is not a valid duration: {cd:?} (expected <integer><s|m|h|d>, e.g. \"30m\")"
+            )));
+        }
     }
 
     // A cooldown trigger needs a cooldown duration.

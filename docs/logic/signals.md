@@ -187,10 +187,14 @@ fires**, against that tick's bar. A *limit* action triggered by a fire only
   never delayed.
 - **Validation couples the cooldown knobs.** `crossing_with_cooldown` requires
   `signals.cooldown`, `with_cooldown` requires `signals.cooldown`, and `max_count`
-  requires `signals.max_count`, else `resolve_policy` rejects the policy
-  (`resolve.rs:180-195`). A malformed cooldown string that fails `parse_duration_secs`
-  is **silently treated as no-cooldown** at the firing site (`engine.rs:438-439`),
-  not an error.
+  requires `signals.max_count`, else `resolve_policy` rejects the policy.
+  A malformed cooldown string is **rejected at policy validation** (#160, fixed):
+  whenever `signals.cooldown` is present it must parse via `parse_duration_secs`
+  (`<integer><s|m|h|d>`, now owned by `catalyst-simulation-policies`), even when
+  no cooldown-consuming trigger/repeat is active — the value is echoed in the
+  executed policy and must be honest. It can no longer silently mean
+  no-cooldown at the firing site. `apply_execution_overrides` re-runs the same
+  validation, so a malformed `action_cooldown` override is rejected too.
 
 ## Tests
 
@@ -241,3 +245,4 @@ hole so a venue-pinned leaf gaps at one tick:
 ## Related issues
 
 - [#121](https://github.com/ftvision/catalyst-backtest/issues/121) — cooldown boundary / no per-signal config
+- [#160](https://github.com/ftvision/catalyst-backtest/issues/160) — malformed cooldown rejected at policy validation — FIXED
