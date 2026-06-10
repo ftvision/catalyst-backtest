@@ -54,6 +54,7 @@ class SignalPolicy(StrictModel):
         "on_each_signal_fire"
     )
     cooldown: str | None = None
+    max_count: int | None = None
 
 
 class OrderingPolicy(StrictModel):
