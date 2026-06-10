@@ -351,6 +351,119 @@ fn var_reference_object_resolves_to_const() {
     assert_eq!(sig.config["reference"], serde_json::json!({"const": "1800"}));
 }
 
+// --- #160: strict config parsing (time_in_force enum, relative sizing values) ---
+
+/// A perp limit node with the given TIF/expiry fields spliced into the config.
+fn perp_limit_node(tif: Option<&str>, expire_after_bars: Option<u32>) -> serde_json::Value {
+    let mut config = serde_json::json!({
+        "symbol": "ETH", "side": "long", "size_usd": "500", "chain": "hyperliquid",
+        "order_type": "limit", "limit_price": "1900"
+    });
+    if let Some(t) = tif {
+        config["time_in_force"] = serde_json::json!(t);
+    }
+    if let Some(n) = expire_after_bars {
+        config["expire_after_bars"] = serde_json::json!(n);
+    }
+    serde_json::json!({"id": "buy1", "kind": "action", "subtype": "perp_order", "config": config})
+}
+
+fn single_node_graph(node: serde_json::Value) -> Graph {
+    graph(&serde_json::json!({ "nodes": [node], "edges": [] }))
+}
+
+#[test]
+fn unknown_time_in_force_is_rejected() {
+    let err = compile(&single_node_graph(perp_limit_node(Some("gct"), Some(3)))).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "time_in_force \"gct\" is not supported: expected \"gtc\" or \"good_til_bars\" (node \"buy1\")"
+    );
+}
+
+#[test]
+fn good_til_bars_without_expire_after_bars_is_rejected() {
+    // Without expire_after_bars, good_til_bars silently meant GTC.
+    let err = compile(&single_node_graph(perp_limit_node(Some("good_til_bars"), None))).unwrap_err();
+    assert!(err.to_string().contains("\"good_til_bars\" requires expire_after_bars"), "{err}");
+    assert_eq!(err.node_id.as_deref(), Some("buy1"));
+}
+
+#[test]
+fn gtc_with_expire_after_bars_is_rejected() {
+    // Contradictory intent: the expiry was silently ignored.
+    let err = compile(&single_node_graph(perp_limit_node(Some("gtc"), Some(3)))).unwrap_err();
+    assert!(err.to_string().contains("contradicts expire_after_bars"), "{err}");
+    assert_eq!(err.node_id.as_deref(), Some("buy1"));
+}
+
+#[test]
+fn valid_time_in_force_combinations_compile() {
+    // gtc alone, good_til_bars + expiry, and the implicit form (expiry without
+    // TIF — long-standing behavior) all remain legal.
+    compile(&single_node_graph(perp_limit_node(Some("gtc"), None))).unwrap();
+    compile(&single_node_graph(perp_limit_node(Some("good_til_bars"), Some(3)))).unwrap();
+    compile(&single_node_graph(perp_limit_node(None, Some(3)))).unwrap();
+    compile(&single_node_graph(perp_limit_node(None, None))).unwrap();
+}
+
+fn swap_node_with_amount(amount: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({"id": "buy1", "kind": "action", "subtype": "swap",
+        "config": {"from_asset": "USDC", "to_asset": "ETH", "amount": amount, "chain": "base"}})
+}
+
+#[test]
+fn malformed_relative_sizing_value_is_rejected() {
+    // "1O" (letter O) used to parse to 0 at runtime, silently sizing to nothing.
+    let amount = serde_json::json!({"basis": "pct_portfolio", "value": "1O"});
+    let err = compile(&single_node_graph(swap_node_with_amount(amount))).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "amount: relative sizing value \"1O\" is not a valid decimal (node \"buy1\")"
+    );
+}
+
+#[test]
+fn non_positive_relative_sizing_value_is_rejected() {
+    for value in ["0", "-10"] {
+        let amount = serde_json::json!({"basis": "pct_balance", "value": value});
+        let err = compile(&single_node_graph(swap_node_with_amount(amount))).unwrap_err();
+        assert!(err.to_string().contains("must be greater than zero"), "{value}: {err}");
+        assert_eq!(err.node_id.as_deref(), Some("buy1"));
+    }
+}
+
+#[test]
+fn malformed_relative_value_rejected_for_perp_and_yield_too() {
+    let perp = serde_json::json!({"id": "p", "kind": "action", "subtype": "perp_order",
+        "config": {"symbol": "ETH", "side": "long",
+                   "size_usd": {"basis": "pct_portfolio", "value": "2S"}, "chain": "hyperliquid"}});
+    let err = compile(&single_node_graph(perp)).unwrap_err();
+    assert!(err.to_string().contains("size_usd: relative sizing value \"2S\""), "{err}");
+
+    let dep = serde_json::json!({"id": "y", "kind": "action", "subtype": "yield_deposit",
+        "config": {"chain": "base", "protocol": "aave", "asset": "USDC",
+                   "amount": {"basis": "pct_balance", "value": "5O"}}});
+    let err = compile(&single_node_graph(dep)).unwrap_err();
+    assert!(err.to_string().contains("amount: relative sizing value \"5O\""), "{err}");
+}
+
+#[test]
+fn perp_size_usd_all_is_rejected() {
+    // "all" is honored by swaps/yields only; for a perp it parsed to 0 and
+    // surfaced as a confusing runtime rejection.
+    let perp = serde_json::json!({"id": "p", "kind": "action", "subtype": "perp_order",
+        "config": {"symbol": "ETH", "side": "long", "size_usd": "all", "chain": "hyperliquid"}});
+    let err = compile(&single_node_graph(perp)).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "size_usd \"all\" is not supported for perp orders (node \"p\")"
+    );
+
+    // ...while swap/yield "all" still compiles.
+    compile(&single_node_graph(swap_node_with_amount(serde_json::json!("all")))).unwrap();
+}
+
 #[test]
 fn settings_with_keys_warn_and_non_object_variables_error() {
     let g = serde_json::json!({

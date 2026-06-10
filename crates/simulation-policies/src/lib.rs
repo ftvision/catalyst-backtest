@@ -14,7 +14,7 @@ mod profiles;
 mod resolve;
 
 pub use profiles::{conservative_v1, research_v1, strict_v1};
-pub use resolve::{resolve, resolve_policy, validate, PolicyError};
+pub use resolve::{parse_duration_secs, resolve, resolve_policy, validate, PolicyError};
 
 use serde::{Deserialize, Serialize};
 

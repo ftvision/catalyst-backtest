@@ -95,13 +95,18 @@ Any order still resting when the run ends expires with reason
 | `time_in_force` | Result | Meaning |
 | --- | --- | --- |
 | `"gtc"` | `None` | good-til-cancelled — only expires at run end |
-| anything else / absent | `expire_after_bars` (as-is) | good-til-`n`-bars if a count is set, else GTC-like `None` |
+| `"good_til_bars"` | `expire_after_bars` | good-til-`n`-bars |
+| absent | `expire_after_bars` (as-is) | implicit good-til-`n`-bars if a count is set, else GTC-like `None` |
 
-Note this is a **passthrough**, not an enum: only the literal string `"gtc"` is
-special-cased. Any other `time_in_force` value (including `"good_til_bars"` as used
-in the engine test) is ignored as a label — the lifetime is driven purely by
-whether `expire_after_bars` is `Some`. There is no rejection of unknown TIF
-strings (limitation: a typo silently behaves as `expire_after_bars`).
+`time_in_force` is a **closed enum validated at graph compile time** (#160,
+fixed): the compiler rejects unknown TIF strings (a `"gct"` typo is a compile
+error naming the node, no longer a silent fall-through to the
+`expire_after_bars` path), `"good_til_bars"` without `expire_after_bars` (it
+used to silently mean GTC), and `"gtc"` *with* `expire_after_bars`
+(contradictory — the expiry used to be silently ignored). Absent TIF with
+`expire_after_bars` set remains legal as implicit good-til-bars.
+`resolve_expiry` keeps a conservative fallback arm (honor `expire_after_bars`)
+for unknown strings, which are unreachable post-validation.
 
 ## Which market / when to use
 

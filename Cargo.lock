@@ -545,6 +545,7 @@ name = "catalyst-graph-compiler"
 version = "0.1.0"
 dependencies = [
  "catalyst-contracts",
+ "rust_decimal",
  "serde",
  "serde_json",
 ]

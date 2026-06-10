@@ -153,6 +153,67 @@ fn crossing_with_cooldown_requires_cooldown() {
     assert_eq!(resolved.signal_trigger, SignalTrigger::CrossingWithCooldown);
 }
 
+// --- #160: malformed cooldown strings are rejected, never silent no-cooldown ---
+
+#[test]
+fn malformed_cooldown_is_rejected_at_resolve() {
+    let mut c = contract("strict_v1");
+    c.signals = Some(SignalPolicy {
+        trigger: Some("crossing_with_cooldown".to_string()),
+        repeat: None,
+        cooldown: Some("15x".to_string()),
+        max_count: None,
+    });
+    let err = resolve_policy(&c).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "invalid policy: signals.cooldown is not a valid duration: \"15x\" \
+         (expected <integer><s|m|h|d>, e.g. \"30m\")"
+    );
+}
+
+#[test]
+fn malformed_cooldown_is_rejected_even_without_a_cooldown_consumer() {
+    // The cooldown is validated unconditionally: it is echoed in the executed
+    // policy (`to_contract`) and must be honest even when the trigger/repeat
+    // don't consume it.
+    let mut c = contract("strict_v1");
+    c.signals = Some(SignalPolicy {
+        trigger: None, // strict default: crossing — no cooldown gate
+        repeat: None,
+        cooldown: Some("soon".to_string()),
+        max_count: None,
+    });
+    assert!(matches!(resolve_policy(&c), Err(PolicyError::Invalid(_))));
+}
+
+#[test]
+fn malformed_cooldown_is_rejected_via_execution_overrides() {
+    use catalyst_contracts::request::ExecutionOverrides;
+    let mut p = strict_v1();
+    let err = p
+        .apply_execution_overrides(&ExecutionOverrides {
+            signal_trigger: None,
+            slippage_bps: None,
+            gas_model: None,
+            action_cooldown: Some("15x".into()),
+        })
+        .unwrap_err();
+    assert!(err.to_string().contains("signals.cooldown is not a valid duration"), "{err}");
+}
+
+#[test]
+fn parse_duration_secs_grammar() {
+    use catalyst_simulation_policies::parse_duration_secs;
+    assert_eq!(parse_duration_secs("30s"), Some(30));
+    assert_eq!(parse_duration_secs("15m"), Some(900));
+    assert_eq!(parse_duration_secs("1h"), Some(3600));
+    assert_eq!(parse_duration_secs("2d"), Some(172_800));
+    assert_eq!(parse_duration_secs("15x"), None);
+    assert_eq!(parse_duration_secs("h"), None);
+    assert_eq!(parse_duration_secs(""), None);
+}
+
 #[test]
 fn non_decimal_slippage_is_rejected() {
     let mut c = contract("strict_v1");
