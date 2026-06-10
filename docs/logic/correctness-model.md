@@ -120,8 +120,6 @@ margin and unrealized PnL + yield principal and accrued (see
   **loudly**: a `valuation_warning` event + run warning name it, deduped once
   per run (#119(c), fixed). The venue-scoped mark carry-forward is bounded by
   `data.max_mark_staleness` when configured; default unbounded (#119(b), fixed).
-- ⚠️ **Tracked limitations:** cumulative `total_yield_usd` / `interest_usd`
-  carry asset units for non-stables (#166).
 
 ## What is correct today vs. tracked
 
@@ -139,7 +137,7 @@ margin and unrealized PnL + yield principal and accrued (see
 | Unpriced holdings excluded loudly (`valuation_warning` + run warning, deduped per run) | ✅ fixed (#119(c)) |
 | Sizing unification, same-tick equity snapshot | ⚠️ open (#119(d-e)) |
 | Non-stable yield positions marked to price; gas converted to asset units | ✅ fixed (#115) |
-| `total_yield_usd` / `interest_usd` in asset units for non-stables | ⚠️ open (#166) |
+| `total_yield_usd` / `interest_usd` converted to USD at the accrual tick's mark | ✅ fixed (#166) |
 | Liquidation marks the intra-bar wick | ✅ fixed (#120 wick half) |
 | Liquidation triggers at full bankruptcy only; no maintenance margin | ⚠️ open (#120) |
 | Resting limit orders don't reserve balance | ⚠️ open (#124) |

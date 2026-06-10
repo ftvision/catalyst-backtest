@@ -140,7 +140,11 @@ fn funding_and_yield_costs_summed() {
         json!([snap("2024-01-01T00:00:00Z", "1000")]),
         json!([
             {"ts": "2024-01-01T00:00:00Z", "type": "funding_applied", "detail": {"payment_usd": "1.5"}},
-            {"ts": "2024-01-01T01:00:00Z", "type": "yield_accrued", "detail": {"interest_usd": "0.3"}}
+            // #166: the engine emits asset-unit `interest` alongside the
+            // converted `interest_usd`; the reporter must sum the USD field,
+            // never the asset units (0.0001 ETH at 3000 -> 0.3 USD).
+            {"ts": "2024-01-01T01:00:00Z", "type": "yield_accrued",
+             "detail": {"interest": "0.0001", "price": "3000", "interest_usd": "0.3"}}
         ]),
         empty_portfolio(),
     );

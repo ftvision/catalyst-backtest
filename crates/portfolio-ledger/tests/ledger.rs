@@ -144,7 +144,8 @@ fn deposit_yield_debits_and_creates_position() {
 fn accrue_then_withdraw_all_returns_principal_plus_interest() {
     let mut l = initial("base", "USDC", "250");
     l.deposit_yield("aave", "USDC", "base", Some("usdc"), d("250")).unwrap();
-    l.accrue_yield("aave", "USDC", "base", Some("usdc"), d("1.25")).unwrap();
+    // USDC is a stablecoin, so interest_usd == asset-unit interest (#166).
+    l.accrue_yield("aave", "USDC", "base", Some("usdc"), d("1.25"), d("1.25")).unwrap();
     assert_eq!(l.yield_usd(), d("1.25"));
 
     let all = l.yield_value("aave", "USDC", "base", Some("usdc"));
@@ -160,7 +161,7 @@ fn accrue_then_withdraw_all_returns_principal_plus_interest() {
 fn partial_withdraw_draws_accrued_first() {
     let mut l = initial("base", "USDC", "250");
     l.deposit_yield("aave", "USDC", "base", Some("usdc"), d("250")).unwrap();
-    l.accrue_yield("aave", "USDC", "base", Some("usdc"), d("5")).unwrap();
+    l.accrue_yield("aave", "USDC", "base", Some("usdc"), d("5"), d("5")).unwrap();
     l.withdraw_yield("aave", "USDC", "base", Some("usdc"), d("3")).unwrap();
     let pos = l.yield_position("aave", "USDC", "base", Some("usdc")).unwrap();
     assert_eq!(pos.accrued, d("2")); // 5 - 3
