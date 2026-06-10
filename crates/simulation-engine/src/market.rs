@@ -160,9 +160,9 @@ impl BundleIndex {
     /// close <= ts carried forward). Unlike [`price_any`] this is VENUE-SCOPED:
     /// a position on one venue is never valued at another venue's candle that
     /// happens to share the symbol (#119(a)). Used by `mark_price` for marking
-    /// positions (equity, funding notional, liquidation). Sizing's unit price
-    /// still uses the exact-ts bar and rejects on gaps — unifying it with this
-    /// lookup is #119's open sub-bug (d).
+    /// positions (equity, funding notional, liquidation) and by
+    /// [`TickContext`]'s `mark_close` for sizing's unit price (#119(d)) — the
+    /// two read the same source, so sizing and equity agree on what is priced.
     ///
     /// `max_age_secs` bounds the carry-forward (#119(b)): when `Some`, only a
     /// close within `[ts - max_age_secs, ts]` is returned; an exact-`ts` bar is
@@ -225,11 +225,20 @@ impl BundleIndex {
 pub struct TickContext<'a> {
     pub index: &'a BundleIndex,
     pub ts: i64,
+    /// Staleness bound on the mark carry-forward (`data.max_mark_staleness`,
+    /// #119(b)), threaded in so [`MarketContext::mark_close`] applies the same
+    /// bound equity valuation uses. `None` = unbounded.
+    pub mark_max_age_secs: Option<i64>,
 }
 
 impl MarketContext for TickContext<'_> {
     fn bar(&self, venue: &str, symbol: &str) -> Option<Bar> {
         self.index.bar_at(venue, symbol, self.ts)
+    }
+    fn mark_close(&self, venue: &str, symbol: &str) -> Option<Decimal> {
+        // #119(d): sizing's unit price is the same bounded, venue-scoped
+        // carry-forward equity valuation uses (`mark_price` routes here too).
+        self.index.close_at(venue, symbol, self.ts, self.mark_max_age_secs)
     }
     fn next_bar(&self, venue: &str, symbol: &str) -> Option<Bar> {
         self.index.bar_after(venue, symbol, self.ts)

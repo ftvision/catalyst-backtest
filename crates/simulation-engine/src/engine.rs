@@ -355,15 +355,17 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
         // a position a deferred market order opens on the same bar (a take-profit
         // resting alongside a deferred entry).
         fill_pending_market(
-            tick_index, ts, &ts_iso, &exec_graph, &mut ledger, &index, &policy, tick_equity,
-            &mut events, &mut resting, &mut pending, &mut order_seq,
+            tick_index, ts, &ts_iso, &exec_graph, &mut ledger, &index, &policy,
+            mark_staleness_secs, tick_equity, &mut events, &mut resting, &mut pending,
+            &mut order_seq,
         );
         fill_resting_orders(
-            tick_index, ts, &ts_iso, &exec_graph, &mut ledger, &index, &policy, tick_equity,
-            &mut events, &mut resting, &mut pending, &mut order_seq,
+            tick_index, ts, &ts_iso, &exec_graph, &mut ledger, &index, &policy,
+            mark_staleness_secs, tick_equity, &mut events, &mut resting, &mut pending,
+            &mut order_seq,
         );
 
-        let ctx = TickContext { index: &index, ts };
+        let ctx = TickContext { index: &index, ts, mark_max_age_secs: mark_staleness_secs };
 
         if !initial_done {
             for action_id in &exec_graph.initial_actions {
@@ -931,13 +933,14 @@ fn fill_resting_orders(
     ledger: &mut Ledger,
     index: &BundleIndex,
     policy: &ResolvedPolicy,
+    mark_staleness_secs: Option<i64>,
     equity: Decimal,
     events: &mut Vec<Event>,
     resting: &mut Vec<RestingOrder>,
     pending: &mut Vec<PendingMarket>,
     order_seq: &mut u64,
 ) {
-    let ctx = TickContext { index, ts };
+    let ctx = TickContext { index, ts, mark_max_age_secs: mark_staleness_secs };
     let ready: Vec<RestingOrder> = std::mem::take(resting);
     let mut keep: Vec<RestingOrder> = Vec::new();
 
@@ -1042,6 +1045,7 @@ fn fill_pending_market(
     ledger: &mut Ledger,
     index: &BundleIndex,
     policy: &ResolvedPolicy,
+    mark_staleness_secs: Option<i64>,
     equity: Decimal,
     events: &mut Vec<Event>,
     resting: &mut Vec<RestingOrder>,
@@ -1055,7 +1059,7 @@ fn fill_pending_market(
     // with Open selection makes `reference_price` return this bar's open.
     let mut fill_policy = policy.clone();
     fill_policy.price_selection = PriceSelection::Open;
-    let ctx = TickContext { index, ts };
+    let ctx = TickContext { index, ts, mark_max_age_secs: mark_staleness_secs };
 
     for order in ready {
         // Next-bar eligibility: an order deferred at tick T fills from T+1 on.
@@ -1209,12 +1213,19 @@ fn execute_action(
     }
 }
 
-/// Mark price of `asset` on `venue` for unit conversion (1 for stables).
+/// Mark price of `asset` on `venue` for *sizing* unit conversion (1 for
+/// stables). Uses `MarketContext::mark_close` — the bounded, venue-scoped
+/// carry-forward (#119(d)) — so `pct_portfolio`/`pct_balance` sizing prices an
+/// asset exactly when equity valuation does. Sizing at a carried mark is safe
+/// because filling is gated separately: a same-bar fill still requires an
+/// exact bar (`execute_swap`'s "no price" guard), and a `next_open` order
+/// defers to a real next bar. Returns 0 when even the mark is missing/expired;
+/// `resolve_amount`'s zero-price guard then rejects `pct_portfolio` sizing.
 fn asset_price(ctx: &dyn MarketContext, venue: &str, asset: &str) -> Decimal {
     if is_stable(asset) {
         Decimal::ONE
     } else {
-        ctx.bar(venue, asset).map(|b| b.close).unwrap_or(Decimal::ZERO)
+        ctx.mark_close(venue, asset).unwrap_or(Decimal::ZERO)
     }
 }
 

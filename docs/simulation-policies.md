@@ -445,7 +445,9 @@ a position's venue-scoped mark may be carried forward across a data gap when
 valuing the portfolio (#119(b)). When set, a close older than the bound is
 treated as missing: the holding is excluded from equity and surfaced via a
 `valuation_warning` event plus a run warning (deduped once per run per
-holding, #119(c)). When absent (every profile's default), the last known close
+holding, #119(c)). The same bound governs the mark `pct_portfolio`/sizing uses
+for unit conversion (#119(d)) — an expired mark rejects the sizing rather than
+pricing it stale. When absent (every profile's default), the last known close
 is carried forward without bound — a conscious default, since bounding marks
 changes results. A malformed duration is rejected at policy validation, never
 silently treated as unbounded.

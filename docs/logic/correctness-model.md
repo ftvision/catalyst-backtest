@@ -135,7 +135,8 @@ margin and unrealized PnL + yield principal and accrued (see
 | Venue-scoped position marking (no cross-venue price borrowing) | ✅ fixed (#119(a)) |
 | Mark staleness bound (`data.max_mark_staleness`; default unbounded) | ✅ fixed (#119(b)) |
 | Unpriced holdings excluded loudly (`valuation_warning` + run warning, deduped per run) | ✅ fixed (#119(c)) |
-| Sizing unification, same-tick equity snapshot | ⚠️ open (#119(d-e)) |
+| Sizing's unit price unified onto the bounded venue-scoped mark (yields' money conversion stays exact-bar) | ✅ fixed (#119(d)) |
+| Same-tick `pct_portfolio` actions share the tick-start equity snapshot (no intra-tick compounding) | ✅ decided semantics (#119(e); recompute belongs with #141's ordering knobs) |
 | Non-stable yield positions marked to price; gas converted to asset units | ✅ fixed (#115) |
 | `total_yield_usd` / `interest_usd` converted to USD at the accrual tick's mark | ✅ fixed (#166) |
 | Liquidation marks the intra-bar wick | ✅ fixed (#120 wick half) |
