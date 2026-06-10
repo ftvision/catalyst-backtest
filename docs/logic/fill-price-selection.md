@@ -78,10 +78,12 @@ the policy contract's `fills.price_selection` field** (resolution:
   rather than an optimistic cheat. Choose it for a deliberately punitive,
   user-facing backtest.
 - **`close` (research) — fast but optimistic.** Fills at the same close you just
-  evaluated the signal on. Convenient and the most common research convention,
-  but it is **favorable same-bar look-ahead**: you transact at a price you
-  already observed. Choose it only for quick exploration; never for a headline
-  number.
+  evaluated the signal on. Convenient and the most common research convention —
+  the same one backtesting.py exposes as `trade_on_close=True` and Backtrader as
+  `cheat_on_close` — but it is **favorable same-bar look-ahead**: you transact at
+  a price you already observed. Choose it only for quick exploration; never for a
+  headline number. Every run under it carries a run-level warning saying exactly
+  that (#122).
 - **`open`** — fills at the *current* bar's open. The open is known at bar start,
   so it is less look-ahead-prone than `close`/`mid`, but the engine still
   evaluates and fills within the same tick, so it is not equivalent to the
@@ -124,14 +126,21 @@ the policy contract's `fills.price_selection` field** (resolution:
   at bar N+1's open — decision time (bar N) and fill time (bar N+1) no longer
   conflate, and bar N's snapshot carries no phantom entry-bar P&L. Equity snapshots
   are still taken per tick at that tick's marks.
-- **Same-bar look-ahead is real for `close`/`mid`/`worse_side_ohlc`.** These read
-  values (close, or the bar's high/low) that are only known once the bar has
-  fully formed, yet the engine both *evaluates the signal* and *fills* within the
-  same tick. `close` and `mid` bias **favorably** (you transact at a price you've
-  already seen); `worse_side_ohlc` biases **adversely** (worst price of the bar).
-  `research_v1=close` is the most optimistic of the three and should be read with
-  that caveat. The favorable same-bar look-ahead under non-`next_open` selections
-  is tracked by **#122**.
+- **Same-bar fills are an explicit, warned convention (#122, decided).** The
+  non-`next_open` selections read values (close, or the bar's high/low) that are
+  only known once the bar has fully formed, yet the engine both *evaluates the
+  signal* and *fills* within the same tick. `close` and `mid` bias **favorably**
+  (you transact at a price you've already seen); `worse_side_ohlc` biases
+  **adversely** (worst price of the bar). This is **kept on purpose** — it is the
+  standard "trade-on-close" convention (backtesting.py `trade_on_close=True`,
+  Backtrader `cheat_on_close`), and deferring a close-fill one bar would fill at
+  bar *N+1*'s close, look-ahead in the other direction. The decision per #122 is
+  to make the bias impossible to miss instead of removing the convention: `run()`
+  pushes **one unconditional run-level warning** for every non-`next_open`
+  selection (`engine.rs`, right where the run's `warnings` vector is created),
+  with wording differentiated by bias direction (favorable for `close`/`mid`,
+  stale-open for `open`, adverse stress for `worse_side_ohlc`). `next_open` runs
+  stay warning-free.
 - **Direction only matters for `worse_side_ohlc`.** The other four branches ignore
   `dir` (`pricing.rs:38-41`); `worse_side_ohlc` is the only one that maps
   buy→high / sell→low (`pricing.rs:42-45`), so its adversity is direction-aware.
@@ -167,6 +176,14 @@ booking-time spec: an action decided on bar N is filled and booked on bar N+1
 (`issue_116_entry_bar_*`), and a signal firing on the last bar does not execute
 (`issue_116_spec_end_of_horizon_signal_action_not_executed_strict`).
 
+`crates/simulation-engine/tests/issue_122_same_bar_convention.rs` — the decided
+convention and its warning: a `research_v1` run carries the run-level look-ahead
+warning while `strict_v1` carries none; a `strict_v1` run overridden to
+`fills.price_selection = "close"` warns too (the warning follows the *executed*
+selection); and the convention itself is SPEC-pinned — under `research_v1` with a
+`level` trigger, a threshold signal computed from bar N's close (1700) fills on
+bar N at 1700 + 5 bps = 1700.85, `action_executed` stamped at bar N's ts.
+
 `crates/simulation-policies/tests/policies.rs`:
 - `strict_profile_defaults` — asserts `price_selection == NextOpen` for
   `strict_v1` (`policies.rs:33`).
@@ -188,4 +205,4 @@ end-to-end.
 ## Related issues
 
 - [#116](https://github.com/ftvision/catalyst-backtest/issues/116) — next_open market orders deferred to fill+book on the fill bar (no phantom entry P&L) — **fixed**
-- [#122](https://github.com/ftvision/catalyst-backtest/issues/122) — same-bar look-ahead under close/open/mid selection
+- [#122](https://github.com/ftvision/catalyst-backtest/issues/122) — same-bar fills under close/open/mid/worse_side_ohlc selection — **decided convention** (trade-on-close, kept + per-run warning)
