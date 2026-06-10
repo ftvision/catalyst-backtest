@@ -141,8 +141,9 @@ fn issue_115_nonstable_yield_marked_to_price() {
 /// = 0.00001 ETH. Equity at tick2 = 1.00001 ETH * 1800 = 1800.018 USD —
 /// the interest is ETH units marked to price, never added as raw dollars.
 ///
-/// (The `yield_accrued` event's `interest_usd` field still carries asset units
-/// for non-stables — tracked as #166, asserted here only for presence.)
+/// (FIXED #166: the `yield_accrued` event's `interest_usd` field now carries
+/// the interest converted at the accrual tick's mark — interest * 1800 — with
+/// `interest` (asset units) and `price` alongside for audit.)
 #[test]
 fn issue_115_114_nonstable_yield_accrues_and_marks_to_price() {
     let points: Vec<_> = ["2000", "1800", "1800"]
@@ -188,11 +189,94 @@ fn issue_115_114_nonstable_yield_accrues_and_marks_to_price() {
         .expect("#114x#115: the non-stable position must accrue interest");
     assert_eq!(accrued.ts, ts(2), "first accrual is the tick after the deposit");
 
+    // FIXED #166: interest_usd is the asset-unit interest converted at the
+    // accrual tick's mark (1800), not the raw ETH amount; `interest` and
+    // `price` are reported alongside for audit.
+    let d = accrued.detail.as_ref().expect("yield_accrued has a detail object");
+    let interest: f64 = d["interest"].as_str().expect("detail.interest present").parse().unwrap();
+    let expected_interest = 0.0876 * 3600.0 / 31_536_000.0; // 1e-5 ETH
+    assert!(
+        (interest - expected_interest).abs() < 1e-15,
+        "interest is asset units: expected {expected_interest}, got {interest}"
+    );
+    assert_eq!(d["price"], "1800", "detail.price is the accrual tick's ETH mark");
+    let interest_usd: f64 =
+        d["interest_usd"].as_str().expect("detail.interest_usd present").parse().unwrap();
+    let expected_usd = expected_interest * 1800.0; // 0.018 USD
+    assert!(
+        (interest_usd - expected_usd).abs() < 1e-12,
+        "FIXED #166: interest_usd = interest * 1800 = {expected_usd}, got {interest_usd}"
+    );
+
     let e2: f64 = trace.snapshots[2].equity_usd.parse().unwrap();
     let expected = (1.0 + 0.0876 * 3600.0 / 31_536_000.0) * 1800.0; // 1800.018
     assert!(
         (e2 - expected).abs() < 1e-6,
         "#114x#115: equity must be (principal + accrued) * price = {expected}, got {e2}"
+    );
+}
+
+/// Stable control for #166: a USDC yield position accrues interest whose USD
+/// value IS the asset-unit amount (price = 1), so the `yield_accrued` event's
+/// `interest_usd` equals `interest` exactly and `price` is "1".
+#[test]
+fn issue_166_stable_yield_interest_usd_equals_interest() {
+    let points: Vec<_> = ["2000", "1800", "1800"]
+        .iter()
+        .enumerate()
+        .map(|(i, c)| json!({"ts": ts(i as i64), "open": c, "high": c, "low": c, "close": c}))
+        .collect();
+    let aprs: Vec<_> = (0..3).map(|i| json!({"ts": ts(i), "apr": "0.0876"})).collect();
+    let market_data: MarketDataBundle = serde_json::from_value(json!({
+        "schema_version": "catalyst.backtest.market_data_bundle.v1",
+        "interval": "1h",
+        "start": ts(0),
+        "end": ts(3),
+        "candles": [{"venue": "base", "symbol": "ETH", "quote": "USD", "points": points}],
+        "funding": [],
+        "gas": [],
+        "yields": [{"protocol": "aave", "asset": "USDC", "chain": "base", "points": aprs}],
+        "providers": [],
+        "warnings": []
+    }))
+    .unwrap();
+
+    // Initial portfolio = 1000 USDC on base; ETH candles only drive the signal.
+    let mut bal = BTreeMap::new();
+    bal.insert("USDC".to_string(), "1000".to_string());
+    let mut init = BTreeMap::new();
+    init.insert("base".to_string(), bal);
+    let config = BacktestConfig {
+        start: START.to_string(),
+        end: ts(3),
+        interval: "1h".to_string(),
+        initial_portfolio: init,
+        execution: None,
+    };
+    let graph: Graph = serde_json::from_value(json!({
+        "nodes": [
+            {"id": "dip", "kind": "signal", "subtype": "price_threshold",
+             "config": {"symbol": "ETH", "operator": "<", "threshold": "1900"}},
+            {"id": "dep", "kind": "action", "subtype": "yield_deposit",
+             "config": {"chain": "base", "protocol": "aave", "asset": "USDC", "amount": "1000"}}
+        ],
+        "edges": [{"from": "dip", "to": "dep"}]
+    }))
+    .unwrap();
+
+    let trace =
+        run(&SimulationInput { graph, config, policy: policy(), market_data }).unwrap();
+
+    let accrued = trace
+        .events
+        .iter()
+        .find(|e| e.event_type == "yield_accrued")
+        .expect("the USDC position must accrue interest");
+    let d = accrued.detail.as_ref().expect("yield_accrued has a detail object");
+    assert_eq!(d["price"], "1", "stablecoins are valued at 1 without a candle lookup");
+    assert_eq!(
+        d["interest_usd"], d["interest"],
+        "stable control: interest_usd == interest (asset units ARE dollars for USDC)"
     );
 }
 

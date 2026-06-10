@@ -118,13 +118,15 @@ within the tick uses the **start-of-tick** value.
 
 ### Known limitations
 
-- **Non-stable yield equity is fixed (#115), but the cumulative counters are
-  not (#166).** `compute_equity` now marks non-stable yield positions at
-  `value() × mark_price` (`engine.rs:1300-1309`). However `total_yield_usd`
-  and the `yield_accrued` event's `interest_usd` still carry raw asset units
-  for non-stables — tracked as #166. An *unpriced* non-stable yield position
-  is silently skipped from equity (no warning), the same class of gap as the
-  cash-balance branch below (#119).
+- **Non-stable yield equity is fixed (#115), and so are the cumulative
+  counters (#166 — fixed).** `compute_equity` marks non-stable yield positions
+  at `value() × mark_price` (`engine.rs:1300-1309`), and `total_yield_usd` /
+  the `yield_accrued` event's `interest_usd` now carry the interest converted
+  at the accrual tick's mark under the same convention (stables at 1). An
+  *unpriced* non-stable yield position is still silently skipped from equity
+  (no warning), the same class of gap as the cash-balance branch below (#119);
+  the accrual path, by contrast, warns and under-counts `interest_usd` as 0
+  if a mark is ever absent.
 
 - **An unpriced non-stable balance is silently dropped (#119(c)).** The
   cash-balance branch adds `amt × price` *only* `if let Some(price) =
