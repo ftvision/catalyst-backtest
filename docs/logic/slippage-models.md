@@ -56,6 +56,11 @@ is constant-product (x·y=k):
      without a `liquidity` series it charges the configured bps, not nothing.
   3. Models a single constant-product pool — not routed/multi-hop fills,
      concentrated liquidity (Uniswap v3), or MEV/sandwich effects.
+  4. **Market swaps only — never resting limit fills (#162).** A resting limit is
+     a maker order and fills at limit-or-better; the AMM model does not reprice
+     it. The theoretical impact price is emitted in the fill detail
+     (`amm_theoretical_price` / `amm_impact_exceeds_limit`) for honesty. See
+     [limit-orders.md](limit-orders.md).
 
 ## `volume_based` — participation-scaled impact
 

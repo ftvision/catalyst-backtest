@@ -76,6 +76,8 @@ pub fn execute_yield_deposit(
         fee_usd: Decimal::ZERO,
         gas_usd: gas,
         realized_pnl_usd: None,
+        amm_theoretical_price: None,
+        amm_impact_exceeds_limit: None,
     })
 }
 
@@ -123,5 +125,7 @@ pub fn execute_yield_withdraw(
         fee_usd: Decimal::ZERO,
         gas_usd: gas,
         realized_pnl_usd: None,
+        amm_theoretical_price: None,
+        amm_impact_exceeds_limit: None,
     })
 }
