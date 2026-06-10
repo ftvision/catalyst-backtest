@@ -124,11 +124,11 @@ rejects it as unimplemented (#143), so it can never silently charge zero.
 - **Determinism.** `fixed_bps` is pure `Decimal` arithmetic — no float, no
   reserve/volume lookup — so it's bit-for-bit deterministic across runs.
 
-- **Malformed `fee_bps` defaults to 0.** `parse` returns `Decimal::ZERO` on a
-  bad string (`pricing.rs:117-119`), but `validate` already guarantees `fee_bps`
-  parses as a non-negative decimal whenever `fee_model == FixedBps`
-  (`resolve.rs:161-163`), so in practice the default-to-zero branch is
-  unreachable for the active model.
+- **Malformed `fee_bps` panics, never silently zero.** `fee_bps` is parsed by
+  `parse_policy` (`pricing.rs`), which **panics** on a bad string (#163) — a
+  failure there means a caller bypassed policy validation. `validate` guarantees
+  `fee_bps` parses as a non-negative decimal whenever `fee_model == FixedBps`
+  (`resolve.rs:161-163`), so the panic is unreachable through validated paths.
 
 - **Known limitation — `venue_fee_table` is unimplemented (and rejected).**
   The `pricing.rs:97` arm charges nothing, but policy validation refuses the

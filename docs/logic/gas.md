@@ -32,10 +32,11 @@ steps (`crates/execution-models/src/pricing.rs:102-113`):
 | `fixed_native` | *(intended: native-token units priced into USD)* | `pricing.rs:108` (unreachable) | **NOT implemented — REJECTED at policy validation** (#146) |
 | `historical_fee_history` | `ctx.gas_usd(venue)`, i.e. the per-chain gas series at this tick; falls back to `gas_fixed_amount` when no series point exists | `pricing.rs:109-111` | implemented |
 
-The `gas_fixed_amount` string is parsed by `parse` (`pricing.rs:117-119`), which
-defaults to `0` on malformed input; the policy crate validates it as a
-non-negative decimal upstream whenever a fixed path can be reached — i.e. when
-`gas_model` *or* `gas_fallback_model` is a fixed-amount model
+The `gas_fixed_amount` string is parsed by `parse_policy` (`pricing.rs`), which
+**panics** on malformed input (#163) — a failure there means a caller bypassed
+policy validation. The policy crate validates it as a non-negative decimal
+upstream whenever a fixed path can be reached — i.e. when `gas_model` *or*
+`gas_fallback_model` is a fixed-amount model
 (`crates/simulation-policies/src/resolve.rs:164-168`).
 
 ### Default profile wiring

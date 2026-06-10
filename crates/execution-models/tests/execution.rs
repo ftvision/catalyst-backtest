@@ -328,6 +328,17 @@ fn zero_slippage_zero_fee_policy_fills_at_close() {
     assert_eq!(l.balance("base", "ETH"), d("0.05")); // 100 / 2000
 }
 
+#[test]
+#[should_panic(expected = "policy validation should have rejected")]
+fn malformed_policy_decimal_panics_instead_of_silently_zeroing() {
+    // A ResolvedPolicy that bypassed `validate` (e.g. constructed literally with
+    // a garbage slippage_bps) must fail loudly, not price with zero slippage.
+    let market = FakeMarket::new().with_bar("base", "ETH", "2000").with_gas("base", "0.02");
+    let policy = ResolvedPolicy { slippage_bps: "garbage".into(), ..strict_v1() };
+    let mut l = ledger_with("base", "USDC", "1000");
+    let _ = execute_swap(&mut l, &market, &policy, &swap("USDC", "ETH", "100", "base"));
+}
+
 // --- Limit orders: touch logic + placement validation ---
 
 fn bar(open: &str, high: &str, low: &str, close: &str) -> Bar {
