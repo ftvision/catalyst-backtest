@@ -139,7 +139,7 @@ margin and unrealized PnL + yield principal and accrued (see
 | Non-stable yield positions marked to price; gas converted to asset units | ✅ fixed (#115) |
 | `total_yield_usd` / `interest_usd` converted to USD at the accrual tick's mark | ✅ fixed (#166) |
 | Liquidation marks the intra-bar wick | ✅ fixed (#120 wick half) |
-| Liquidation triggers at full bankruptcy only; no maintenance margin | ⚠️ open (#120) |
+| Maintenance-margin liquidation (`perps.maintenance_margin_ratio`, default 0.0125); residual settled at the breach price; `liquidation_price` reported | ✅ fixed (#120) |
 | Resting limit orders don't reserve balance | ⚠️ open (#124) |
 | Resting limit fills at limit-or-better (maker); AMM impact never reprices them | ✅ fixed (#162) |
 | Yield compounds per tick on principal + accrued | ✅ fixed (#114) |

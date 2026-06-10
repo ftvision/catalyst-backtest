@@ -372,6 +372,7 @@ fn to_contract_echoes_full_policy_and_round_trips() {
     let mut p = strict_v1();
     p.slippage_bps = "42".to_string(); // simulate a per-run override
     p.max_mark_staleness = Some("24h".to_string()); // #119(b) knob, off by default
+    p.maintenance_margin_ratio = "0.02".to_string(); // #120 knob, non-default
     let c = p.to_contract();
 
     // Every section is populated — no silent omissions.
@@ -380,6 +381,11 @@ fn to_contract_echoes_full_policy_and_round_trips() {
     assert_eq!(fills.price_selection.as_deref(), Some("next_open"));
     assert_eq!(c.data.as_ref().unwrap().missing_required.as_deref(), Some("fail"));
     assert_eq!(c.data.as_ref().unwrap().max_mark_staleness.as_deref(), Some("24h"));
+    assert_eq!(
+        c.perps.as_ref().unwrap().maintenance_margin_ratio.as_deref(),
+        Some("0.02"),
+        "#120: the executed maintenance ratio must be echoed, self-documenting every run"
+    );
     assert_eq!(c.yield_.as_ref().unwrap().accrual.as_deref(), Some("compound_apy"));
     assert_eq!(c.ordering.as_ref().unwrap().same_tick.as_deref(), Some("topological_order"));
 
@@ -428,4 +434,86 @@ fn malformed_max_mark_staleness_is_rejected_at_resolve() {
         "invalid policy: data.max_mark_staleness is not a valid duration: \"fortnight\" \
          (expected <integer><s|m|h|d>, e.g. \"24h\")"
     );
+}
+
+// --- #120: perps.maintenance_margin_ratio — default, override, validation ---
+
+fn perps_with_mmr(ratio: &str) -> Option<catalyst_contracts::policy::PerpPolicy> {
+    Some(catalyst_contracts::policy::PerpPolicy {
+        liquidation_check: None,
+        funding: None,
+        reduce_only_validation: None,
+        maintenance_margin_ratio: Some(ratio.to_string()),
+    })
+}
+
+#[test]
+fn maintenance_margin_ratio_defaults_in_every_profile() {
+    // Flat 1.25% of mark notional — Hyperliquid's top-tier maintenance margin
+    // (half the initial margin at 40x max leverage: 1/(2·40)) — in all three
+    // profiles.
+    assert_eq!(strict_v1().maintenance_margin_ratio, "0.0125");
+    assert_eq!(conservative_v1().maintenance_margin_ratio, "0.0125");
+    assert_eq!(research_v1().maintenance_margin_ratio, "0.0125");
+}
+
+#[test]
+fn maintenance_margin_ratio_resolves_from_contract() {
+    let mut c = contract("strict_v1");
+    c.perps = perps_with_mmr("0.005");
+    let p = resolve_policy(&c).unwrap();
+    assert_eq!(p.maintenance_margin_ratio, "0.005");
+}
+
+#[test]
+fn maintenance_margin_ratio_zero_is_the_degenerate_bankruptcy_trigger() {
+    // "0" is valid and pins the historical behavior: liquidate only when the
+    // entire margin is gone.
+    let mut c = contract("strict_v1");
+    c.perps = perps_with_mmr("0");
+    let p = resolve_policy(&c).unwrap();
+    assert_eq!(p.maintenance_margin_ratio, "0");
+}
+
+#[test]
+fn malformed_maintenance_margin_ratio_is_rejected_at_resolve() {
+    // A malformed ratio must never silently mean "no maintenance buffer"
+    // (#160 discipline).
+    let mut c = contract("strict_v1");
+    c.perps = perps_with_mmr("one-percent");
+    let err = resolve_policy(&c).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "invalid policy: perps.maintenance_margin_ratio is not a decimal: \"one-percent\""
+    );
+}
+
+#[test]
+fn negative_maintenance_margin_ratio_is_rejected() {
+    let mut c = contract("strict_v1");
+    c.perps = perps_with_mmr("-0.01");
+    let err = resolve_policy(&c).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "invalid policy: perps.maintenance_margin_ratio must be non-negative: \"-0.01\""
+    );
+}
+
+#[test]
+fn maintenance_margin_ratio_of_one_or_more_is_rejected() {
+    // A maintenance margin of 100% of notional (or more) is nonsensical — no
+    // position could ever satisfy it; it would liquidate at entry.
+    for ratio in ["1", "1.5"] {
+        let mut c = contract("strict_v1");
+        c.perps = perps_with_mmr(ratio);
+        let err = resolve_policy(&c).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "invalid policy: perps.maintenance_margin_ratio must be < 1 (it is a fraction \
+                 of notional; a ratio of 1 or more would liquidate every position at entry): \
+                 {ratio:?}"
+            )
+        );
+    }
 }

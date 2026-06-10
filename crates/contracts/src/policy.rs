@@ -93,6 +93,12 @@ pub struct PerpPolicy {
     pub funding: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reduce_only_validation: Option<String>,
+    /// Maintenance margin as a fraction of mark notional (e.g. "0.0125").
+    /// A position is liquidated once its equity (margin + unrealized PnL)
+    /// falls to this fraction of notional. "0" = liquidate only at full
+    /// bankruptcy (#120).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maintenance_margin_ratio: Option<Decimal>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]

@@ -236,6 +236,18 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
     let mark_staleness_secs: Option<i64> =
         policy.max_mark_staleness.as_deref().and_then(parse_duration_secs);
 
+    // Maintenance margin as a fraction of mark notional (#120), parsed once.
+    // `validate` guarantees the string parses as a decimal in [0, 1); reject
+    // loudly if it somehow doesn't (it must never silently become "no
+    // maintenance buffer", #160 discipline).
+    let maintenance_margin_ratio: Decimal =
+        policy.maintenance_margin_ratio.parse().map_err(|_| {
+            EngineError::Policy(format!(
+                "perps.maintenance_margin_ratio is not a valid decimal: {:?}",
+                policy.maintenance_margin_ratio
+            ))
+        })?;
+
     let mut events: Vec<Event> = Vec::new();
     let mut snapshots: Vec<Snapshot> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
@@ -317,12 +329,23 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
             &mut events,
             &mut warnings,
         );
-        check_liquidations(&mut ledger, &index, ts, &ts_iso, &policy, mark_staleness_secs, &mut events);
+        check_liquidations(
+            &mut ledger,
+            &index,
+            ts,
+            &ts_iso,
+            &policy,
+            mark_staleness_secs,
+            maintenance_margin_ratio,
+            &mut events,
+        );
 
         // Tick-start equity, used to resolve pct_portfolio sizing for any action
         // this tick (snapshots below recompute it post-action and surface any
         // unpriced holdings once).
-        let tick_equity = compute_valuation(&ledger, &index, ts, mark_staleness_secs).equity;
+        let tick_equity =
+            compute_valuation(&ledger, &index, ts, mark_staleness_secs, maintenance_margin_ratio)
+                .equity;
 
         // Orders queued on earlier bars get a chance to fill before new actions —
         // both booked on this bar, the bar they fill. Deferred next_open market
@@ -375,7 +398,8 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
             &mut order_seq,
         );
 
-        let valuation = compute_valuation(&ledger, &index, ts, mark_staleness_secs);
+        let valuation =
+            compute_valuation(&ledger, &index, ts, mark_staleness_secs, maintenance_margin_ratio);
         // Surface every unpriced holding loudly, once per run per
         // (venue, asset, kind): excluded-from-equity must never be silent
         // (#119(c)). A mark expired by the staleness bound (#119(b)) flows
@@ -417,7 +441,7 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
         snapshots.push(Snapshot {
             ts: ts_iso.clone(),
             equity_usd: valuation.equity.normalize().to_string(),
-            portfolio: Some(ledger.to_portfolio()),
+            portfolio: Some(ledger.to_portfolio(maintenance_margin_ratio)),
         });
     }
 
@@ -452,7 +476,7 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
         end: input.config.end.clone(),
         snapshots,
         events,
-        final_portfolio: ledger.to_portfolio(),
+        final_portfolio: ledger.to_portfolio(maintenance_margin_ratio),
         warnings,
         errors: Vec::new(),
     })
@@ -1410,6 +1434,7 @@ fn accrue_yield(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn check_liquidations(
     ledger: &mut Ledger,
     index: &BundleIndex,
@@ -1417,6 +1442,7 @@ fn check_liquidations(
     ts_iso: &str,
     policy: &ResolvedPolicy,
     mark_staleness_secs: Option<i64>,
+    maintenance_margin_ratio: Decimal,
     events: &mut Vec<Event>,
 ) {
     if policy.liquidation_check != LiquidationCheck::EveryTick {
@@ -1424,25 +1450,46 @@ fn check_liquidations(
     }
     let perps: Vec<PerpPosition> = ledger.perps().cloned().collect();
     for p in perps {
-        // Liquidation triggers on the worst price the position touches *within* the
-        // bar, not just the close (#120): a long is most underwater at the bar's
-        // low, a short at its high. Marking only the close lets a position that
-        // breaches its margin intrabar but recovers by close wrongly escape — a
-        // real venue would have closed it on the wick.
-        let adverse = match index.bar_at(&p.venue, &p.symbol, ts) {
+        // Maintenance-margin model (#120): a position is liquidated once the
+        // mark crosses its liquidation price — the level where equity (margin
+        // + unrealized PnL) falls to `maintenance_margin_ratio` of mark
+        // notional. At ratio 0 this is exactly the historical bankruptcy
+        // trigger (loss = full margin).
+        let p_liq = p.liquidation_price(maintenance_margin_ratio);
+
+        // The trigger reads the worst price the position touches *within* the
+        // bar, not just the close (#120 wick half): a long is most underwater
+        // at the bar's low, a short at its high. Marking only the close lets
+        // a position that breaches intrabar but recovers by close wrongly
+        // escape — a real venue would have closed it on the wick.
+        //
+        // The *fill* price is the liquidation price itself — unless the bar
+        // gapped through it, in which case the earliest (and already worse)
+        // price of the bar, its open, is what the engine could have closed
+        // at: `min(open, p_liq)` for a long, `max(open, p_liq)` for a short.
+        let (breached, fill) = match index.bar_at(&p.venue, &p.symbol, ts) {
             Some(bar) => match p.side {
-                PerpSide::Long => bar.low,
-                PerpSide::Short => bar.high,
+                PerpSide::Long => (bar.low <= p_liq, bar.open.min(p_liq)),
+                PerpSide::Short => (bar.high >= p_liq, bar.open.max(p_liq)),
             },
-            // No candle this tick: fall back to the last-known mark.
+            // No candle this tick: fall back to the last-known mark, which is
+            // then also the only price available to settle at.
             None => match mark_price(index, &p.venue, &p.symbol, ts, mark_staleness_secs) {
-                Some(m) => m,
+                Some(m) => match p.side {
+                    PerpSide::Long => (m <= p_liq, m),
+                    PerpSide::Short => (m >= p_liq, m),
+                },
                 None => continue,
             },
         };
-        if p.unrealized_pnl(adverse) <= -p.margin_usd {
-            // Liquidation: margin is lost, position removed (settle nothing back).
-            let _ = ledger.close_perp(&p.venue, &p.symbol, Decimal::ZERO);
+        if breached {
+            // Settle the residual equity at the fill price, floored at zero
+            // (a gap through the bankruptcy price can't claw back collateral
+            // the trader never posted — same invariant as the #117 close
+            // floor). At fill = p_liq this is exactly
+            // maintenance_margin_ratio · size · p_liq.
+            let settlement = (p.margin_usd + p.unrealized_pnl(fill)).max(Decimal::ZERO);
+            let _ = ledger.close_perp(&p.venue, &p.symbol, settlement);
             events.push(Event {
                 ts: ts_iso.to_string(),
                 event_type: "liquidation".into(),
@@ -1451,8 +1498,10 @@ fn check_liquidations(
                 detail: Some(json!({
                     "venue": p.venue,
                     "symbol": p.symbol,
-                    "mark": adverse.normalize().to_string(),
-                    "margin_lost_usd": p.margin_usd.normalize().to_string(),
+                    "mark": fill.normalize().to_string(),
+                    "liquidation_price": p_liq.normalize().to_string(),
+                    "settled_usd": settlement.normalize().to_string(),
+                    "margin_lost_usd": (p.margin_usd - settlement).normalize().to_string(),
                 })),
             });
         }
@@ -1488,8 +1537,9 @@ fn compute_valuation(
     index: &BundleIndex,
     ts: i64,
     mark_staleness_secs: Option<i64>,
+    maintenance_margin_ratio: Decimal,
 ) -> Valuation {
-    let portfolio: Portfolio = ledger.to_portfolio();
+    let portfolio: Portfolio = ledger.to_portfolio(maintenance_margin_ratio);
     let mut equity = Decimal::ZERO;
     let mut unpriced: Vec<UnpricedHolding> = Vec::new();
 

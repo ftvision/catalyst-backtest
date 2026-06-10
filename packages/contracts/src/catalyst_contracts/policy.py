@@ -76,6 +76,7 @@ class PerpPolicy(StrictModel):
     liquidation_check: Literal["every_tick", "never"] = "every_tick"
     funding: Literal["historical", "none"] = "historical"
     reduce_only_validation: Literal["strict", "lenient"] = "strict"
+    maintenance_margin_ratio: Decimal = "0.0125"
 
 
 class YieldPolicy(StrictModel):

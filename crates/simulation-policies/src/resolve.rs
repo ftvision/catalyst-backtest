@@ -134,6 +134,9 @@ pub fn resolve_policy(contract: &ContractPolicy) -> Result<ResolvedPolicy, Polic
         if let Some(v) = &perps.reduce_only_validation {
             p.reduce_only_validation = parse_enum("perps.reduce_only_validation", v)?;
         }
+        if let Some(v) = &perps.maintenance_margin_ratio {
+            p.maintenance_margin_ratio = v.clone();
+        }
     }
     if let Some(y) = &contract.yield_ {
         if let Some(v) = &y.accrual {
@@ -202,6 +205,21 @@ pub fn validate(p: &ResolvedPolicy) -> Result<(), PolicyError> {
         || matches!(p.gas_fallback_model, GasModel::FixedUsd | GasModel::FixedNative)
     {
         parse_decimal("gas_fixed_amount", &p.gas_fixed_amount)?;
+    }
+
+    // The maintenance ratio is consumed by every liquidation check and echoed
+    // in the executed policy, so it must always be a valid decimal — and a
+    // *ratio*: a maintenance margin of 100% (or more) of notional is
+    // nonsensical (no position could ever satisfy it; it would liquidate at
+    // entry). A malformed value must never silently mean "no maintenance
+    // buffer" (#160 discipline).
+    let mmr = parse_decimal("perps.maintenance_margin_ratio", &p.maintenance_margin_ratio)?;
+    if mmr >= 1.0 {
+        return Err(PolicyError::Invalid(format!(
+            "perps.maintenance_margin_ratio must be < 1 (it is a fraction of notional; a \
+             ratio of 1 or more would liquidate every position at entry): {:?}",
+            p.maintenance_margin_ratio
+        )));
     }
 
     // Implement-or-reject: every variant below parses (it is part of the
@@ -388,6 +406,7 @@ impl ResolvedPolicy {
                 liquidation_check: Self::knob(&self.liquidation_check),
                 funding: Self::knob(&self.funding),
                 reduce_only_validation: Self::knob(&self.reduce_only_validation),
+                maintenance_margin_ratio: Some(self.maintenance_margin_ratio.clone()),
             }),
             yield_: Some(catalyst_contracts::policy::YieldPolicy {
                 accrual: Self::knob(&self.yield_accrual),
