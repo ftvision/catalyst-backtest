@@ -94,7 +94,7 @@ Tiers 0–1 are the gap between *demo* and *a tool a strategist would trust*; ti
 - #118 accrual uses static `interval_secs` vs a gapped tick grid
 - #119 inconsistent price lookups misvalue equity/funding & reject sizing on gaps
 - #120 liquidation realism (close-only marking, no maintenance margin)
-- #122 same-bar look-ahead under non-`next_open` price selection
+- #122 same-bar fills under non-`next_open` price selection — **decided convention** (trade-on-close, kept + per-run warning)
 - #123 Python policy contract drifts from Rust
 - #124 resting limit orders don't reserve balance
 - #115 non-stable yield positions mis-accounted

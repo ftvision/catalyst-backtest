@@ -53,8 +53,8 @@ A market order decided on the **final** bar has no next bar to fill against, so 
 lapses unfilled (recorded as `order_expired`) rather than falling back to the
 final close — that fallback would be the same-bar look-ahead the deferral exists to
 prevent. Same-bar selections like `close`/`mid`/`worse_side_ohlc` still fill in-bar
-by design — that's the separate, deliberate same-bar look-ahead of those profiles
-(#122).
+by design — that's the deliberate "trade-on-close" convention of those profiles,
+kept per the #122 decision and flagged by one unconditional run-level warning.
 
 ## Correctness invariants
 
@@ -73,10 +73,15 @@ A backtest must never act on information unavailable at decision time.
   *N+1*'s **open** — no same-bar look-ahead on price, and no phantom entry-bar P&L
   from booking on the decision bar (#116, fixed; see
   [fill-price-selection](fill-price-selection.md)).
-- ⚠️ **Partial gaps remain (tracked):**
-  - `close`/`open`/`mid`/`worse_side_ohlc` selections fill on the *just-observed*
-    bar, so a signal computed from bar *N*'s close that fills at bar *N*'s close
-    is **same-bar look-ahead** — and `research_v1` defaults to `close` (#122).
+- **Same-bar selections are a decided, warned convention (#122):**
+  `close`/`open`/`mid`/`worse_side_ohlc` fill on the *just-observed* bar, so a
+  signal computed from bar *N*'s close fills at bar *N*'s close — the standard
+  "trade-on-close" convention (backtesting.py `trade_on_close=True`, Backtrader
+  `cheat_on_close`), kept on purpose because deferring a close-fill would fill at
+  bar *N+1*'s close (look-ahead the other way). `research_v1` defaults to `close`,
+  so every run under a non-`next_open` selection carries **one unconditional
+  run-level warning** naming the bias direction; `next_open` is the only
+  look-ahead-free selection and the only warning-free one.
 
 ### 2. Money conservation (no value created or destroyed out of thin air)
 
@@ -126,7 +131,7 @@ margin and unrealized PnL + yield principal and accrued (see
 | `volume_based` slippage (square-root law) | ✅ implemented (#137) |
 | Policy contract accepts every model the engine supports | ✅ fixed (#123) |
 | `next_open` market orders deferred to fill+book on the fill bar (no phantom entry P&L) | ✅ fixed (#116) |
-| Same-bar look-ahead under `close`/`open`/`mid` selection | ⚠️ open (#122) |
+| Same-bar fills under `close`/`open`/`mid`/`worse_side_ohlc` selection | ✅ decided convention + per-run warning (#122, trade-on-close) |
 | Venue-scoped position marking (no cross-venue price borrowing) | ✅ fixed (#119(a)) |
 | Staleness bound, unpriced-leg warning, sizing unification, same-tick snapshot | ⚠️ open (#119(b-e)) |
 | Non-stable yield positions marked to price; gas converted to asset units | ✅ fixed (#115) |

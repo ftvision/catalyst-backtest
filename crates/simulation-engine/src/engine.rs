@@ -225,6 +225,26 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
     let mut events: Vec<Event> = Vec::new();
     let mut snapshots: Vec<Snapshot> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
+    // #122 — same-bar fills are an explicit, opt-in convention (the same one
+    // backtesting.py calls `trade_on_close=True` and Backtrader calls
+    // `cheat_on_close`), not a silent default: every non-`next_open` selection
+    // fills market orders on the very bar the signal observed, so each run
+    // carries one unconditional warning naming the bias direction.
+    match policy.price_selection {
+        PriceSelection::NextOpen => {}
+        PriceSelection::Close => warnings.push(
+            "price_selection=close fills market orders at the decision bar's close — the same price the signal observed (favorable same-bar look-ahead; trade-on-close convention, research use only; #122)".into(),
+        ),
+        PriceSelection::Mid => warnings.push(
+            "price_selection=mid fills market orders at the decision bar's (high+low)/2 — a range known only once the signal's bar closed (favorable same-bar look-ahead; trade-on-close convention, research use only; #122)".into(),
+        ),
+        PriceSelection::Open => warnings.push(
+            "price_selection=open fills market orders at the decision bar's open — a price from before the signal's information existed (same-bar convention, not look-ahead-free; #122)".into(),
+        ),
+        PriceSelection::WorseSideOhlc => warnings.push(
+            "price_selection=worse_side_ohlc fills market orders at the decision bar's high (buy) / low (sell) — an adverse same-bar fill (conservative stress, not look-ahead-free; #122)".into(),
+        ),
+    }
     let mut signal_state: HashMap<String, bool> = HashMap::new();
     let mut signals_ever_fired: HashSet<String> = HashSet::new();
     // Resting limit orders awaiting a touch, plus a monotonic id counter.
