@@ -100,6 +100,7 @@ fn overrides_apply_on_top_of_profile() {
         slippage: Some(SlippagePolicy {
             model: Some("fixed_bps".to_string()),
             bps: Some("30".to_string()),
+            volume_impact_coef_bps: None,
         }),
         fees: None,
     });
@@ -223,6 +224,7 @@ fn non_decimal_slippage_is_rejected() {
         slippage: Some(SlippagePolicy {
             model: Some("fixed_bps".to_string()),
             bps: Some("abc".to_string()),
+            volume_impact_coef_bps: None,
         }),
         fees: None,
     });
@@ -340,6 +342,7 @@ fn malformed_slippage_bps_rejected_under_all_consuming_models() {
             slippage: Some(SlippagePolicy {
                 model: Some(model.into()),
                 bps: Some("ten bps".into()),
+                volume_impact_coef_bps: None,
             }),
             ..Default::default()
         });
@@ -371,6 +374,7 @@ fn malformed_slippage_bps_override_is_rejected() {
 fn to_contract_echoes_full_policy_and_round_trips() {
     let mut p = strict_v1();
     p.slippage_bps = "42".to_string(); // simulate a per-run override
+    p.volume_impact_coef_bps = "75".to_string(); // #169 knob, non-default
     p.max_mark_staleness = Some("24h".to_string()); // #119(b) knob, off by default
     p.maintenance_margin_ratio = "0.02".to_string(); // #120 knob, non-default
     let c = p.to_contract();
@@ -378,6 +382,11 @@ fn to_contract_echoes_full_policy_and_round_trips() {
     // Every section is populated — no silent omissions.
     let fills = c.fills.as_ref().expect("fills echoed");
     assert_eq!(fills.slippage.as_ref().unwrap().bps.as_deref(), Some("42"));
+    assert_eq!(
+        fills.slippage.as_ref().unwrap().volume_impact_coef_bps.as_deref(),
+        Some("75"),
+        "#169: the executed volume-impact coefficient must be echoed"
+    );
     assert_eq!(fills.price_selection.as_deref(), Some("next_open"));
     assert_eq!(c.data.as_ref().unwrap().missing_required.as_deref(), Some("fail"));
     assert_eq!(c.data.as_ref().unwrap().max_mark_staleness.as_deref(), Some("24h"));
@@ -392,6 +401,75 @@ fn to_contract_echoes_full_policy_and_round_trips() {
     // Re-resolving the echoed contract reproduces the executed policy exactly.
     let round_tripped = resolve_policy(&c).expect("echoed policy re-resolves");
     assert_eq!(round_tripped, p, "#157: trace policy must reproduce the executed policy");
+}
+
+// --- #169: fills.slippage.volume_impact_coef_bps — default, override, validation ---
+
+fn slippage_with_coef(model: &str, coef: &str) -> Option<FillsPolicy> {
+    Some(FillsPolicy {
+        slippage: Some(SlippagePolicy {
+            model: Some(model.to_string()),
+            bps: None,
+            volume_impact_coef_bps: Some(coef.to_string()),
+        }),
+        ..Default::default()
+    })
+}
+
+#[test]
+fn volume_impact_coef_defaults_to_50_in_every_profile() {
+    // The previously hard-coded engine constant (50 bps of extra impact at
+    // 100% participation) is now stated in every resolved policy.
+    assert_eq!(strict_v1().volume_impact_coef_bps, "50");
+    assert_eq!(conservative_v1().volume_impact_coef_bps, "50");
+    assert_eq!(research_v1().volume_impact_coef_bps, "50");
+}
+
+#[test]
+fn volume_impact_coef_resolves_from_contract() {
+    let mut c = contract("strict_v1");
+    c.fills = slippage_with_coef("volume_based", "120");
+    let p = resolve_policy(&c).unwrap();
+    assert_eq!(p.volume_impact_coef_bps, "120");
+}
+
+#[test]
+fn malformed_volume_impact_coef_is_rejected_under_volume_based() {
+    // Consume-gated validation (#163/#170 pattern): the coefficient feeds the
+    // volume_based impact term, so under that model a malformed value must be
+    // rejected, never silently weaken the impact.
+    let mut c = contract("strict_v1");
+    c.fills = slippage_with_coef("volume_based", "fifty");
+    let err = resolve_policy(&c).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "invalid policy: fills.slippage.volume_impact_coef_bps is not a decimal: \"fifty\""
+    );
+}
+
+#[test]
+fn negative_volume_impact_coef_is_rejected_under_volume_based() {
+    let mut c = contract("strict_v1");
+    c.fills = slippage_with_coef("volume_based", "-50");
+    let err = resolve_policy(&c).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "invalid policy: fills.slippage.volume_impact_coef_bps must be non-negative: \"-50\""
+    );
+}
+
+#[test]
+fn malformed_volume_impact_coef_is_tolerated_when_not_consumed() {
+    // Under fixed_bps / none the coefficient is never read, so a malformed
+    // value does not fail resolution (consume-gated, like fee_bps under
+    // fee_model = none).
+    for model in ["fixed_bps", "none"] {
+        let mut c = contract("strict_v1");
+        c.fills = slippage_with_coef(model, "fifty");
+        let p = resolve_policy(&c)
+            .unwrap_or_else(|e| panic!("{model}: unconsumed coef must not fail resolution: {e}"));
+        assert_eq!(p.volume_impact_coef_bps, "fifty");
+    }
 }
 
 // --- #119(b): data.max_mark_staleness — default None, parsed, validated ---

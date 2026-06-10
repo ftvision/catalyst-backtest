@@ -16,6 +16,11 @@ pub struct SlippagePolicy {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bps: Option<Decimal>,
+    /// Additional impact (bps) at 100% bar participation for the
+    /// `volume_based` model: `effective_bps = bps + coef·√participation`.
+    /// Consumed only by `volume_based` (#169).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub volume_impact_coef_bps: Option<Decimal>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]

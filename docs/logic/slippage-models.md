@@ -121,11 +121,20 @@ identical; they diverge only for large trades.
 **Behavior details:**
 - Falls back to **`fixed_bps`** when the bar has **no volume** (Dune-derived
   candles carry none; Binance/HL do) or zero volume — never silently zero.
-- `base_bps` is the policy's `slippage_bps`; `coef` is the model constant
-  `VOLUME_IMPACT_COEF_BPS` (50 bps at 100% participation) — a candidate future
-  policy knob.
+- `base_bps` is the policy's `slippage_bps`; `coef` is the policy knob
+  `fills.slippage.volume_impact_coef_bps` (#169) — the *additional* impact, in
+  bps, paid at 100% bar participation (`p = 1`). Default `"50"` in every
+  profile (the value previously hard-coded in the engine). Consumed only by
+  `volume_based`; validated as a non-negative decimal exactly when that model
+  is active (the consume-gated #163 pattern), and echoed in the executed
+  policy (#157). `"0"` removes the participation term entirely (degenerates to
+  `fixed_bps`).
 - Applies to both swaps and perps (unlike `amm_price_impact`, which is swap-only).
   For a buy/perp, the base-unit size is `notional / reference_price`.
+- **Fidelity note (`next_open` price selection):** participation is computed
+  against the **decision bar's** volume while the fill prices at the **next
+  bar's** open — the impact estimate uses the freshest volume known at decision
+  time, one bar earlier than the bar the trade actually prints on.
 
 ## `none` — idealized
 
@@ -143,7 +152,7 @@ Zero slippage; fills exactly at the reference price.
 | CEX/perp, or a simple conservative proxy on any venue | `fixed_bps` (tune bps to liquidity) |
 | Perp (any) | `fixed_bps` (`amm_price_impact` falls back to it for perps) |
 | Isolate strategy logic / idealized upper bound | `none` |
-| Thin/volume-limited market | *(`volume_based` once implemented; today falls back to `none`)* |
+| Thin/volume-limited market | `volume_based` (tune `volume_impact_coef_bps` to the venue; needs bar volume) |
 
 ## Worked example (from the tests)
 
@@ -169,6 +178,9 @@ into a 1000-ETH bar.) A larger trade widens the `amm` gap further while
   models, asserting the prices above.
 - `volume_based_charges_more_for_a_larger_share_of_bar_volume` — same bar (1000
   ETH volume); $20k/$500k/$2M buys fill at 2003/2007/2012 (sub-linear in size).
+- `volume_impact_coefficient_is_a_policy_knob_that_scales_the_impact_term` —
+  the same $500k buy (p = 0.25) under coef "50" vs "100" fills at ~2007 vs
+  ~2012; coef "0" degenerates to `fixed_bps` (#169).
 - `volume_based_falls_back_to_fixed_bps_when_bar_has_no_volume` — 2002, like
   `fixed_bps`, never silently zero.
 - `amm_price_impact_falls_back_to_fixed_bps_for_perps` — a perp opens at 2002
@@ -181,3 +193,4 @@ into a 1000-ETH bar.) A larger trade widens the `amm` gap further while
 
 - [#136](https://github.com/ftvision/catalyst-backtest/issues/136) — amm_price_impact fallback to fixed_bps — FIXED
 - [#137](https://github.com/ftvision/catalyst-backtest/issues/137) — volume_based square-root law — IMPLEMENTED
+- [#169](https://github.com/ftvision/catalyst-backtest/issues/169) — impact coefficient promoted to the `volume_impact_coef_bps` policy knob — FIXED

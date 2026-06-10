@@ -20,6 +20,9 @@ class BalancePolicy(StrictModel):
 class SlippagePolicy(StrictModel):
     model: Literal["fixed_bps", "volume_based", "amm_price_impact", "none"] = "fixed_bps"
     bps: Decimal = "10"
+    # Additional impact (bps) at 100% bar participation; consumed only by
+    # the volume_based model (#169).
+    volume_impact_coef_bps: Decimal = "50"
 
 
 class FeePolicy(StrictModel):

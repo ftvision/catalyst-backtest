@@ -15,6 +15,10 @@ pub fn strict_v1() -> ResolvedPolicy {
         price_selection: PriceSelection::NextOpen,
         slippage_model: SlippageModel::FixedBps,
         slippage_bps: "10".to_string(),
+        // √-law impact coefficient for volume_based (#169): 50 bps of extra
+        // impact at 100% bar participation. Inert under fixed_bps; it only
+        // takes effect when slippage_model = volume_based.
+        volume_impact_coef_bps: "50".to_string(),
         fee_model: FeeModel::FixedBps,
         fee_bps: "5".to_string(),
         gas_model: GasModel::HistoricalFeeHistory,

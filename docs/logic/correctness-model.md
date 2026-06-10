@@ -129,6 +129,7 @@ margin and unrealized PnL + yield principal and accrued (see
 | Leverage loss capped at margin; no negative-settlement clawback | ✅ fixed (#117) |
 | `amm_price_impact` falls back to `fixed_bps` (never silent zero) | ✅ fixed (#136) |
 | `volume_based` slippage (square-root law) | ✅ implemented (#137) |
+| `volume_based` impact coefficient is a policy knob (`fills.slippage.volume_impact_coef_bps`, default "50"), validated when consumed and echoed in the executed policy | ✅ fixed (#169) |
 | Policy contract accepts every model the engine supports | ✅ fixed (#123) |
 | `next_open` market orders deferred to fill+book on the fill bar (no phantom entry P&L) | ✅ fixed (#116) |
 | Same-bar fills under `close`/`open`/`mid`/`worse_side_ohlc` selection | ✅ decided convention + per-run warning (#122, trade-on-close) |
