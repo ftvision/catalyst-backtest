@@ -56,7 +56,7 @@ const VOLUME_IMPACT_COEF_BPS: i64 = 50;
 /// (`bps + coef·√p`), falling back to the configured bps when the bar has no
 /// volume; `none` is zero. See docs/logic/slippage-models.md.
 pub fn slippage_bps(policy: &ResolvedPolicy, base_amount: Decimal, bar_volume: Option<Decimal>) -> Decimal {
-    let base = parse(&policy.slippage_bps);
+    let base = parse_policy("slippage_bps", &policy.slippage_bps);
     match policy.slippage_model {
         // amm_price_impact's depth model is applied from pool reserves in the swap
         // path; where reserves don't apply (perps, or swaps without a reserves
@@ -93,7 +93,9 @@ fn dec_sqrt(x: Decimal) -> Decimal {
 /// Trading fee in USD on a notional.
 pub fn fee_usd(notional_usd: Decimal, policy: &ResolvedPolicy) -> Decimal {
     match policy.fee_model {
-        FeeModel::FixedBps => notional_usd * parse(&policy.fee_bps) / Decimal::from(BPS),
+        FeeModel::FixedBps => {
+            notional_usd * parse_policy("fee_bps", &policy.fee_bps) / Decimal::from(BPS)
+        }
         FeeModel::VenueFeeTable | FeeModel::None => Decimal::ZERO,
     }
 }
@@ -105,15 +107,27 @@ pub fn gas_usd(venue: &str, ctx: &dyn MarketContext, policy: &ResolvedPolicy) ->
     }
     match policy.gas_model {
         GasModel::None => Decimal::ZERO,
-        GasModel::FixedUsd | GasModel::FixedNative => parse(&policy.gas_fixed_amount),
-        GasModel::HistoricalFeeHistory => {
-            ctx.gas_usd(venue).unwrap_or_else(|| parse(&policy.gas_fixed_amount))
+        GasModel::FixedUsd | GasModel::FixedNative => {
+            parse_policy("gas_fixed_amount", &policy.gas_fixed_amount)
         }
+        GasModel::HistoricalFeeHistory => ctx
+            .gas_usd(venue)
+            .unwrap_or_else(|| parse_policy("gas_fixed_amount", &policy.gas_fixed_amount)),
     }
 }
 
-/// Parse a decimal string, defaulting to zero on malformed input (policy values
-/// are validated upstream by the policy crate).
+/// Parse a graph-config decimal string (limit prices, swap/yield amounts,
+/// perp sizes), defaulting to zero on malformed input. The leniency is
+/// load-bearing pending #160: callers treat the resulting zero as invalid and
+/// reject it explicitly downstream. Policy values must use [`parse_policy`].
 pub fn parse(s: &str) -> Decimal {
     s.parse().unwrap_or(Decimal::ZERO)
+}
+
+/// Parse a policy decimal that `validate` has already guaranteed parseable.
+/// A failure here is an engine bug (a caller bypassed policy validation), so it is loud.
+pub(crate) fn parse_policy(field: &str, s: &str) -> Decimal {
+    s.parse().unwrap_or_else(|_| {
+        panic!("policy {field} = {s:?} failed to parse; policy validation should have rejected this")
+    })
 }

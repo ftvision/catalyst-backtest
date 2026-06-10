@@ -80,7 +80,7 @@ subtype in `execute_action` (`engine.rs:812-895`):
   (`(balance - gas).max(0)`). Yield withdraw: `yields.rs:74-78` withdraws the
   whole position value. **There is no `"all"` handling in the perp model** —
   `perp.rs` always `parse()`s `size_usd` (`perp.rs:93` on open, `perp.rs:175` on
-  close), and `parse` (`pricing.rs:117-119`) returns 0 on a non-numeric string,
+  close), and `parse` (`pricing.rs:123-125`) returns 0 on a non-numeric string,
   so `"all"` would size to 0. Use a `pct_*` basis or an absolute notional for
   perps.
 - **Relative**: `{ basis, value }`, resolved to absolute as above.
@@ -163,7 +163,7 @@ subtype in `execute_action` (`engine.rs:812-895`):
 ### Known limitations
 
 - **Perp `"all"` is unsupported** (parses to 0 — `perp.rs:93`/`perp.rs:175` via
-  `parse`, `pricing.rs:117-119`). Only swaps and yields honor `"all"`.
+  `parse`, `pricing.rs:123-125`). Only swaps and yields honor `"all"`.
 - **Intra-tick `pct_portfolio` staleness** (above) — by design, but a caveat for
   multi-action ticks.
 - `pct_position` for a swap is **rejected** at fire time (#121, fixed) — use

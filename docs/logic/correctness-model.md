@@ -137,7 +137,7 @@ margin and unrealized PnL + yield principal and accrued (see
 | Yield compounds per tick on principal + accrued | ✅ fixed (#114) |
 | `yield_accrual` knob wired: `compound_apy` default / `simple_apr` / `none` off-switch | ✅ fixed (#164) |
 | Trace/result metadata echoes the EXECUTED policy, per-run overrides included | ✅ fixed (#157) |
-| `slippage_bps` validated under every consuming model + after overrides | ✅ fixed (#163) |
+| `slippage_bps` validated under every consuming model + after overrides; policy decimals parse loudly (panic, never silently 0) | ✅ fixed (#163) |
 | Unimplemented policy values are REJECTED at validation, never silently ignored | ✅ implement-or-reject |
 | `same_tick` ordering variants beyond `topological_order` | ⚠️ rejected until implemented (#141) |
 | `missing_optional` variants beyond `warn` | ⚠️ rejected until implemented (#142) |
