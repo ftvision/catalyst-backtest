@@ -157,19 +157,34 @@ impl BundleIndex {
     }
 
     /// Close for a specific (venue, symbol) at `ts` (exact, else the most recent
-    /// close <= ts, carried forward without a staleness bound). Unlike
-    /// [`price_any`] this is VENUE-SCOPED: a position on one venue is never
-    /// valued at another venue's candle that happens to share the symbol (#119).
-    /// Used by `mark_price` for marking positions (equity, funding notional,
-    /// liquidation). Sizing's unit price still uses the exact-ts bar and rejects
-    /// on gaps — unifying it with this lookup is #119's open sub-bug (d).
-    /// Returns `None` when the venue has no candle at or before `ts`; callers
-    /// silently skip the holding (#119 sub-bug (c)).
-    pub fn close_at(&self, venue: &str, symbol: &str, ts: i64) -> Option<Decimal> {
+    /// close <= ts carried forward). Unlike [`price_any`] this is VENUE-SCOPED:
+    /// a position on one venue is never valued at another venue's candle that
+    /// happens to share the symbol (#119(a)). Used by `mark_price` for marking
+    /// positions (equity, funding notional, liquidation). Sizing's unit price
+    /// still uses the exact-ts bar and rejects on gaps — unifying it with this
+    /// lookup is #119's open sub-bug (d).
+    ///
+    /// `max_age_secs` bounds the carry-forward (#119(b)): when `Some`, only a
+    /// close within `[ts - max_age_secs, ts]` is returned; an exact-`ts` bar is
+    /// always allowed. `None` = unbounded carry-forward (the default policy).
+    /// Returns `None` when the venue has no candle in range; callers exclude
+    /// the holding from equity and surface a `valuation_warning` (#119(c)).
+    pub fn close_at(
+        &self,
+        venue: &str,
+        symbol: &str,
+        ts: i64,
+        max_age_secs: Option<i64>,
+    ) -> Option<Decimal> {
         let m = self.candles.get(&(venue.to_string(), symbol.to_string()))?;
-        m.get(&ts)
-            .map(|b| b.close)
-            .or_else(|| m.range(..=ts).next_back().map(|(_, b)| b.close))
+        if let Some(b) = m.get(&ts) {
+            return Some(b.close);
+        }
+        let lo = match max_age_secs {
+            Some(age) => ts.saturating_sub(age),
+            None => i64::MIN,
+        };
+        m.range(lo..=ts).next_back().map(|(_, b)| b.close)
     }
 
     pub fn funding_at(&self, venue: &str, symbol: &str, ts: i64) -> Option<Decimal> {

@@ -65,6 +65,7 @@ fn strict_warn_missing() -> SimulationPolicy {
         data: Some(DataPolicy {
             missing_required: Some("warn".to_string()),
             missing_optional: None,
+            max_mark_staleness: None,
         }),
         perps: None, yield_: None,
     }

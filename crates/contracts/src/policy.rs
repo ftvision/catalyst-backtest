@@ -79,6 +79,10 @@ pub struct DataPolicy {
     pub missing_required: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub missing_optional: Option<String>,
+    /// Maximum age (duration like "24h") a venue-scoped mark may be carried
+    /// forward when valuing a position (#119(b)). Absent = unbounded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_mark_staleness: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]

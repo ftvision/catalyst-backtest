@@ -3,9 +3,9 @@
 use catalyst_contracts::policy::{BalancePolicy, FillsPolicy, SignalPolicy, SlippagePolicy};
 use catalyst_contracts::SimulationPolicy as ContractPolicy;
 use catalyst_simulation_policies::{
-    conservative_v1, research_v1, resolve, resolve_policy, strict_v1, InsufficientBalance,
-    MissingRequired, PartialFills, PolicyError, PriceSelection, Profile, ResolvedPolicy,
-    SignalTrigger,
+    conservative_v1, parse_duration_secs, research_v1, resolve, resolve_policy, strict_v1,
+    InsufficientBalance, MissingRequired, PartialFills, PolicyError, PriceSelection, Profile,
+    ResolvedPolicy, SignalTrigger,
 };
 
 fn contract(profile: &str) -> ContractPolicy {
@@ -371,6 +371,7 @@ fn malformed_slippage_bps_override_is_rejected() {
 fn to_contract_echoes_full_policy_and_round_trips() {
     let mut p = strict_v1();
     p.slippage_bps = "42".to_string(); // simulate a per-run override
+    p.max_mark_staleness = Some("24h".to_string()); // #119(b) knob, off by default
     let c = p.to_contract();
 
     // Every section is populated — no silent omissions.
@@ -378,10 +379,53 @@ fn to_contract_echoes_full_policy_and_round_trips() {
     assert_eq!(fills.slippage.as_ref().unwrap().bps.as_deref(), Some("42"));
     assert_eq!(fills.price_selection.as_deref(), Some("next_open"));
     assert_eq!(c.data.as_ref().unwrap().missing_required.as_deref(), Some("fail"));
+    assert_eq!(c.data.as_ref().unwrap().max_mark_staleness.as_deref(), Some("24h"));
     assert_eq!(c.yield_.as_ref().unwrap().accrual.as_deref(), Some("compound_apy"));
     assert_eq!(c.ordering.as_ref().unwrap().same_tick.as_deref(), Some("topological_order"));
 
     // Re-resolving the echoed contract reproduces the executed policy exactly.
     let round_tripped = resolve_policy(&c).expect("echoed policy re-resolves");
     assert_eq!(round_tripped, p, "#157: trace policy must reproduce the executed policy");
+}
+
+// --- #119(b): data.max_mark_staleness — default None, parsed, validated ---
+
+#[test]
+fn max_mark_staleness_defaults_to_unbounded_in_every_profile() {
+    // Bounding the mark carry-forward changes valuations, so no profile turns
+    // it on silently — it is opt-in per run.
+    assert_eq!(strict_v1().max_mark_staleness, None);
+    assert_eq!(conservative_v1().max_mark_staleness, None);
+    assert_eq!(research_v1().max_mark_staleness, None);
+}
+
+#[test]
+fn max_mark_staleness_resolves_from_contract() {
+    let mut c = contract("strict_v1");
+    c.data = Some(catalyst_contracts::policy::DataPolicy {
+        missing_required: None,
+        missing_optional: None,
+        max_mark_staleness: Some("24h".to_string()),
+    });
+    let p = resolve_policy(&c).unwrap();
+    assert_eq!(p.max_mark_staleness.as_deref(), Some("24h"));
+    // The duration grammar is the shared one (#176): "24h" = 86400s.
+    assert_eq!(parse_duration_secs("24h"), Some(86_400));
+}
+
+#[test]
+fn malformed_max_mark_staleness_is_rejected_at_resolve() {
+    // A malformed bound must never silently mean "unbounded" (#160 discipline).
+    let mut c = contract("strict_v1");
+    c.data = Some(catalyst_contracts::policy::DataPolicy {
+        missing_required: None,
+        missing_optional: None,
+        max_mark_staleness: Some("fortnight".to_string()),
+    });
+    let err = resolve_policy(&c).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "invalid policy: data.max_mark_staleness is not a valid duration: \"fortnight\" \
+         (expected <integer><s|m|h|d>, e.g. \"24h\")"
+    );
 }

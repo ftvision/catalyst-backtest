@@ -69,6 +69,7 @@ class OrderingPolicy(StrictModel):
 class DataPolicy(StrictModel):
     missing_required: Literal["fail", "warn", "skip_tick", "forward_fill"] = "fail"
     missing_optional: Literal["warn", "fail", "forward_fill", "fallback_provider"] = "warn"
+    max_mark_staleness: str | None = None
 
 
 class PerpPolicy(StrictModel):

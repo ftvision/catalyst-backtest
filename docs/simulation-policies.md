@@ -440,6 +440,16 @@ interval grid). Under `fail` (strict_v1) an interior hole aborts the run; under
 rejected until they do what they say (#159). The `POST /market-data/coverage`
 API surfaces the same gaps (`completeness_pct` + `missing_ranges`) before a run.
 
+**`data.max_mark_staleness`** (optional duration, e.g. `"24h"`) bounds how long
+a position's venue-scoped mark may be carried forward across a data gap when
+valuing the portfolio (#119(b)). When set, a close older than the bound is
+treated as missing: the holding is excluded from equity and surfaced via a
+`valuation_warning` event plus a run warning (deduped once per run per
+holding, #119(c)). When absent (every profile's default), the last known close
+is carried forward without bound — a conscious default, since bounding marks
+changes results. A malformed duration is rejected at policy validation, never
+silently treated as unbounded.
+
 ### Perp Risk Policy
 
 Defines margin, liquidation, and funding behavior.
