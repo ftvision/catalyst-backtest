@@ -90,7 +90,11 @@ fn policy() -> SimulationPolicy {
         fills: Some(FillsPolicy {
             partial_fills: None,
             price_selection: Some("close".to_string()),
-            slippage: Some(SlippagePolicy { model: Some("fixed_bps".to_string()), bps: Some("0".to_string()) }),
+            slippage: Some(SlippagePolicy {
+                model: Some("fixed_bps".to_string()),
+                bps: Some("0".to_string()),
+                volume_impact_coef_bps: None,
+            }),
             fees: Some(FeePolicy { model: Some("fixed_bps".to_string()), bps: Some("0".to_string()) }),
         }),
         gas: None,
