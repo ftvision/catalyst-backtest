@@ -38,11 +38,23 @@ records the inclusive `[first_missing, last_missing]` ISO range per gap
 (`lib.rs:227`), where `expected = (last − first)/step + 1` is the number of grid
 buckets **between the first and last present timestamp** (`lib.rs:211`).
 
-**Crucial framing: only *interior* gaps count.** A series that simply starts late
-or ends early relative to the run window is not a hole. Both paths guard on
-`len() < 2` and return clean (`engine.rs:149`, `lib.rs:198`); `expected` is
-measured from first-present to last-present, never from the configured
-`start`/`end`. So leading/trailing absence is invisible to this machinery.
+**Crucial framing: the two paths now diverge on leading/trailing absence.** The
+*reporting* path (`series_coverage`) still measures `expected` from
+first-present to last-present, never from the configured `start`/`end` — a
+late-starting series reports 100% complete there. The *enforcement* path was
+fixed in #167: `check_required_coverage` also checks each required series
+against the **requested** `[start, end]` —
+- a series with **zero points** in the window is "required candles
+  {venue}/{symbol} have no data in the requested window start..end" (before
+  #167 it passed silently through the `len() < 2` guard);
+- a series that starts late / ends early is "required candles {venue}/{symbol}
+  cover first..last but the requested window is start..end (N leading / M
+  trailing missing bar(s))", with `leading = (first − start) / step` and
+  `trailing = (end − last) / step` (integer division, so a sub-step anchor
+  offset doesn't count as a missing bar).
+
+Both are routed through the same `missing_required` switch as interior gaps:
+abort under `fail`, warning otherwise.
 
 ### `missing_required` — what the engine actually does
 
@@ -52,9 +64,10 @@ compiled graph's `data_requirements.candles`
 (`crates/graph-compiler/src/lib.rs:132`) — the candle series the strategy's nodes
 need. For each such `(venue, symbol)`, `candle_ts_in` pulls its timestamps within
 `[start, end]` (`crates/simulation-engine/src/market.rs:146`) and they're checked
-for interior gaps.
+for zero coverage, leading/trailing absence vs the requested window (#167), and
+interior gaps (#42).
 
-| Variant | Profile default | What the engine does on an interior gap |
+| Variant | Profile default | What the engine does on a coverage shortfall |
 | --- | --- | --- |
 | `Fail` | `strict_v1`, `conservative_v1` | Aborts the run with `EngineError::Data("...missing bar(s) inside the window")` (`engine.rs:179`–`:180`). |
 | `Warn` | `research_v1` | **Pushes a warning, then runs anyway** (`engine.rs:182`) — the variant is named for exactly what it does. |
@@ -115,13 +128,23 @@ not per tick. It's a precondition check on the required candle series.
   no prices and makes no forward-looking decision. The check runs on the already-
   loaded window before any tick executes.
 
-- **Interior-only by design — leading/trailing absence is silent.** Because
-  `expected` is measured first-present → last-present and `len() < 2` short-
-  circuits, a series that covers only the back half of `[start, end]` reports
-  100% complete with zero missing. A strategy that needed data from `start` will
-  *not* be failed by `missing_required`; it just runs on fewer ticks. If you need
-  full-window coverage you must check `first`/`last` against the run window
-  yourself — neither the engine nor `completeness_pct` does it for you.
+- **Leading/trailing absence is enforced and disclosed (#167, fixed).** A
+  required series that covers only part of `[start, end]` — or none of it — now
+  fails the run under `missing_required = fail` and warns otherwise, with both
+  the covered and requested windows named in the message. Independently, the
+  trace (and result metadata) always carry `effective_start`/`effective_end` =
+  the first/last actual tick of the run, set even when they equal the requested
+  window, so "the run you got" is never inferred from silence. The reporting
+  path (`completeness_pct`) is still first-present → last-present; the
+  enforcement path is the one that compares against the requested window.
+
+- **Honesty note: "listed mid-window" looks identical to "data missing".** From
+  timestamps alone the engine cannot distinguish an asset that didn't exist
+  before its listing date from a provider that lost the leading bars. #167
+  deliberately does **not** guess: it discloses the shortfall either way. If the
+  asset genuinely lists mid-window, shorten the requested window (or run a
+  warn-policy profile and read the effective window from the metadata) — don't
+  expect the engine to silently absorb the difference.
 
 - **`SkipTick` and `ForwardFill` are rejected until implemented (#159).** The
   engine does not skip gapped ticks nor synthesize/carry-forward bars; the tick

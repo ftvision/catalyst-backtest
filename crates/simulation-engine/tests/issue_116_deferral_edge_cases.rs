@@ -268,7 +268,7 @@ fn market_then_market_downstream_defers_one_more_bar() {
     }));
     let trace = run(&SimulationInput {
         graph: g,
-        config: config("base", "1000", 3),
+        config: config("base", "1000", 2), // last bar (#167: window == data span)
         policy: strict(),
         market_data: simple_bundle(&[("2000", "2000"), ("2100", "2100"), ("2200", "2200")]),
     })
@@ -370,7 +370,7 @@ fn yield_deposit_executes_decision_bar_then_market_fills_next_bar() {
     }));
     let trace = run(&SimulationInput {
         graph: g,
-        config: config("base", "1000", 3),
+        config: config("base", "1000", 2), // last bar (#167: window == data span)
         policy: strict(),
         market_data: yield_and_candle_bundle(&[("2000", "2000"), ("2100", "2100"), ("2200", "2200")]),
     })
@@ -457,7 +457,7 @@ fn two_signals_same_bar_both_market_orders_fill_next_bar() {
     // later bars still provide a next bar for the bar-0 fills.
     let trace = run(&SimulationInput {
         graph: g,
-        config: config("base", "1000", 3),
+        config: config("base", "1000", 2), // last bar (#167: window == data span)
         policy: strict_with_level_signals(),
         market_data: simple_bundle(&[("1700", "1700"), ("3000", "3000"), ("3000", "3000")]),
     })
@@ -534,7 +534,7 @@ fn sibling_limit_rests_from_decision_bar_while_market_defers() {
     // bar 0 trades ~2000; bar 1 dips to a low of 1850, touching the 1900 limit.
     let trace = run(&SimulationInput {
         graph: g,
-        config: config("base", "1000", 3),
+        config: config("base", "1000", 2), // last bar (#167: window == data span)
         policy: strict(),
         market_data: ohlc_bundle(&[
             ("2000", "2010", "1990", "2000"),
@@ -624,7 +624,7 @@ fn deferred_perp_not_funded_for_bar_before_its_fill() {
                            "chain": "hyperliquid", "order_type": "market", "reduce_only": false}}],
             "edges": []
         })),
-        config: config("hyperliquid", "2000", 4),
+        config: config("hyperliquid", "2000", 3), // last bar (#167: window == data span)
         policy: strict(),
         market_data: perp_funding_bundle(4),
     })

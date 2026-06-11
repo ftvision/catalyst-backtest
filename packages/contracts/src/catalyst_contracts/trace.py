@@ -76,6 +76,8 @@ class SimulationTrace(StrictModel):
     interval: Interval
     start: datetime
     end: datetime
+    effective_start: datetime | None = None
+    effective_end: datetime | None = None
     snapshots: list[Snapshot] = Field(default_factory=list)
     events: list[Event] = Field(default_factory=list)
     final_portfolio: Portfolio

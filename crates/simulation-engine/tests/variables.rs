@@ -45,7 +45,8 @@ fn variable_amount_is_resolved_and_executed() {
     initial.insert("base".to_string(), bals);
     let config = BacktestConfig {
         start: START.to_string(),
-        end: ts(2),
+        // Last bar is ts(1); #167 enforces the window matches the data.
+        end: ts(1),
         interval: "1h".to_string(),
         initial_portfolio: initial,
         execution: None,

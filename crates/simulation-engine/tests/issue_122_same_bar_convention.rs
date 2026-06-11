@@ -54,7 +54,8 @@ fn config(n_ticks: i64) -> BacktestConfig {
     init.insert("base".to_string(), bal);
     BacktestConfig {
         start: START.to_string(),
-        end: ts(n_ticks),
+        // Last bar is ts(n_ticks - 1); #167 enforces the window matches the data.
+        end: ts(n_ticks - 1),
         interval: "1h".to_string(),
         initial_portfolio: init,
         execution: None,

@@ -60,6 +60,8 @@ class ResultMetadata(StrictModel):
     interval: str | None = None
     start: datetime | None = None
     end: datetime | None = None
+    effective_start: datetime | None = None
+    effective_end: datetime | None = None
     data_coverage: list[dict[str, Any]] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 

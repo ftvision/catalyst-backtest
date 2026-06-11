@@ -43,7 +43,8 @@ fn bundle(venue: &str, closes: &[&str]) -> MarketDataBundle {
 fn config(initial: Value, n_ticks: i64) -> BacktestConfig {
     serde_json::from_value(json!({
         "start": START,
-        "end": ts(n_ticks),
+        // Last bar is ts(n_ticks - 1); #167 enforces the window matches the data.
+        "end": ts(n_ticks - 1),
         "interval": "1h",
         "initial_portfolio": initial,
     }))

@@ -92,6 +92,8 @@
         "interval": { "type": "string" },
         "start": { "type": "string", "format": "date-time" },
         "end": { "type": "string", "format": "date-time" },
+        "effective_start": { "type": "string", "format": "date-time", "description": "First actual tick of the run; may be later than the requested start when leading data is absent." },
+        "effective_end": { "type": "string", "format": "date-time", "description": "Last actual tick of the run; may be earlier than the requested end when trailing data is absent." },
         "data_coverage": {
           "type": "array",
           "default": [],

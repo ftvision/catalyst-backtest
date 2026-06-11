@@ -189,3 +189,21 @@ fn preserves_policy_and_coverage_and_handles_numeric_detail() {
     assert_eq!(r.metadata.data_coverage, providers);
     assert_eq!(r.costs.unwrap().total_fees_usd.as_deref(), Some("0.05"));
 }
+
+/// #167: requested vs effective window flows from the trace into the result
+/// metadata, so a shortened run is disclosed to the user.
+#[test]
+fn metadata_carries_requested_and_effective_window() {
+    let mut trace = trace_from(
+        json!([snap("2024-01-01T01:00:00Z", "1000")]),
+        json!([]),
+        empty_portfolio(),
+    );
+    trace.effective_start = Some("2024-01-01T01:00:00Z".to_string());
+    trace.effective_end = Some("2024-01-01T02:00:00Z".to_string());
+    let r = summarize(&trace, vec![], None);
+    assert_eq!(r.metadata.start.as_deref(), Some("2024-01-01T00:00:00Z"));
+    assert_eq!(r.metadata.end.as_deref(), Some("2024-01-01T02:00:00Z"));
+    assert_eq!(r.metadata.effective_start.as_deref(), Some("2024-01-01T01:00:00Z"));
+    assert_eq!(r.metadata.effective_end.as_deref(), Some("2024-01-01T02:00:00Z"));
+}

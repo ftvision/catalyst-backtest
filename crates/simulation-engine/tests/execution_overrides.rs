@@ -38,7 +38,8 @@ fn bundle(venue: &str, closes: &[&str], funding: Value) -> MarketDataBundle {
 fn config(venue: &str, usdc: &str, n: i64, trigger: Option<&str>) -> BacktestConfig {
     let execution = trigger.map(|t| json!({ "signal_trigger": t }));
     serde_json::from_value(json!({
-        "start": START, "end": ts(n), "interval": "1h",
+        // Last bar is ts(n - 1); #167 enforces the window matches the data.
+        "start": START, "end": ts(n - 1), "interval": "1h",
         "initial_portfolio": { venue: { "USDC": usdc } },
         "execution": execution,
     }))

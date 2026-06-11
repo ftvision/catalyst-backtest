@@ -154,6 +154,7 @@ margin and unrealized PnL + yield principal and accrued (see
 | Resting limit fills at limit-or-better (maker); AMM impact never reprices them | ✅ fixed (#162) |
 | Yield compounds per tick on principal + accrued | ✅ fixed (#114) |
 | Combinators use Kleene logic over missing data (a gap never fires a signal or fakes a crossing edge) | ✅ fixed (#161) |
+| Required-series coverage checked against the REQUESTED window: zero-data, leading and trailing absence fail under `missing_required = fail` (warn otherwise); trace/result metadata report requested vs effective window | ✅ fixed (#167) |
 | `yield_accrual` knob wired: `compound_apy` default / `simple_apr` / `none` off-switch | ✅ fixed (#164) |
 | Trace/result metadata echoes the EXECUTED policy, per-run overrides included | ✅ fixed (#157) |
 | `slippage_bps` validated under every consuming model + after overrides; policy decimals parse loudly (panic, never silently 0) | ✅ fixed (#163) |

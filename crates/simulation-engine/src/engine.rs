@@ -159,8 +159,13 @@ fn interior_missing(ts_sorted: &[i64], step: i64) -> usize {
     missing
 }
 
-/// Check required candle series for interior gaps within the window. Under
-/// `missing_required = fail` a gap aborts the run; otherwise it's a warning.
+/// Check required candle series for coverage of the REQUESTED window: a series
+/// with no data at all, one that starts late / ends early (leading/trailing
+/// absence, #167), or one with interior gaps (#42). Under
+/// `missing_required = fail` any shortfall aborts the run; otherwise it's a
+/// warning. Note an asset listed mid-window is indistinguishable from missing
+/// data by timestamps alone — the engine discloses the shortfall either way
+/// rather than guessing.
 fn check_required_coverage(
     compiled: &catalyst_graph_compiler::CompiledGraph,
     index: &BundleIndex,
@@ -173,10 +178,44 @@ fn check_required_coverage(
     if step <= 0 {
         return Ok(());
     }
+    let mut report = |msg: String, warnings: &mut Vec<String>| -> Result<(), EngineError> {
+        if policy.missing_required == MissingRequired::Fail {
+            return Err(EngineError::Data(msg));
+        }
+        warnings.push(msg);
+        Ok(())
+    };
     for req in &compiled.data_requirements.candles {
         let ts = index.candle_ts_in(&req.venue, &req.symbol, start, end);
-        if ts.len() < 2 {
-            continue; // leading/trailing absence isn't an interior hole
+        let Some((&first, &last)) = ts.first().zip(ts.last()) else {
+            // Zero points in the window: the whole requested range is absent.
+            let msg = format!(
+                "required candles {}/{} have no data in the requested window {}..{}",
+                req.venue,
+                req.symbol,
+                format_ts(start),
+                format_ts(end)
+            );
+            report(msg, warnings)?;
+            continue;
+        };
+        // Leading/trailing absence relative to the REQUESTED window (#167):
+        // a series that starts late or ends early has no interior gap, but the
+        // user asked for [start, end] and would silently get a shorter run.
+        // Integer division tolerates a sub-step anchor offset.
+        let leading = (first - start) / step;
+        let trailing = (end - last) / step;
+        if leading + trailing > 0 {
+            let msg = format!(
+                "required candles {}/{} cover {}..{} but the requested window is {}..{} ({leading} leading / {trailing} trailing missing bar(s))",
+                req.venue,
+                req.symbol,
+                format_ts(first),
+                format_ts(last),
+                format_ts(start),
+                format_ts(end)
+            );
+            report(msg, warnings)?;
         }
         let missing = interior_missing(&ts, step);
         if missing > 0 {
@@ -184,10 +223,7 @@ fn check_required_coverage(
                 "required candles {}/{} have {missing} missing bar(s) inside the window",
                 req.venue, req.symbol
             );
-            if policy.missing_required == MissingRequired::Fail {
-                return Err(EngineError::Data(msg));
-            }
-            warnings.push(msg);
+            report(msg, warnings)?;
         }
     }
     Ok(())
@@ -300,6 +336,11 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
         ticks.push(start);
         warnings.push("no market data in range; ran a single degenerate tick".into());
     }
+    // Requested vs effective window (#167): the tick clock is data-driven, so
+    // the run's actual span is the first/last tick — always recorded, even when
+    // it equals the requested [start, end], so consumers never have to guess.
+    let effective_start = ticks.first().map(|&t| format_ts(t));
+    let effective_end = ticks.last().map(|&t| format_ts(t));
     let mut initial_done = false;
     let mut last_ts_iso = input.config.end.clone();
     // The tick clock is data-driven and may be gapped or coarser than the configured
@@ -476,6 +517,8 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
         interval: interval.clone(),
         start: input.config.start.clone(),
         end: input.config.end.clone(),
+        effective_start,
+        effective_end,
         snapshots,
         events,
         final_portfolio: ledger.to_portfolio(maintenance_margin_ratio),
