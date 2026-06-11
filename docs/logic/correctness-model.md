@@ -98,8 +98,18 @@ A backtest must never act on information unavailable at decision time.
   liquidation) instead of silently overdrawing. Recorded fees and funding equal
   the cash that actually moved (a bankrupt close's forgiven fee and a
   bankrupt account's forgiven funding are not counted).
-- ⚠️ **Tracked:** resting limit orders don't yet *reserve* the balance they'd
-  spend, so equity can transiently over-count an open order's cash (#124).
+- Resting orders **reserve** the balance their fill will spend (#124, fixed):
+  placement earmarks the exact per-order-type amount in a ledger side table
+  (released on fill/expiry/rejection/run-end), the strict debit guard and
+  sizing read `available = balance − reserved`, and an unaffordable placement
+  is rejected up front. A reservation is an earmark, **not** a debit — note
+  the corrected framing: equity was **never** over-counted by an open order
+  (placement never moved the ledger, and owned-but-committed cash *is*
+  equity); the actual #124 bug was double-spend/starvation, i.e. the committed
+  cash remained spendable by other actions. The one residual shortfall vector
+  is historical-gas drift between placement and fill, which rejects the fill
+  loudly (run-level "starved at fill" warning). See
+  [limit-orders](limit-orders.md).
 
 ### 3. Accrual scales with real elapsed time
 
@@ -150,7 +160,7 @@ margin and unrealized PnL + yield principal and accrued (see
 | `total_yield_usd` / `interest_usd` converted to USD at the accrual tick's mark | ✅ fixed (#166) |
 | Liquidation marks the intra-bar wick | ✅ fixed (#120 wick half) |
 | Maintenance-margin liquidation (`perps.maintenance_margin_ratio`, default 0.0125); residual settled at the breach price; `liquidation_price` reported | ✅ fixed (#120) |
-| Resting limit orders don't reserve balance | ⚠️ open (#124) |
+| Resting/deferred orders reserve their spend (earmark, not debit); sizing and the debit guard read available; unaffordable placements reject up front; gas-drift starvation warns loudly | ✅ fixed (#124) |
 | Resting limit fills at limit-or-better (maker); AMM impact never reprices them | ✅ fixed (#162) |
 | Yield compounds per tick on principal + accrued | ✅ fixed (#114) |
 | Combinators use Kleene logic over missing data (a gap never fires a signal or fakes a crossing edge) | ✅ fixed (#161) |

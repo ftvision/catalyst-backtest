@@ -10,7 +10,13 @@ pub enum LedgerError {
         venue: String,
         asset: String,
         requested: Decimal,
+        /// The spendable figure the request was checked against: balance minus
+        /// any amounts earmarked by resting orders (#124).
         available: Decimal,
+        /// How much of the raw balance is earmarked by resting-order
+        /// reservations (#124). Zero when nothing is reserved, in which case
+        /// `available` equals the raw balance and the message omits it.
+        reserved: Decimal,
     },
     /// A balance operation was asked to move a negative amount (#165). Credits
     /// and debits are direction-typed: a negative credit is a hidden unguarded
@@ -42,10 +48,19 @@ pub enum LedgerError {
 impl fmt::Display for LedgerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            LedgerError::InsufficientBalance { venue, asset, requested, available } => write!(
-                f,
-                "insufficient balance: need {requested} {asset} on {venue}, have {available}"
-            ),
+            LedgerError::InsufficientBalance { venue, asset, requested, available, reserved } => {
+                if reserved.is_zero() {
+                    write!(
+                        f,
+                        "insufficient balance: need {requested} {asset} on {venue}, have {available}"
+                    )
+                } else {
+                    write!(
+                        f,
+                        "insufficient balance: need {requested} {asset} on {venue}, have {available} available ({reserved} reserved by resting orders)"
+                    )
+                }
+            }
             LedgerError::NegativeAmount { op, venue, asset, amount } => write!(
                 f,
                 "negative amount in {op}: {amount} {asset} on {venue} (amounts must be non-negative)"

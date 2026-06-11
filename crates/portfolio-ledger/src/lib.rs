@@ -16,6 +16,13 @@
 //! [`LedgerError::NegativeAmount`] under *every* policy — `allow_negative`
 //! relaxes only the overdraw guard. A caller that means to move money the other
 //! way must call the other method, so no sign trick can bypass a guard.
+//!
+//! Resting orders earmark the balance their future fill will spend via
+//! [`Ledger::reserve`] / [`Ledger::release`] (#124). A [`Reservation`] is a
+//! side-table entry, **not** a debit: the cash stays owned and counted in
+//! equity (valuation never sees reservations), but the strict overdraw guard
+//! and sizing read [`Ledger::available`] (balance − reserved), so committed
+//! cash cannot be double-spent while the order rests.
 
 mod error;
 mod position;
@@ -33,12 +40,28 @@ pub const CRATE_NAME: &str = "catalyst-portfolio-ledger";
 
 type Balances = BTreeMap<String, BTreeMap<String, Decimal>>;
 
+/// A side-table earmark on a balance, keyed by the resting order that made it
+/// (#124). A reservation is **not** a debit: the cash stays owned (and counted
+/// in equity by construction — `to_portfolio`/valuation never see reservations);
+/// it is only excluded from the *spendable* figure [`Ledger::available`] that
+/// the strict debit guard and sizing read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reservation {
+    pub venue: String,
+    pub asset: String,
+    pub amount: Decimal,
+}
+
 /// Deterministic portfolio ledger.
 #[derive(Debug, Clone)]
 pub struct Ledger {
     balances: Balances,
     perps: BTreeMap<(String, String), PerpPosition>,
     yields: BTreeMap<YieldKey, YieldPosition>,
+    /// Resting-order earmarks keyed by order id (#124). A normal field, so
+    /// reservations travel with `Ledger::clone` (the engine's trial-commit
+    /// pattern keeps them consistent for free).
+    reservations: BTreeMap<String, Reservation>,
     fees_usd: Decimal,
     gas_usd: Decimal,
     funding_usd: Decimal,
@@ -54,6 +77,7 @@ impl Ledger {
             balances: BTreeMap::new(),
             perps: BTreeMap::new(),
             yields: BTreeMap::new(),
+            reservations: BTreeMap::new(),
             fees_usd: Decimal::ZERO,
             gas_usd: Decimal::ZERO,
             funding_usd: Decimal::ZERO,
@@ -69,6 +93,13 @@ impl Ledger {
         ledger
     }
 
+    /// Whether the overdraw guard is off (`insufficient_balance = allow_negative`).
+    /// Exposed so placement validation (#124) can mirror the guard's policy:
+    /// under `allow_negative` reservations are inert and never reject.
+    pub fn allow_negative(&self) -> bool {
+        self.allow_negative
+    }
+
     // --- Spot/cash balances ---
 
     /// Current balance of `asset` on `venue` (zero if absent).
@@ -78,6 +109,76 @@ impl Ledger {
             .and_then(|a| a.get(asset))
             .copied()
             .unwrap_or(Decimal::ZERO)
+    }
+
+    // --- Resting-order reservations (#124) ---
+
+    /// Total amount of `asset` on `venue` earmarked by resting orders.
+    pub fn reserved(&self, venue: &str, asset: &str) -> Decimal {
+        self.reservations
+            .values()
+            .filter(|r| r.venue == venue && r.asset == asset)
+            .map(|r| r.amount)
+            .sum()
+    }
+
+    /// Spendable balance: raw balance minus resting-order reservations. MAY be
+    /// negative (an `allow_negative` overdraw, or a balance drained out from
+    /// under a reservation by a non-debit path); callers that size trades clamp
+    /// at zero themselves.
+    pub fn available(&self, venue: &str, asset: &str) -> Decimal {
+        self.balance(venue, asset) - self.reserved(venue, asset)
+    }
+
+    /// Earmark `amount` of `asset` on `venue` for resting order `order_id`.
+    ///
+    /// Strict policy refuses to over-commit: `amount` must not exceed
+    /// [`Ledger::available`]. Under `allow_negative` the reservation is inert
+    /// and never fails (it is still recorded, but `debit` is unguarded anyway).
+    /// Negative amounts are rejected under every policy (#165 discipline — a
+    /// negative reservation would be a hidden availability credit).
+    pub fn reserve(
+        &mut self,
+        order_id: &str,
+        venue: &str,
+        asset: &str,
+        amount: Decimal,
+    ) -> Result<(), LedgerError> {
+        if amount < Decimal::ZERO {
+            return Err(LedgerError::NegativeAmount {
+                op: "reserve",
+                venue: venue.to_string(),
+                asset: asset.to_string(),
+                amount,
+            });
+        }
+        let available = self.available(venue, asset);
+        if !self.allow_negative && amount > available {
+            return Err(LedgerError::InsufficientBalance {
+                venue: venue.to_string(),
+                asset: asset.to_string(),
+                requested: amount,
+                available,
+                reserved: self.reserved(venue, asset),
+            });
+        }
+        self.reservations.insert(
+            order_id.to_string(),
+            Reservation { venue: venue.to_string(), asset: asset.to_string(), amount },
+        );
+        Ok(())
+    }
+
+    /// Release the reservation held by `order_id`, if any. Idempotent: a second
+    /// release (or releasing an order that never reserved) returns `None` and
+    /// changes nothing.
+    pub fn release(&mut self, order_id: &str) -> Option<Reservation> {
+        self.reservations.remove(order_id)
+    }
+
+    /// The reservation currently held by `order_id`, if any.
+    pub fn reservation(&self, order_id: &str) -> Option<&Reservation> {
+        self.reservations.get(order_id)
     }
 
     /// Add `amount` to a balance. Rejects negative amounts (#165): a negative
@@ -107,6 +208,11 @@ impl Ledger {
     /// Rejects negative amounts under every policy (#165): a negative debit is a
     /// hidden, unguarded credit — `allow_negative` relaxes only the overdraw
     /// guard, never the sign guard. Zero is allowed (no-op).
+    ///
+    /// The strict overdraw guard compares against [`Ledger::available`] —
+    /// balance minus resting-order reservations (#124) — so cash earmarked by a
+    /// resting order cannot be spent by anything else; the rejection names the
+    /// reserved figure when one exists.
     pub fn debit(&mut self, venue: &str, asset: &str, amount: Decimal) -> Result<(), LedgerError> {
         if amount < Decimal::ZERO {
             return Err(LedgerError::NegativeAmount {
@@ -116,13 +222,14 @@ impl Ledger {
                 amount,
             });
         }
-        let available = self.balance(venue, asset);
+        let available = self.available(venue, asset);
         if !self.allow_negative && amount > available {
             return Err(LedgerError::InsufficientBalance {
                 venue: venue.to_string(),
                 asset: asset.to_string(),
                 requested: amount,
                 available,
+                reserved: self.reserved(venue, asset),
             });
         }
         let entry = self
