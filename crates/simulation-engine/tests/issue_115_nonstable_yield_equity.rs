@@ -57,7 +57,8 @@ fn config() -> BacktestConfig {
     init.insert("base".to_string(), bal);
     BacktestConfig {
         start: START.to_string(),
-        end: ts(3),
+        // Last bar is ts(2); #167 enforces the window matches the data.
+        end: ts(2),
         interval: "1h".to_string(),
         initial_portfolio: init,
         execution: None,
@@ -80,8 +81,13 @@ fn policy() -> SimulationPolicy {
 fn graph() -> Graph {
     serde_json::from_value(json!({
         "nodes": [
-            {"id": "dip", "kind": "signal", "subtype": "price_threshold",
-             "config": {"symbol": "ETH", "operator": "<", "threshold": "1900"}},
+            {"id": "dip", "kind": "signal", "subtype": "threshold",
+             // venue pinned to base: the bundle's only ETH series. Without it the
+             // compiler resolves the price requirement to the default venue
+             // (hyperliquid), which has no data — a failure under #167's
+             // zero-coverage check on strict_v1.
+             "config": {"source": {"kind": "price", "symbol": "ETH", "venue": "base"},
+                        "operator": "<", "reference": {"const": "1900"}}},
             {"id": "dep", "kind": "action", "subtype": "yield_deposit",
              "config": {"chain": "base", "protocol": "aave", "asset": "ETH", "amount": "1"}}
         ],
@@ -248,15 +254,21 @@ fn issue_166_stable_yield_interest_usd_equals_interest() {
     init.insert("base".to_string(), bal);
     let config = BacktestConfig {
         start: START.to_string(),
-        end: ts(3),
+        // Last bar is ts(2); #167 enforces the window matches the data.
+        end: ts(2),
         interval: "1h".to_string(),
         initial_portfolio: init,
         execution: None,
     };
     let graph: Graph = serde_json::from_value(json!({
         "nodes": [
-            {"id": "dip", "kind": "signal", "subtype": "price_threshold",
-             "config": {"symbol": "ETH", "operator": "<", "threshold": "1900"}},
+            {"id": "dip", "kind": "signal", "subtype": "threshold",
+             // venue pinned to base: the bundle's only ETH series. Without it the
+             // compiler resolves the price requirement to the default venue
+             // (hyperliquid), which has no data — a failure under #167's
+             // zero-coverage check on strict_v1.
+             "config": {"source": {"kind": "price", "symbol": "ETH", "venue": "base"},
+                        "operator": "<", "reference": {"const": "1900"}}},
             {"id": "dep", "kind": "action", "subtype": "yield_deposit",
              "config": {"chain": "base", "protocol": "aave", "asset": "USDC", "amount": "1000"}}
         ],

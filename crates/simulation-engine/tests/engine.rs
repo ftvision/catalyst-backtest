@@ -46,7 +46,8 @@ fn config(venue: &str, usdc: &str, n_ticks: i64) -> BacktestConfig {
     initial.insert(venue.to_string(), venue_balances);
     BacktestConfig {
         start: START.to_string(),
-        end: ts(n_ticks),
+        // Last bar is ts(n_ticks - 1); #167 enforces the window matches the data.
+        end: ts(n_ticks - 1),
         interval: "1h".to_string(),
         initial_portfolio: initial,
         execution: None,

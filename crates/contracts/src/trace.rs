@@ -75,6 +75,13 @@ pub struct SimulationTrace {
     pub interval: String,
     pub start: String,
     pub end: String,
+    /// First actual tick of the run (#167): the tick clock is data-driven, so
+    /// this may be later than the requested `start`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_start: Option<String>,
+    /// Last actual tick of the run (#167); may be earlier than `end`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_end: Option<String>,
     #[serde(default)]
     pub snapshots: Vec<Snapshot>,
     #[serde(default)]

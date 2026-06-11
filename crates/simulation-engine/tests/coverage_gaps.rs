@@ -1,5 +1,9 @@
 //! #42: a required candle series with an interior hole fails under
 //! `missing_required = fail` (strict) and warns under forward-fill (research).
+//! #167: leading/trailing absence relative to the REQUESTED window (a series
+//! that starts late or ends early) is enforced the same way, and the trace
+//! reports the effective window (first/last actual tick) alongside the
+//! requested one.
 
 use std::collections::BTreeMap;
 
@@ -99,4 +103,135 @@ fn contiguous_series_runs_clean() {
     })
     .unwrap();
     assert!(!trace.warnings.iter().any(|w| w.contains("missing bar")));
+}
+
+// --- #167: leading/trailing absence vs the REQUESTED window ---
+
+#[test]
+fn strict_fails_on_leading_absence() {
+    // The series only covers the back half of the requested window: hours 2..4
+    // of [0, 4]. No interior gap, but the run would silently start 2 bars late.
+    let err = run(&SimulationInput {
+        graph: swap_graph(),
+        config: config(),
+        policy: policy("strict_v1"),
+        market_data: holed_bundle(&[2, 3, 4]),
+    })
+    .unwrap_err();
+    let msg = format!("{err}");
+    assert!(
+        msg.contains(&format!("cover {}..{}", ts(2), ts(4))),
+        "message must state the covered window; got: {msg}"
+    );
+    assert!(
+        msg.contains(&format!("requested window is {START}..{}", ts(4))),
+        "message must state the requested window; got: {msg}"
+    );
+    assert!(msg.contains("2 leading / 0 trailing"), "got: {msg}");
+}
+
+#[test]
+fn strict_fails_on_trailing_absence() {
+    // The series ends 2 bars early: hours 0..2 of [0, 4].
+    let err = run(&SimulationInput {
+        graph: swap_graph(),
+        config: config(),
+        policy: policy("strict_v1"),
+        market_data: holed_bundle(&[0, 1, 2]),
+    })
+    .unwrap_err();
+    let msg = format!("{err}");
+    assert!(
+        msg.contains(&format!("cover {START}..{}", ts(2))),
+        "message must state the covered window; got: {msg}"
+    );
+    assert!(msg.contains("0 leading / 2 trailing"), "got: {msg}");
+}
+
+#[test]
+fn strict_fails_on_empty_required_series() {
+    // ZERO points in the window. Before #167 this passed silently (the interior
+    // check skipped any series with fewer than two points).
+    let err = run(&SimulationInput {
+        graph: swap_graph(),
+        config: config(),
+        policy: policy("strict_v1"),
+        market_data: holed_bundle(&[]),
+    })
+    .unwrap_err();
+    let msg = format!("{err}");
+    assert!(
+        msg.contains(&format!("no data in the requested window {START}..{}", ts(4))),
+        "got: {msg}"
+    );
+}
+
+/// Signal-gated buy: no initial actions, so the tick clock is purely
+/// data-driven (an initial action would add a synthetic tick at the requested
+/// start, masking the shortened effective window).
+fn signal_swap_graph() -> Graph {
+    serde_json::from_value(json!({
+        "nodes": [
+            {"id": "below", "kind": "signal", "subtype": "price_threshold",
+             "config": {"symbol": "ETH", "operator": "<", "threshold": "3000"}},
+            {"id": "buy", "kind": "action", "subtype": "swap",
+             "config": {"from_asset": "USDC", "to_asset": "ETH", "amount": "100", "chain": "base"}}
+        ],
+        "edges": [{"from": "below", "to": "buy"}]
+    }))
+    .unwrap()
+}
+
+#[test]
+fn research_warns_on_leading_absence_and_reports_effective_window() {
+    let trace = run(&SimulationInput {
+        graph: signal_swap_graph(),
+        config: config(),
+        policy: policy("research_v1"), // missing_required = warn-equivalent
+        market_data: holed_bundle(&[2, 3, 4]),
+    })
+    .unwrap();
+    assert!(
+        trace.warnings.iter().any(|w| w.contains("2 leading / 0 trailing")),
+        "warnings: {:?}",
+        trace.warnings
+    );
+    // The trace discloses requested vs effective: the run actually began at ts(2).
+    assert_eq!(trace.start, START);
+    assert_eq!(trace.end, ts(4));
+    assert_eq!(trace.effective_start.as_deref(), Some(ts(2).as_str()));
+    assert_eq!(trace.effective_end.as_deref(), Some(ts(4).as_str()));
+}
+
+#[test]
+fn research_warns_on_trailing_absence_and_reports_effective_window() {
+    let trace = run(&SimulationInput {
+        graph: swap_graph(),
+        config: config(),
+        policy: policy("research_v1"),
+        market_data: holed_bundle(&[0, 1, 2]),
+    })
+    .unwrap();
+    assert!(
+        trace.warnings.iter().any(|w| w.contains("0 leading / 2 trailing")),
+        "warnings: {:?}",
+        trace.warnings
+    );
+    assert_eq!(trace.effective_start.as_deref(), Some(START));
+    assert_eq!(trace.effective_end.as_deref(), Some(ts(2).as_str()));
+}
+
+#[test]
+fn full_window_series_sets_effective_equal_to_requested() {
+    let trace = run(&SimulationInput {
+        graph: swap_graph(),
+        config: config(),
+        policy: policy("strict_v1"),
+        market_data: holed_bundle(&[0, 1, 2, 3, 4]),
+    })
+    .unwrap();
+    assert!(!trace.warnings.iter().any(|w| w.contains("leading")), "warnings: {:?}", trace.warnings);
+    // ALWAYS set, even when nothing was shortened.
+    assert_eq!(trace.effective_start.as_deref(), Some(START));
+    assert_eq!(trace.effective_end.as_deref(), Some(ts(4).as_str()));
 }

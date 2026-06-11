@@ -72,6 +72,26 @@ def test_extra_fields_rejected_on_strict_models() -> None:
         SimulationPolicy.model_validate(payload)
 
 
+def test_effective_window_round_trips_on_trace_and_result() -> None:
+    """#167: requested vs effective window. A run whose data starts late or ends
+    early reports the actual tick span alongside the requested [start, end]."""
+    trace_payload = _load("simulation-trace.json")
+    trace_payload["effective_start"] = "2024-01-01T01:00:00Z"
+    trace_payload["effective_end"] = trace_payload["end"]
+    trace = SimulationTrace.model_validate(trace_payload)
+    assert trace.effective_start.isoformat().startswith("2024-01-01T01:00:00")
+    dumped = trace.model_dump(mode="json", by_alias=True, exclude_none=True)
+    assert dumped["effective_start"] == "2024-01-01T01:00:00Z"
+
+    result_payload = _load("backtest-result.json")
+    result_payload["metadata"]["effective_start"] = "2024-01-01T01:00:00Z"
+    result_payload["metadata"]["effective_end"] = result_payload["metadata"]["end"]
+    result = BacktestResult.model_validate(result_payload)
+    assert result.metadata.effective_start is not None
+    # The fields are optional: omitting them still parses (old payloads).
+    assert SimulationTrace.model_validate(_load("simulation-trace.json")).effective_start is None
+
+
 def test_amm_price_impact_slippage_accepted_for_dex_swaps() -> None:
     """Real-world fidelity: an on-chain AMM swap's slippage IS price impact from
     pool reserves, so `amm_price_impact` is the realistic execution model for a

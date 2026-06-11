@@ -34,7 +34,9 @@ fn inline_market_data() -> Value {
 }
 
 fn config() -> Value {
-    json!({"start": "2024-01-01T00:00:00Z", "end": "2024-01-01T02:00:00Z",
+    // Window aligned to the data: candles end at 01:00 (#167 enforces
+    // requested-window coverage for required series under strict_v1).
+    json!({"start": "2024-01-01T00:00:00Z", "end": "2024-01-01T01:00:00Z",
            "interval": "1h", "initial_portfolio": {"base": {"USDC": "1000"}}})
 }
 

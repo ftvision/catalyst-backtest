@@ -102,6 +102,8 @@ pub fn summarize(
         interval: Some(trace.interval.clone()),
         start: Some(trace.start.clone()),
         end: Some(trace.end.clone()),
+        effective_start: trace.effective_start.clone(),
+        effective_end: trace.effective_end.clone(),
         data_coverage,
         warnings: trace.warnings.clone(),
     };

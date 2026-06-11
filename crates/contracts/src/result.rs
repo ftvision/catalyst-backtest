@@ -81,6 +81,12 @@ pub struct ResultMetadata {
     pub start: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub end: Option<String>,
+    /// First actual tick of the run (#167); may be later than the requested `start`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_start: Option<String>,
+    /// Last actual tick of the run (#167); may be earlier than the requested `end`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_end: Option<String>,
     #[serde(default)]
     pub data_coverage: Vec<Value>,
     #[serde(default)]

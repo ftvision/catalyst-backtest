@@ -35,7 +35,9 @@ fn config() -> BacktestConfig {
     init.insert("base".to_string(), bal);
     BacktestConfig {
         start: START.to_string(),
-        end: "2024-01-01T02:00:00Z".to_string(),
+        // Window aligned to the data: candles end at 01:00 (#167 enforces
+        // requested-window coverage for required series).
+        end: "2024-01-01T01:00:00Z".to_string(),
         interval: "1h".to_string(),
         initial_portfolio: init,
         execution: None,
