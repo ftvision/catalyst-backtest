@@ -39,11 +39,13 @@ fn swap_direction(cfg: &SwapConfig) -> Result<(Direction, &str), String> {
     }
 }
 
-/// Resolve a swap's requested amount: the "all" sentinel spends the full balance;
+/// Resolve a swap's requested amount: the "all" sentinel spends the full
+/// *available* balance — net of resting-order reservations, clamped at zero
+/// (#124) — so an "all" swap can never raid cash earmarked by a resting order;
 /// relative amounts are pre-resolved to absolute by the engine before execution.
 fn resolve_amount(ledger: &Ledger, cfg: &SwapConfig, venue: &str) -> Decimal {
     if cfg.amount.is_all() {
-        ledger.balance(venue, &cfg.from_asset)
+        ledger.available(venue, &cfg.from_asset).max(Decimal::ZERO)
     } else {
         parse(cfg.amount.as_str())
     }

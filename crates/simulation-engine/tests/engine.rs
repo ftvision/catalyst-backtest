@@ -204,8 +204,10 @@ fn selling_more_than_held_is_rejected() {
         market_data: eth_bundle("hyperliquid", &["2000", "2000"]),
     };
     let trace = run(&input).unwrap();
-    // Under next_open the market sell is deferred from bar 0 and the insufficient-ETH
-    // rejection surfaces when it tries to fill on bar 1 — hence the 2-bar run.
+    // Under next_open the market sell would defer from bar 0, but its deferral
+    // must reserve the 0.04 ETH it will spend (#124) — and there is none, so the
+    // insufficient-ETH rejection now surfaces at the decision bar instead of
+    // silently failing at the bar-1 fill.
     assert_eq!(count_events(&trace, "action_rejected"), 1);
     assert_eq!(count_events(&trace, "action_executed"), 0);
     // portfolio unchanged: still 1000 USDC, no ETH

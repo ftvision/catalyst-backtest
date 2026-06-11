@@ -387,7 +387,9 @@ fn limit_swap(from: &str, to: &str, limit: Option<&str>) -> SwapConfig {
 
 #[test]
 fn place_swap_limit_resolves_side_and_rejects_bad_input() {
-    match place_swap_limit(&limit_swap("USDC", "ETH", Some("1900"))) {
+    let market = FakeMarket::new().with_gas("base", "0.02");
+    let funded = ledger_with("base", "USDC", "1000");
+    match place_swap_limit(&funded, &market, &strict_v1(), &limit_swap("USDC", "ETH", Some("1900"))) {
         LimitPlacement::Placed(p) => {
             assert_eq!(p.side, LimitSide::Buy);
             assert_eq!(p.symbol, "ETH");
@@ -396,15 +398,19 @@ fn place_swap_limit_resolves_side_and_rejects_bad_input() {
         LimitPlacement::Rejected(e) => panic!("expected placed: {e}"),
     }
     // selling the base resolves to a sell
+    let eth = ledger_with("base", "ETH", "200");
     assert!(matches!(
-        place_swap_limit(&limit_swap("ETH", "USDC", Some("2100"))),
+        place_swap_limit(&eth, &market, &strict_v1(), &limit_swap("ETH", "USDC", Some("2100"))),
         LimitPlacement::Placed(p) if p.side == LimitSide::Sell
     ));
     // missing limit_price is rejected
-    assert!(matches!(place_swap_limit(&limit_swap("USDC", "ETH", None)), LimitPlacement::Rejected(_)));
+    assert!(matches!(
+        place_swap_limit(&funded, &market, &strict_v1(), &limit_swap("USDC", "ETH", None)),
+        LimitPlacement::Rejected(_)
+    ));
     // no stable side is rejected
     assert!(matches!(
-        place_swap_limit(&limit_swap("BTC", "ETH", Some("1"))),
+        place_swap_limit(&funded, &market, &strict_v1(), &limit_swap("BTC", "ETH", Some("1"))),
         LimitPlacement::Rejected(_)
     ));
 }
@@ -427,7 +433,7 @@ fn limit_perp(side: PerpSide, reduce_only: bool, limit: Option<&str>) -> PerpOrd
 #[test]
 fn place_perp_limit_open_long_is_a_buy() {
     let l = ledger_with("hyperliquid", "USDC", "1000");
-    match place_perp_limit(&l, &limit_perp(PerpSide::Long, false, Some("1900"))) {
+    match place_perp_limit(&l, &strict_v1(), &limit_perp(PerpSide::Long, false, Some("1900"))) {
         LimitPlacement::Placed(p) => assert_eq!(p.side, LimitSide::Buy),
         LimitPlacement::Rejected(e) => panic!("expected placed: {e}"),
     }
@@ -438,7 +444,7 @@ fn place_reduce_only_limit_requires_a_position_and_closes_it() {
     // no position -> rejected
     let empty = ledger_with("hyperliquid", "USDC", "1000");
     assert!(matches!(
-        place_perp_limit(&empty, &limit_perp(PerpSide::Short, true, Some("2200"))),
+        place_perp_limit(&empty, &strict_v1(), &limit_perp(PerpSide::Short, true, Some("2200"))),
         LimitPlacement::Rejected(_)
     ));
 
@@ -448,8 +454,96 @@ fn place_reduce_only_limit_requires_a_position_and_closes_it() {
     let opened = execute_perp(&mut l, &market, &strict_v1(), &perp(PerpSide::Long, "500", Some("2"), false));
     assert!(opened.is_executed());
     assert!(matches!(
-        place_perp_limit(&l, &limit_perp(PerpSide::Short, true, Some("2200"))),
+        place_perp_limit(&l, &strict_v1(), &limit_perp(PerpSide::Short, true, Some("2200"))),
         LimitPlacement::Placed(p) if p.side == LimitSide::Sell
+    ));
+}
+
+// --- #124: placement computes the reservation and validates availability ---
+
+#[test]
+fn swap_limit_buy_reserves_amount_plus_fee_plus_gas_and_validates_available() {
+    // strict_v1: fee 5 bps, historical gas (0.02 from the fake market).
+    // Buy 100 USDC of ETH -> reservation = 100 + 0.05 + 0.02 = 100.07.
+    let market = FakeMarket::new().with_gas("base", "0.02");
+    let funded = ledger_with("base", "USDC", "1000");
+    match place_swap_limit(&funded, &market, &strict_v1(), &limit_swap("USDC", "ETH", Some("1900"))) {
+        LimitPlacement::Placed(p) => {
+            assert_eq!(p.reservation, Some(("USDC".to_string(), d("100.07"))));
+        }
+        LimitPlacement::Rejected(e) => panic!("expected placed: {e}"),
+    }
+
+    // 100 USDC in the account is NOT enough for amount+fee+gas -> rejected at
+    // placement (it would rest doomed and silently starve at fill).
+    let exact = ledger_with("base", "USDC", "100");
+    match place_swap_limit(&exact, &market, &strict_v1(), &limit_swap("USDC", "ETH", Some("1900"))) {
+        LimitPlacement::Rejected(e) => {
+            assert!(e.contains("requires 100.07 USDC"), "message names the spend: {e}");
+            assert!(e.contains("reserved by resting orders"), "message names reservations: {e}");
+        }
+        LimitPlacement::Placed(_) => panic!("expected rejection"),
+    }
+}
+
+#[test]
+fn swap_limit_sell_reserves_exactly_the_base_amount() {
+    // The sell fill debits exactly `amount` base units (fee+gas come out of the
+    // proceeds), so that is all that's reserved.
+    let market = FakeMarket::new().with_gas("base", "0.02");
+    let eth = ledger_with("base", "ETH", "200");
+    match place_swap_limit(&eth, &market, &strict_v1(), &limit_swap("ETH", "USDC", Some("2100"))) {
+        LimitPlacement::Placed(p) => {
+            assert_eq!(p.reservation, Some(("ETH".to_string(), d("100"))));
+        }
+        LimitPlacement::Rejected(e) => panic!("expected placed: {e}"),
+    }
+
+    // Holding less than the sell amount rejects at placement.
+    let dust = ledger_with("base", "ETH", "50");
+    assert!(matches!(
+        place_swap_limit(&dust, &market, &strict_v1(), &limit_swap("ETH", "USDC", Some("2100"))),
+        LimitPlacement::Rejected(_)
+    ));
+}
+
+#[test]
+fn perp_limit_open_reserves_margin_plus_fee_and_reduce_only_reserves_nothing() {
+    // 500 USD at 2x -> margin 250; fee = 500 * 5bps = 0.25 -> reserve 250.25.
+    let l = ledger_with("hyperliquid", "USDC", "1000");
+    match place_perp_limit(&l, &strict_v1(), &limit_perp(PerpSide::Long, false, Some("1900"))) {
+        LimitPlacement::Placed(p) => {
+            assert_eq!(p.reservation, Some(("USDC".to_string(), d("250.25"))));
+        }
+        LimitPlacement::Rejected(e) => panic!("expected placed: {e}"),
+    }
+
+    // Margin+fee beyond available USDC -> rejected at placement.
+    let thin = ledger_with("hyperliquid", "USDC", "250");
+    assert!(matches!(
+        place_perp_limit(&thin, &strict_v1(), &limit_perp(PerpSide::Long, false, Some("1900"))),
+        LimitPlacement::Rejected(_)
+    ));
+
+    // A reduce-only close only credits: no reservation, and no balance check.
+    let mut with_pos = ledger_with("hyperliquid", "USDC", "1000");
+    let market = FakeMarket::new().with_bar("hyperliquid", "ETH", "2000");
+    execute_perp(&mut with_pos, &market, &strict_v1(), &perp(PerpSide::Long, "500", Some("2"), false));
+    match place_perp_limit(&with_pos, &strict_v1(), &limit_perp(PerpSide::Short, true, Some("2200"))) {
+        LimitPlacement::Placed(p) => assert_eq!(p.reservation, None),
+        LimitPlacement::Rejected(e) => panic!("expected placed: {e}"),
+    }
+}
+
+#[test]
+fn placement_validation_is_inert_under_allow_negative() {
+    // allow_negative: reservations never reject — an unaffordable limit still
+    // places (the unguarded debit at fill is the policy's documented behavior).
+    let market = FakeMarket::new().with_gas("base", "0.02");
+    let broke = Ledger::with_initial(Default::default(), true);
+    assert!(matches!(
+        place_swap_limit(&broke, &market, &strict_v1(), &limit_swap("USDC", "ETH", Some("1900"))),
+        LimitPlacement::Placed(_)
     ));
 }
 
