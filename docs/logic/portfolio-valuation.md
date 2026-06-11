@@ -90,6 +90,17 @@ within the tick uses the **start-of-tick** value.
 - **Stables are hard-coded to 1:1**, never priced (`engine.rs:1094`). A
   depeg is not modeled — a USDC balance is always worth its face in USD.
 
+- **Equity counts cash reserved by resting orders — by design (#124).** A
+  resting/deferred order *earmarks* its future spend in the ledger's
+  reservation side table, but a reservation is **not** a debit: placement
+  changes nothing the trader owns, so the committed cash stays in the balance
+  and stays in equity. Valuation (`compute_valuation`/`to_portfolio`) never
+  reads reservations. Only the *spendable* view changes: the strict debit
+  guard and sizing read `available = balance − reserved` (see
+  [limit-orders](limit-orders.md), [sizing](sizing.md)). Pinned by
+  `placement_does_not_move_equity_or_balances`
+  (`tests/issue_124_resting_reservation.rs`).
+
 - **Perp loss is bounded at the posted margin in two independent places.**
   (a) At *valuation*: `margin_usd + unrealized_pnl(mark)` can go negative as a raw
   number, but a position that deep underwater is removed first by

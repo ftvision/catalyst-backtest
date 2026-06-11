@@ -12,8 +12,9 @@ use catalyst_contracts::trace::{Event, Portfolio, SimulationTrace, Snapshot};
 use catalyst_contracts::{BacktestConfig, Graph, MarketDataBundle, SimulationPolicy};
 use catalyst_execution_models::{
     execute_perp, execute_perp_at, execute_swap, execute_swap_at, execute_yield_deposit,
-    execute_yield_withdraw, is_stable, limit_fill_price, place_perp_limit, place_swap_limit,
-    Execution, Fill, LimitPlacement, MarketContext, PlacedLimit,
+    execute_yield_withdraw, is_stable, limit_fill_price, perp_reservation, place_perp_limit,
+    place_swap_limit, swap_reservation, Execution, Fill, LimitPlacement, MarketContext,
+    PlacedLimit,
 };
 use catalyst_portfolio_ledger::{Ledger, PerpPosition, PerpSide, YieldPosition};
 use catalyst_simulation_policies::{
@@ -356,13 +357,13 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
         // resting alongside a deferred entry).
         fill_pending_market(
             tick_index, ts, &ts_iso, &exec_graph, &mut ledger, &index, &policy,
-            mark_staleness_secs, tick_equity, &mut events, &mut resting, &mut pending,
-            &mut order_seq,
+            mark_staleness_secs, tick_equity, &mut events, &mut warnings, &mut resting,
+            &mut pending, &mut order_seq,
         );
         fill_resting_orders(
             tick_index, ts, &ts_iso, &exec_graph, &mut ledger, &index, &policy,
-            mark_staleness_secs, tick_equity, &mut events, &mut resting, &mut pending,
-            &mut order_seq,
+            mark_staleness_secs, tick_equity, &mut events, &mut warnings, &mut resting,
+            &mut pending, &mut order_seq,
         );
 
         let ctx = TickContext { index: &index, ts, mark_max_age_secs: mark_staleness_secs };
@@ -447,8 +448,10 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
         });
     }
 
-    // Any orders still resting at the end expire unfilled.
+    // Any orders still resting at the end expire unfilled; their reservations
+    // die with them (#124).
     for order in resting.drain(..) {
+        ledger.release(&order.id);
         events.push(Event {
             ts: last_ts_iso.clone(),
             event_type: "order_expired".into(),
@@ -459,8 +462,10 @@ pub fn run(input: &SimulationInput) -> Result<SimulationTrace, EngineError> {
     }
 
     // A market order deferred on the final bar has no next bar to fill against
-    // without look-ahead (#116), so it never executes — record that it lapsed.
+    // without look-ahead (#116), so it never executes — record that it lapsed
+    // (and release its reservation, #124).
     for order in pending.drain(..) {
+        ledger.release(&order.id);
         events.push(Event {
             ts: last_ts_iso.clone(),
             event_type: "order_expired".into(),
@@ -857,12 +862,29 @@ fn run_action_chain(
                 });
             }
             ActionOutcome::Resting(spec) => {
-                // Placement reads the ledger but never mutates it; downstream
-                // actions are deferred until (and unless) the order fills.
+                // Placement never moves a balance, but it does EARMARK the
+                // fill's exact spend on the real ledger (#124) so other actions
+                // can't raid it while the order rests; downstream actions are
+                // deferred until (and unless) the order fills.
                 let downstream =
                     exec_graph.out_action_edges.get(&id).cloned().unwrap_or_default();
                 let order_id = format!("{id}#{}", *order_seq);
                 *order_seq += 1;
+                if let Some((asset, amount)) = &spec.placed.reservation {
+                    // Placement already validated availability; a failure here
+                    // is defensive (and impossible to race: nothing mutated the
+                    // ledger in between), treated as a rejection.
+                    if let Err(e) = ledger.reserve(&order_id, &spec.placed.venue, asset, *amount) {
+                        events.push(Event {
+                            ts: ts_iso.to_string(),
+                            event_type: "action_rejected".into(),
+                            node_id: Some(id.clone()),
+                            reason: Some(format!("cannot reserve balance for limit order: {e}")),
+                            detail: None,
+                        });
+                        continue;
+                    }
+                }
                 events.push(Event {
                     ts: ts_iso.to_string(),
                     event_type: "order_placed".into(),
@@ -876,6 +898,11 @@ fn run_action_chain(
                         "venue": spec.placed.venue,
                         "symbol": spec.placed.symbol,
                         "expire_after_bars": spec.expire_after_bars,
+                        // The earmark backing the future fill (#124); null when
+                        // the order only credits (perp reduce-only).
+                        "reserved_asset": spec.placed.reservation.as_ref().map(|(a, _)| a.clone()),
+                        "reserved_amount": spec.placed.reservation.as_ref()
+                            .map(|(_, m)| m.normalize().to_string()),
                     })),
                 });
                 resting.push(RestingOrder {
@@ -891,12 +918,35 @@ fn run_action_chain(
             ActionOutcome::DeferredMarket(kind) => {
                 // #116: the decision happens on this bar but the fill (and its
                 // ledger effect, event, and downstream chain) is deferred to the
-                // next bar's open. The ledger is left untouched here, so this
-                // bar's snapshot marks only positions actually held.
+                // next bar's open. No balance moves here, but like a resting
+                // limit the deferred order EARMARKS its spend (#124) — its
+                // amounts are already frozen at this decision bar — so a
+                // same-bar sibling can't commit the same cash twice. An
+                // unaffordable deferral is rejected now, not silently at fill.
+                let reservation = match &kind {
+                    RestingKind::Swap(cfg) => swap_reservation(ctx, policy, cfg),
+                    RestingKind::Perp(cfg) => perp_reservation(policy, cfg),
+                };
                 let downstream =
                     exec_graph.out_action_edges.get(&id).cloned().unwrap_or_default();
                 let order_id = format!("{id}#{}", *order_seq);
                 *order_seq += 1;
+                if let Some((asset, amount)) = &reservation {
+                    let venue = match &kind {
+                        RestingKind::Swap(cfg) => &cfg.chain,
+                        RestingKind::Perp(cfg) => &cfg.chain,
+                    };
+                    if let Err(e) = ledger.reserve(&order_id, venue, asset, *amount) {
+                        events.push(Event {
+                            ts: ts_iso.to_string(),
+                            event_type: "action_rejected".into(),
+                            node_id: Some(id.clone()),
+                            reason: Some(e.to_string()),
+                            detail: None,
+                        });
+                        continue;
+                    }
+                }
                 events.push(Event {
                     ts: ts_iso.to_string(),
                     event_type: "order_deferred".into(),
@@ -906,6 +956,9 @@ fn run_action_chain(
                         "order_id": order_id,
                         "kind": kind.label(),
                         "fills_at": "next_open",
+                        "reserved_asset": reservation.as_ref().map(|(a, _)| a.clone()),
+                        "reserved_amount": reservation.as_ref()
+                            .map(|(_, m)| m.normalize().to_string()),
                     })),
                 });
                 pending.push(PendingMarket {
@@ -924,6 +977,14 @@ fn run_action_chain(
 /// their downstream chains), expire any past their time-in-force, and keep the
 /// rest. Orders are only eligible from the bar *after* they were placed, so we
 /// never use intra-placement-bar information we couldn't have known.
+///
+/// Every path that takes an order OUT of the book — fill attempt (executed or
+/// rejected) and TIF expiry — releases its reservation on the real ledger
+/// first (#124), so the fill itself can spend the freed funds. Post-
+/// reservations a fill rejection is exceptional (the reserved spend was
+/// validated at placement; only historical-gas drift between placement and
+/// fill can starve it), so it is surfaced as a run-level warning, not just an
+/// `order_rejected` event.
 #[allow(clippy::too_many_arguments)]
 fn fill_resting_orders(
     tick_index: usize,
@@ -936,6 +997,7 @@ fn fill_resting_orders(
     mark_staleness_secs: Option<i64>,
     equity: Decimal,
     events: &mut Vec<Event>,
+    warnings: &mut Vec<String>,
     resting: &mut Vec<RestingOrder>,
     pending: &mut Vec<PendingMarket>,
     order_seq: &mut u64,
@@ -953,6 +1015,7 @@ fn fill_resting_orders(
         // Time-in-force: expire before attempting a fill on a too-late bar.
         if let Some(n) = order.expire_after_bars {
             if tick_index > order.placed_index + n as usize {
+                ledger.release(&order.id); // the earmark dies with the order (#124)
                 events.push(Event {
                     ts: ts_iso.to_string(),
                     event_type: "order_expired".into(),
@@ -974,6 +1037,11 @@ fn fill_resting_orders(
             keep.push(order);
             continue;
         };
+
+        // The order leaves the book now whatever happens (filled or rejected),
+        // so release its reservation on the REAL ledger before cloning the
+        // trial — the fill spends the very funds the earmark was holding (#124).
+        ledger.release(&order.id);
 
         // Fill atomically at the touched price (maker — no taker slippage).
         let mut trial = ledger.clone();
@@ -1008,6 +1076,13 @@ fn fill_resting_orders(
                 }
             }
             Execution::Rejected { reason } => {
+                // Loud by design: the reservation guaranteed the placement-time
+                // spend, so a rejection here means something drifted between
+                // placement and fill (historical gas is the known vector).
+                warnings.push(format!(
+                    "resting order {} starved at fill: {reason}",
+                    order.id
+                ));
                 events.push(Event {
                     ts: ts_iso.to_string(),
                     event_type: "order_rejected".into(),
@@ -1048,6 +1123,7 @@ fn fill_pending_market(
     mark_staleness_secs: Option<i64>,
     equity: Decimal,
     events: &mut Vec<Event>,
+    warnings: &mut Vec<String>,
     resting: &mut Vec<RestingOrder>,
     pending: &mut Vec<PendingMarket>,
     order_seq: &mut u64,
@@ -1067,6 +1143,11 @@ fn fill_pending_market(
             keep.push(order);
             continue;
         }
+
+        // The order leaves the queue now whatever happens, so release its
+        // reservation on the REAL ledger before cloning the trial — the fill
+        // spends the funds the earmark was holding (#124).
+        ledger.release(&order.id);
 
         let mut trial = ledger.clone();
         let outcome = match &order.kind {
@@ -1098,6 +1179,14 @@ fn fill_pending_market(
                 }
             }
             Execution::Rejected { reason } => {
+                // Loud by design (#124): the deferral reserved its spend at the
+                // decision bar, so a fill-time rejection means something
+                // drifted in between (historical gas) or the fill bar's data
+                // is missing for this venue.
+                warnings.push(format!(
+                    "deferred order {} starved at fill: {reason}",
+                    order.id
+                ));
                 events.push(Event {
                     ts: ts_iso.to_string(),
                     event_type: "action_rejected".into(),
@@ -1132,16 +1221,28 @@ fn execute_action(
                         "pct_position is not valid for a swap (a swap has no position); use pct_balance or pct_portfolio".to_string(),
                     );
                 }
-                // pct_balance resolves against the from-asset balance; pct_portfolio
-                // converts the USD slice back into from-asset units via its price.
-                let bal = ledger.balance(&cfg.chain, &cfg.from_asset);
+                // pct_balance resolves against the from-asset AVAILABLE balance
+                // (net of resting-order reservations, clamped at zero, #124);
+                // pct_portfolio converts the USD slice back into from-asset
+                // units via its price.
+                let bal = ledger.available(&cfg.chain, &cfg.from_asset).max(Decimal::ZERO);
                 let unit_price = asset_price(ctx, &cfg.chain, &cfg.from_asset);
                 match resolve_amount(&cfg.amount, bal, bal, equity, unit_price) {
                     Ok(a) => cfg.amount = a,
                     Err(e) => return ActionOutcome::Rejected(e),
                 }
+                let queued = is_limit(&cfg.order_type)
+                    || policy.price_selection == PriceSelection::NextOpen;
+                if queued && cfg.amount.is_all() {
+                    // Freeze the "all" sentinel to an absolute amount at the
+                    // decision bar for any order that rests/defers (#124): its
+                    // reservation needs an exact figure, and "what I held when I
+                    // decided" — not "whatever happens to sit there at fill
+                    // time" — is the only amount the decision could have meant.
+                    cfg.amount = Amount::Absolute(bal.normalize().to_string());
+                }
                 if is_limit(&cfg.order_type) {
-                    match place_swap_limit(&cfg) {
+                    match place_swap_limit(ledger, ctx, policy, &cfg) {
                         LimitPlacement::Placed(placed) => ActionOutcome::Resting(RestingSpec {
                             placed,
                             expire_after_bars: resolve_expiry(
@@ -1164,7 +1265,9 @@ fn execute_action(
         },
         "perp_order" => match serde_json::from_value::<PerpOrderConfig>(action.config.clone()) {
             Ok(mut cfg) => {
-                let bal = ledger.balance(&cfg.chain, "USDC");
+                // pct_balance sizes against AVAILABLE USDC (net of resting-order
+                // reservations, clamped at zero, #124).
+                let bal = ledger.available(&cfg.chain, "USDC").max(Decimal::ZERO);
                 let position = ledger
                     .perp(&cfg.chain, &cfg.symbol)
                     .map(|p| (p.size * p.entry_price).abs())
@@ -1175,7 +1278,7 @@ fn execute_action(
                     Err(e) => return ActionOutcome::Rejected(e),
                 }
                 if is_limit(&cfg.order_type) {
-                    match place_perp_limit(ledger, &cfg) {
+                    match place_perp_limit(ledger, policy, &cfg) {
                         LimitPlacement::Placed(placed) => ActionOutcome::Resting(RestingSpec {
                             placed,
                             expire_after_bars: resolve_expiry(
@@ -1273,7 +1376,9 @@ fn resolve_yield_amount(
     ctx: &dyn MarketContext,
     equity: Decimal,
 ) -> Result<(), String> {
-    let balance = ledger.balance(&cfg.chain, &cfg.asset);
+    // pct_balance sizes against the AVAILABLE balance (net of resting-order
+    // reservations, clamped at zero, #124).
+    let balance = ledger.available(&cfg.chain, &cfg.asset).max(Decimal::ZERO);
     let position = ledger
         .yields()
         .find(|y| {

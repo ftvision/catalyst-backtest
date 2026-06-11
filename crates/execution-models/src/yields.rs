@@ -48,8 +48,10 @@ pub fn execute_yield_deposit(
     let gas_asset = gas / price;
 
     let amount = if cfg.amount.is_all() {
-        // Reserve gas (in asset units) so the deposit leaves enough to pay for it.
-        (ledger.balance(chain, &cfg.asset) - gas_asset).max(Decimal::ZERO)
+        // "all" deposits the *available* balance (net of resting-order
+        // reservations, #124), minus gas (in asset units) so enough is left to
+        // pay for the transaction.
+        (ledger.available(chain, &cfg.asset).max(Decimal::ZERO) - gas_asset).max(Decimal::ZERO)
     } else {
         parse(cfg.amount.as_str())
     };

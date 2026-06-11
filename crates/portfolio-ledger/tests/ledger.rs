@@ -118,6 +118,112 @@ fn unknown_balance_is_zero() {
     assert_eq!(l.balance("base", "USDC"), Decimal::ZERO);
 }
 
+// --- Resting-order reservations (#124) ---
+
+#[test]
+fn reserve_excludes_from_available_but_not_balance_or_portfolio() {
+    let mut l = initial("base", "USDC", "1000");
+    l.reserve("order-1", "base", "USDC", d("600")).unwrap();
+    // An earmark, not a debit: the balance — and hence the portfolio/equity —
+    // is untouched; only the spendable figure shrinks.
+    assert_eq!(l.balance("base", "USDC"), d("1000"));
+    assert_eq!(l.reserved("base", "USDC"), d("600"));
+    assert_eq!(l.available("base", "USDC"), d("400"));
+    assert_eq!(l.to_portfolio(d("0.0125")).balances["base"]["USDC"], "1000");
+    // Scoped per (venue, asset): other balances are unaffected.
+    assert_eq!(l.reserved("base", "ETH"), Decimal::ZERO);
+    assert_eq!(l.reserved("hyperliquid", "USDC"), Decimal::ZERO);
+}
+
+#[test]
+fn strict_reserve_rejects_overcommit() {
+    let mut l = initial("base", "USDC", "1000");
+    l.reserve("order-1", "base", "USDC", d("600")).unwrap();
+    let err = l.reserve("order-2", "base", "USDC", d("600")).unwrap_err();
+    assert!(
+        matches!(
+            &err,
+            LedgerError::InsufficientBalance { available, reserved, .. }
+                if *available == d("400") && *reserved == d("600")
+        ),
+        "expected InsufficientBalance vs available, got {err:?}"
+    );
+    // The failed reservation left no trace.
+    assert_eq!(l.reserved("base", "USDC"), d("600"));
+}
+
+#[test]
+fn debit_guard_reads_available_and_names_the_reserved_figure() {
+    let mut l = initial("base", "USDC", "1000");
+    l.reserve("order-1", "base", "USDC", d("600")).unwrap();
+    // 500 <= raw balance but > the 400 available -> rejected, naming the earmark.
+    let err = l.debit("base", "USDC", d("500")).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("have 400 available"), "message reports available: {msg}");
+    assert!(msg.contains("600 reserved by resting orders"), "message names reserved: {msg}");
+    assert_eq!(l.balance("base", "USDC"), d("1000"));
+    // Spending within the available figure still works.
+    l.debit("base", "USDC", d("400")).unwrap();
+    assert_eq!(l.balance("base", "USDC"), d("600"));
+}
+
+#[test]
+fn release_frees_available_and_is_idempotent() {
+    let mut l = initial("base", "USDC", "1000");
+    l.reserve("order-1", "base", "USDC", d("600")).unwrap();
+    let released = l.release("order-1").expect("reservation existed");
+    assert_eq!(released.venue, "base");
+    assert_eq!(released.asset, "USDC");
+    assert_eq!(released.amount, d("600"));
+    assert_eq!(l.available("base", "USDC"), d("1000"));
+    // Idempotent: a second release (or a never-reserved id) is a no-op None.
+    assert!(l.release("order-1").is_none());
+    assert!(l.release("never-reserved").is_none());
+    // The freed cash is spendable again.
+    l.debit("base", "USDC", d("1000")).unwrap();
+}
+
+#[test]
+fn allow_negative_reservations_are_inert() {
+    // reserve never fails and the debit stays unguarded — allow_negative keeps
+    // its explicit-debt model untouched by #124.
+    let mut l = Ledger::new(true);
+    l.credit("base", "USDC", d("100")).unwrap();
+    l.reserve("order-1", "base", "USDC", d("600")).unwrap(); // over-commit: fine
+    l.debit("base", "USDC", d("500")).unwrap(); // unguarded: fine
+    assert_eq!(l.balance("base", "USDC"), d("-400"));
+}
+
+#[test]
+fn negative_reserve_is_rejected_under_every_policy() {
+    // #165 discipline: a negative reservation would be a hidden availability
+    // credit, so the sign guard holds even under allow_negative.
+    for allow_negative in [false, true] {
+        let mut l = Ledger::new(allow_negative);
+        l.credit("base", "USDC", d("100")).unwrap();
+        let err = l.reserve("order-1", "base", "USDC", d("-5")).unwrap_err();
+        assert!(
+            matches!(err, LedgerError::NegativeAmount { op: "reserve", .. }),
+            "expected NegativeAmount (allow_negative={allow_negative}), got {err:?}"
+        );
+        assert_eq!(l.reserved("base", "USDC"), Decimal::ZERO);
+    }
+}
+
+#[test]
+fn reservations_travel_with_clone() {
+    // The engine's trial-commit pattern clones the ledger wholesale; the
+    // earmarks must come along or a committed trial would silently drop them.
+    let mut l = initial("base", "USDC", "1000");
+    l.reserve("order-1", "base", "USDC", d("600")).unwrap();
+    let mut clone = l.clone();
+    assert_eq!(clone.available("base", "USDC"), d("400"));
+    assert!(clone.reservation("order-1").is_some());
+    // ...and releasing on the clone doesn't touch the original.
+    clone.release("order-1");
+    assert_eq!(l.available("base", "USDC"), d("400"));
+}
+
 // --- Cost accounting ---
 
 #[test]

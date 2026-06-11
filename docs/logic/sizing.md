@@ -28,7 +28,7 @@ literal string `"all"`. `AmountBasis` (`graph.rs:77-86`) has three variants:
 
 | Basis | Resolves against | Used by |
 | --- | --- | --- |
-| `pct_balance` | the relevant asset balance (swap from-asset, yield asset, perp cash/USDC) | swap, yield, perp |
+| `pct_balance` | the relevant asset's **available** balance — balance minus resting-order reservations, clamped at zero (#124) — (swap from-asset, yield asset, perp cash/USDC) | swap, yield, perp |
 | `pct_position` | the relevant open position notional/principal | perp, yield (**rejected** for swaps — see below) |
 | `pct_portfolio` | total portfolio equity in USD (tick-start) | all |
 
@@ -43,25 +43,28 @@ PctPortfolio -> pct * equity / unit_price   (rejects if unit_price == 0)
 ```
 
 The bases (`balance`, `position`, `equity`, `unit_price`) are supplied per
-subtype in `execute_action` (`engine.rs:812-895`):
+subtype in `execute_action` (`engine.rs`). Since #124 every `balance` base is
+the **available** balance — `ledger.available(venue, asset).max(0)`, i.e. the
+raw balance minus amounts reserved by resting/deferred orders — so sizing never
+counts cash already committed elsewhere:
 
-- **swap** (`engine.rs:986-1000`): `pct_position` is **rejected up front** —
+- **swap**: `pct_position` is **rejected up front** —
   a swap has no position to size against (#121, fixed; previously it silently
   aliased `pct_balance`, hiding user mistakes). The rejection sits before the
   market/limit branch, so resting limit swaps are covered too.
-  `balance = ledger.balance(chain, from_asset)` resolves `pct_balance`;
+  `balance = ledger.available(chain, from_asset).max(0)` resolves `pct_balance`;
   `unit_price` is the from-asset **mark** (`asset_price`, 1 for stables; see
   "Unit price" below) so `pct_portfolio` converts the USD slice back into
   from-asset units.
   Note the rejection is at **fire time** (an `action_rejected` trace event per
   firing), not graph validation — the run still completes.
-- **perp** (`engine.rs:849-878`): `balance = ledger.balance(chain, "USDC")`;
+- **perp**: `balance = ledger.available(chain, "USDC").max(0)`;
   `position = (p.size * p.entry_price).abs()` — the open position's **entry**
-  notional (`engine.rs:854`); `unit_price = Decimal::ONE` because `size_usd` is
+  notional; `unit_price = Decimal::ONE` because `size_usd` is
   already USD (so `pct_portfolio` needs no conversion).
-- **yield** (`resolve_yield_amount`, `engine.rs:938-958`): `balance =
-  ledger.balance(chain, asset)`; `position = principal + accrued` of the matching
-  yield position (`engine.rs:953`); `unit_price` is the asset mark (1 for
+- **yield** (`resolve_yield_amount`): `balance =
+  ledger.available(chain, asset).max(0)`; `position = principal + accrued` of the
+  matching yield position; `unit_price` is the asset mark (1 for
   stables).
 
 ### Unit price: the bounded venue-scoped mark (#119(d), fixed)
@@ -106,15 +109,19 @@ it with the carry-forward, and only the engine's *sizing* path reads it.
   notional, for a swap sell base units; for a perp it is USD notional; for yield
   it is asset units. Resolved by `resolve_amount`'s `Absolute` arm as a no-op
   passthrough (`engine.rs:918`).
-- **`"all"`**: the full-balance sentinel. It is **not** rewritten by the engine's
-  `resolve_amount` (it is an `Absolute`, so it passes through unchanged); the
-  execution models interpret it at fill time. Swap: `swap.rs:44-50`
-  (`resolve_amount`) spends the entire from-asset balance. Yield deposit:
-  `yields.rs:32-37` deposits the asset balance **minus reserved gas**
-  (`(balance - gas).max(0)`). Yield withdraw: `yields.rs:74-78` withdraws the
+- **`"all"`**: the full-balance sentinel — since #124, the full **available**
+  balance (`available.max(0)`, net of resting-order reservations). For an
+  inline (same-bar) market swap the execution model interprets it at fill time
+  (`swap.rs`'s `resolve_amount`); for any **queued** order — a resting limit or
+  a deferred `next_open` market order (#116) — the engine **freezes `"all"` to
+  an absolute amount at the decision bar** (the reservation needs an exact
+  figure, and "what I held when I decided" is the only amount the decision
+  could have meant). Yield deposit:
+  `yields.rs` deposits the available balance **minus reserved gas**
+  (`(available.max(0) - gas).max(0)`). Yield withdraw withdraws the
   whole position value. **There is no `"all"` handling in the perp model** —
-  `perp.rs` always `parse()`s `size_usd` (`perp.rs:93` on open, `perp.rs:175` on
-  close), and `parse` (`pricing.rs:123-125`) returns 0 on a non-numeric string,
+  `perp.rs` always `parse()`s `size_usd`,
+  and `parse` returns 0 on a non-numeric string,
   so `"all"` would size to 0. Use a `pct_*` basis or an absolute notional for
   perps.
 - **Relative**: `{ basis, value }`, resolved to absolute as above.
@@ -132,6 +139,16 @@ it with the carry-forward, and only the engine's *sizing* path reads it.
   not just one asset. Use it when allocation should track NAV.
 
 ## Correctness notes / edge cases
+
+- **Balance bases read available, not raw balance (#124, fixed).** Cash
+  earmarked by a resting limit or a deferred `next_open` order is excluded
+  from every `pct_balance` base and from the `"all"` sentinel
+  (`available = balance − reserved`, clamped at zero), so a second action can
+  neither size against nor spend funds an open order has committed. Equity
+  (`pct_portfolio`'s base) still counts reserved cash — it is owned, just
+  committed (see [portfolio-valuation](portfolio-valuation.md)). Pinned by
+  `pct_balance_sizes_against_available_not_raw_balance`
+  (`tests/issue_124_resting_reservation.rs`).
 
 - **`pct_portfolio` uses tick-start equity — DECIDED SEMANTICS (#119(e)).**
   `tick_equity` is computed **once** at the top of each tick before any action
@@ -265,4 +282,5 @@ The `"all"` sentinel paths are covered in the execution-model crate's own tests
 - [#117](https://github.com/ftvision/catalyst-backtest/issues/117) — margin cap — FIXED
 - [#119](https://github.com/ftvision/catalyst-backtest/issues/119) — price lookups: sizing's unit price unified onto the bounded venue-scoped mark (d, FIXED); same-tick tick-start equity snapshot (e, DECIDED semantics) — RESOLVED
 - [#121](https://github.com/ftvision/catalyst-backtest/issues/121) — pct_position semantics (perp entry-price basis intended; swap rejection FIXED)
+- [#124](https://github.com/ftvision/catalyst-backtest/issues/124) — balance bases and `"all"` read available (balance − reserved); `"all"` frozen at the decision bar for queued orders — FIXED
 - [#160](https://github.com/ftvision/catalyst-backtest/issues/160) — strict parsing of relative sizing values; perp `"all"` rejected — FIXED

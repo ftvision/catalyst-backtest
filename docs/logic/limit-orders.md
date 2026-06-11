@@ -56,10 +56,10 @@ Sell: (bar.high >= limit).then(|| bar.open.max(limit))
 ### Resting, eligibility, and expiry (engine)
 On placement, the action produces an `ActionOutcome::Resting`; the engine emits an
 `order_placed` event and pushes a `RestingOrder` recording `placed_index` (the
-placement tick) and `expire_after_bars` (`engine.rs:696`). It does **not** mutate
-the ledger at placement — placement only reads it (`engine.rs:674`–`676`), and any
-downstream graph actions are deferred until the order actually fills (captured at
-`engine.rs:703`, run at the fill bar via `engine.rs:788`).
+placement tick) and `expire_after_bars`. Placement does **not** move any balance —
+but it does **reserve** the fill's exact spend in the ledger's reservation side
+table (#124, see "Balance reservations" below), and any downstream graph actions
+are deferred until the order actually fills (run at the fill bar).
 
 Each tick, before any new actions run, `fill_resting_orders` scans the book. It
 runs **after** `fill_pending_market` (the deferred `next_open` market fills, #116):
@@ -87,7 +87,69 @@ the next bar, not the decision bar.) The scan itself:
    ledger untouched.
 
 Any order still resting when the run ends expires with reason
-`"backtest ended with order resting"` (`engine.rs:301`).
+`"backtest ended with order resting"` (and its reservation is released).
+
+### Balance reservations (#124, fixed)
+
+A resting order **earmarks the balance its fill will spend** so nothing else can
+spend it in the meantime. The primitive lives in the ledger
+(`crates/portfolio-ledger/src/lib.rs`): `reserve(order_id, venue, asset, amount)`
+records a `Reservation` in a side table keyed by order id; `release(order_id)`
+removes it (idempotent); `reserved(venue, asset)` sums the earmarks and
+`available(venue, asset) = balance − reserved` is the spendable figure. The
+strict `debit` overdraw guard compares against **available**, and its rejection
+names the earmark: `"need X, have Y available (Z reserved by resting orders)"`.
+
+**A reservation is an earmark, NOT a debit.** The balance — and therefore the
+portfolio snapshot and equity — is untouched by placement: owned-but-committed
+cash is still owned, and still equity (see
+[portfolio-valuation](portfolio-valuation.md)). `to_portfolio`/valuation never
+read reservations. (Historical note: the original issue text claimed equity
+"over-counts" an open order's cash — that framing was wrong; the real bug was
+that the committed cash stayed *spendable*, enabling double-commitment and
+silent starvation of the resting fill.)
+
+**What each order type reserves** — the exact, price-independent amount its
+fill will debit (maker fills pay no slippage, #162), computed by
+`swap_reservation` / `perp_reservation` (`limit.rs`):
+
+| Order | Fill debits | Reserved |
+| --- | --- | --- |
+| Swap buy (stable→asset) | `amount + fee + gas` of `from_asset` | the same sum (`fee = fee_bps·amount`; gas estimated at the placement bar) |
+| Swap sell (asset→stable) | exactly `amount` base units (fee+gas come out of proceeds) | `amount` |
+| Perp limit open | `margin + fee` USDC (`margin = size_usd/leverage`) | the same sum |
+| Perp reduce-only limit | nothing (credits only) | nothing |
+
+**Lifecycle**:
+- **Placement validates and reserves.** `place_swap_limit`/`place_perp_limit`
+  compute the reservation and reject when it exceeds the venue's *available*
+  balance — an unaffordable order is rejected at placement (`action_rejected`)
+  instead of resting doomed and silently failing at fill (a deliberate behavior
+  change). On success the engine records the reservation on the real ledger
+  under the minted order id and echoes it in the `order_placed` event detail
+  (`reserved_asset`/`reserved_amount`, additive fields; null for reduce-only).
+- **Every exit from the book releases.** `fill_resting_orders` releases the
+  reservation on the real ledger *before* attempting the fill (the fill spends
+  the very funds the earmark was holding), on TIF expiry, and the run-end drain
+  releases leftovers.
+- **Fill-time starvation is loud.** With the spend validated at placement, a
+  fill rejection is exceptional — the one drift vector is **historical gas**
+  between placement and fill (the reservation froze the placement-bar gas
+  estimate). A rejected fill emits `order_rejected` *and* a run-level warning
+  (`"resting order {id} starved at fill: …"`), and the reservation is released.
+- **Deferred `next_open` market orders (#116) use the same mechanism**: the
+  deferral reserves at the decision bar (amounts are already resolved there;
+  the `"all"` sentinel is **frozen to an absolute amount at the decision bar**
+  for any queued order, since the reservation needs an exact figure), the
+  `order_deferred` detail carries the same `reserved_*` fields, an unaffordable
+  deferral rejects at the decision bar, and the fill/lapse releases — so two
+  same-bar deferred orders can't both commit the full balance.
+- **Sizing reads available.** `pct_balance` bases in the engine and the `"all"`
+  sentinel paths in `swap.rs`/`yields.rs` read `available(venue, asset).max(0)`
+  instead of the raw balance (see [sizing](sizing.md)).
+- **`allow_negative` keeps reservations inert**: `reserve` never fails and the
+  debit is unguarded, preserving that policy's explicit-debt model (only the
+  #165 sign guard still applies).
 
 ### Time-in-force resolution
 `resolve_expiry(time_in_force, expire_after_bars)` (`engine.rs:115`):
@@ -213,6 +275,30 @@ under `amm_price_impact`, end-to-end through `run`):
 - `market_swaps_still_get_amm_impact` — regression: the market path keeps depth
   impact (companion to `amm_slippage.rs`).
 
+`crates/simulation-engine/tests/issue_124_resting_reservation.rs` (reservation
+lifecycle, end-to-end through `run`):
+- `placement_does_not_move_equity_or_balances` — earmark-not-debit: equity and
+  the portfolio are identical across the placement bar.
+- `market_order_cannot_spend_reserved_cash` — a later market order is rejected,
+  naming the reserved figure.
+- `pct_balance_sizes_against_available_not_raw_balance` — 50% of (1000 − 600
+  reserved) = 200.
+- `fill_releases_the_reservation_for_its_own_spend_and_downstream` /
+  `expiry_releases_the_reservation` — release on fill and TIF expiry.
+- `gas_drift_starves_the_fill_with_run_warning_and_releases` — the gas-drift
+  shortfall vector: `order_rejected` + run warning + release.
+- `second_overcommitting_limit_rejected_at_placement` — placement validation.
+- `allow_negative_keeps_reservations_inert` — the inert mode pin.
+- `perp_limit_open_reserves_margin_plus_fee` /
+  `perp_reduce_only_limit_reserves_nothing` — perp reservation amounts.
+- `same_bar_deferred_markets_cannot_both_spend_the_balance` /
+  `deferred_all_freezes_at_the_decision_bar` — #116 deferred orders reserve
+  too, with `"all"` frozen at the decision bar.
+
+`crates/portfolio-ledger/tests/ledger.rs` covers the primitive
+(reserve/release/available, the debit guard reading available, clone travel,
+inert `allow_negative`, negative-amount guard).
+
 `crates/execution-models/tests/execution.rs` (unit-level, `limit.rs`):
 - `buy_limit_touches_when_low_reaches_it` / `sell_limit_touches_when_high_reaches_it`
   — touch only when low/high reaches the limit; `None` otherwise.
@@ -224,8 +310,13 @@ under `amm_price_impact`, end-to-end through `run`):
 - `place_perp_limit_open_long_is_a_buy` — long open resolves to `Buy`.
 - `place_reduce_only_limit_requires_a_position_and_closes_it` — reduce-only rejected
   with no position, and resolves to the closing side when one exists.
+- `swap_limit_buy_reserves_amount_plus_fee_plus_gas_and_validates_available` /
+  `swap_limit_sell_reserves_exactly_the_base_amount` /
+  `perp_limit_open_reserves_margin_plus_fee_and_reduce_only_reserves_nothing` /
+  `placement_validation_is_inert_under_allow_negative` — #124 reservation
+  amounts and placement-time availability validation.
 
 ## Related issues
 
-- [#124](https://github.com/ftvision/catalyst-backtest/issues/124) — resting limit orders don't reserve balance
+- [#124](https://github.com/ftvision/catalyst-backtest/issues/124) — resting orders reserve balance — FIXED (earmark side table, see "Balance reservations" above; note the issue's "equity over-counts" framing was wrong — the bug was double-spend/starvation)
 - [#162](https://github.com/ftvision/catalyst-backtest/issues/162) — AMM price impact repriced resting swap limit fills — FIXED (maker semantics, see above)

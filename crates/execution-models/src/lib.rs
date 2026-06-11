@@ -22,7 +22,8 @@ mod yields;
 
 pub use context::{Bar, MarketContext};
 pub use limit::{
-    limit_fill_price, place_perp_limit, place_swap_limit, LimitPlacement, LimitSide, PlacedLimit,
+    limit_fill_price, perp_reservation, place_perp_limit, place_swap_limit, swap_reservation,
+    LimitPlacement, LimitSide, PlacedLimit,
 };
 pub use outcome::{Execution, Fill};
 pub use perp::{execute_perp, execute_perp_at};
