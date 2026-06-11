@@ -58,7 +58,10 @@ fn config(venue: &str, usdc: &str, n_ticks: i64) -> BacktestConfig {
     initial.insert(venue.to_string(), venue_balances);
     BacktestConfig {
         start: START.to_string(),
-        end: ts(n_ticks),
+        // The window ends at the last data bar: required-series coverage now
+        // flags trailing absence (#167), and these scenarios need exactly the
+        // bars they declare.
+        end: ts(n_ticks - 1),
         interval: "1h".to_string(),
         initial_portfolio: initial,
         execution: None,
